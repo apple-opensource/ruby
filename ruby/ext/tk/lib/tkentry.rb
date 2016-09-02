@@ -1,6 +1,6 @@
 #
 #		tkentry.rb - Tk entry classes
-#			$Date: 2002/05/27 17:59:47 $
+#			$Date: 2003/10/15 10:11:48 $
 #			by Yukihiro Matsumoto <matz@caelum.co.jp>
 
 require 'tk.rb'
@@ -8,16 +8,59 @@ require 'tk.rb'
 class TkEntry<TkLabel
   include Scrollable
 
+  TkCommandNames = ['entry'.freeze].freeze
   WidgetClassName = 'Entry'.freeze
   WidgetClassNames[WidgetClassName] = self
-  def self.to_eval
-    WidgetClassName
-  end
 
   class ValidateCmd
     include TkComm
 
+    module Action
+      Insert = 1
+      Delete = 0
+      Others = -1
+      Focus  = -1
+      Forced = -1
+      Textvariable = -1
+      TextVariable = -1
+    end
+
     class ValidateArgs
+      VARG_KEY  = 'disvPSVW'
+      VARG_TYPE = 'nxsssssw'
+
+      def self.scan_args(arg_str, arg_val)
+	arg_cnv = []
+	arg_str.strip.split(/\s+/).each_with_index{|kwd,idx|
+	  if kwd =~ /^%(.)$/
+	    if num = VARG_KEY.index($1)
+	      case VARG_TYPE[num]
+	      when ?n
+		arg_cnv << TkComm::number(arg_val[idx])
+	      when ?s
+		arg_cnv << TkComm::string(arg_val[idx])
+	      when ?w
+		arg_cnv << TkComm::window(arg_val[idx])
+	      when ?x
+		idx = TkComm::number(arg_val[idx])
+		if idx < 0
+		  arg_cnv << nil
+		else
+		  arg_cnv << idx
+		end
+	      else
+		arg_cnv << arg_val[idx]
+	      end
+	    else
+	      arg_cnv << arg_val[idx]
+	    end
+	  else
+	    arg_cnv << arg_val[idx]
+	  end
+	}
+	arg_cnv
+      end
+
       def initialize(d,i,s,v,pp,ss,vv,ww)
 	@action = d
 	@index = i
@@ -40,13 +83,19 @@ class TkEntry<TkLabel
 
     def initialize(cmd = Proc.new, args=nil)
       if args
-	@id = install_cmd(proc{|*arg|
-			    TkUtil.eval_cmd cmd, *arg
-			  }) + " " + args
+	@id = 
+	  install_cmd(proc{|*arg|
+			TkUtil.eval_cmd(proc{|*v| (cmd.call(*v))? '1': '0'}, 
+					*ValidateArgs.scan_args(args, arg))
+		      }) + " " + args
       else
-	@id = install_cmd(proc{|arg|
-			    TkUtil.eval_cmd cmd, ValidateArgs.new(*arg)
-			  }) + ' %d %i %s %v %P %S %V %W'
+	args = ' %d %i %s %v %P %S %V %W'
+	@id = 
+	  install_cmd(proc{|*arg|
+			TkUtil.eval_cmd(proc{|*v| (cmd.call(*v))? '1': '0'}, 
+					ValidateArgs.new(*ValidateArgs \
+							 .scan_args(args,arg)))
+	  }) + args
       end
     end
 
@@ -56,23 +105,15 @@ class TkEntry<TkLabel
   end
 
   def create_self(keys)
+    tk_call 'entry', @path
     if keys and keys != None
-      tk_call 'entry', @path, *hash_kv(keys)
-    else
-      tk_call 'entry', @path
+      configure(keys)
     end
-  end
-
-  def bbox(index)
-    tk_send 'bbox', index
-  end
-
-  def delete(s, e=None)
-    tk_send 'delete', s, e
   end
 
   def configure(slot, value=None)
     if slot.kind_of? Hash
+      slot = _symbolkey2str(slot)
       if slot['vcmd'].kind_of? Array
 	cmd, *args = slot['vcmd']
 	slot['vcmd'] = ValidateCmd.new(cmd, args.join(' '))
@@ -99,8 +140,10 @@ class TkEntry<TkLabel
       end
       super(slot)
     else
-      if (slot == 'vcmd' || slot == 'validatecommand' || 
-	  slot == 'invcmd' || slot == 'invalidcommand')
+      if (slot == 'vcmd' || slot == :vcmd || 
+          slot == 'validatecommand' || slot == :validatecommand || 
+	  slot == 'invcmd' || slot == :invcmd || 
+          slot == 'invalidcommand' || slot == :invalidcommand)
 	if value.kind_of? Array
 	  cmd, *args = value
 	  value = ValidateCmd.new(cmd, args.join(' '))
@@ -110,71 +153,91 @@ class TkEntry<TkLabel
       end
       super(slot, value)
     end
+    self
   end
 
+  def bbox(index)
+    list(tk_send('bbox', index))
+  end
   def cursor
-    tk_send 'index', 'insert'
+    number(tk_send('index', 'insert'))
   end
   def cursor=(index)
     tk_send 'icursor', index
+    self
   end
   def index(index)
     number(tk_send('index', index))
   end
   def insert(pos,text)
     tk_send 'insert', pos, text
+    self
+  end
+  def delete(first, last=None)
+    tk_send 'delete', first, last
+    self
   end
   def mark(pos)
     tk_send 'scan', 'mark', pos
+    self
   end
   def dragto(pos)
     tk_send 'scan', 'dragto', pos
+    self
   end
   def selection_adjust(index)
     tk_send 'selection', 'adjust', index
+    self
   end
   def selection_clear
     tk_send 'selection', 'clear'
+    self
   end
   def selection_from(index)
     tk_send 'selection', 'from', index
+    self
   end
   def selection_present()
     bool(tk_send('selection', 'present'))
   end
   def selection_range(s, e)
     tk_send 'selection', 'range', s, e
+    self
   end
   def selection_to(index)
     tk_send 'selection', 'to', index
+    self
   end
 
+  def invoke_validate
+    bool(tk_send('validate'))
+  end
   def validate(mode = nil)
     if mode
       configure 'validate', mode
     else
-      if tk_send('validate') == '0'
-	false
-      else 
-	true
-      end
+      invoke_validate
     end
   end
 
-  def validatecommand(cmd = ValidateCmd.new, args = nil)
+  def validatecommand(cmd = Proc.new, args = nil)
     if cmd.kind_of?(ValidateCmd)
       configure('validatecommand', cmd)
+    elsif args
+      configure('validatecommand', [cmd, args])
     else
-      configure('validatecommand', ValidateCmd.new(cmd, args))
+      configure('validatecommand', cmd)
     end
   end
   alias vcmd validatecommand
 
-  def invalidcommand(cmd = ValidateCmd.new, args = nil)
+  def invalidcommand(cmd = Proc.new, args = nil)
     if cmd.kind_of?(ValidateCmd)
       configure('invalidcommand', cmd)
+    elsif args
+      configure('invalidcommand', [cmd, args])
     else
-      configure('invalidcommand', ValidateCmd.new(cmd, args))
+      configure('invalidcommand', cmd)
     end
   end
   alias invcmd invalidcommand
@@ -189,17 +252,14 @@ class TkEntry<TkLabel
 end
 
 class TkSpinbox<TkEntry
+  TkCommandNames = ['spinbox'.freeze].freeze
   WidgetClassName = 'Spinbox'.freeze
   WidgetClassNames[WidgetClassName] = self
-  def self.to_eval
-    WidgetClassName
-  end
 
   def create_self(keys)
+    tk_call 'spinbox', @path
     if keys and keys != None
-      tk_call 'spinbox', @path, *hash_kv(keys)
-    else
-      tk_call 'spinbox', @path
+      configure(keys)
     end
   end
 
@@ -209,10 +269,12 @@ class TkSpinbox<TkEntry
 
   def spinup
     tk_send 'invoke', 'spinup'
+    self
   end
 
   def spindown
     tk_send 'invoke', 'spindown'
+    self
   end
 
   def set(str)

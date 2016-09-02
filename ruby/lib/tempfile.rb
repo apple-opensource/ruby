@@ -1,10 +1,11 @@
 #
 # tempfile - manipulates temporary files
 #
-# $Id: tempfile.rb,v 1.1.1.2 2003/05/14 13:58:49 melville Exp $
+# $Id: tempfile.rb,v 1.1.1.3 2003/10/15 10:11:48 melville Exp $
 #
 
 require 'delegate'
+require 'tmpdir'
 
 # A class for managing temporary files.  This library is written to be
 # thread safe.
@@ -17,11 +18,10 @@ class Tempfile < SimpleDelegator
   # object works just like a File object.
   #
   # If tmpdir is omitted, the temporary directory is determined by
-  # ENV['TMPDIR'], ENV['TMP'] and and ENV['TEMP'] in the order named.
-  # If none of them is available, or when $SAFE > 0 and the given
-  # tmpdir is tainted, it uses /tmp. (Note that ENV values are
-  # tainted by default)
-  def initialize(basename, tmpdir=ENV['TMPDIR']||ENV['TMP']||ENV['TEMP']||'/tmp')
+  # Dir::tmpdir provided by 'tmpdir.rb'.
+  # When $SAFE > 0 and the given tmpdir is tainted, it uses
+  # /tmp. (Note that ENV values are tainted by default)
+  def initialize(basename, tmpdir=Dir::tmpdir)
     if $SAFE > 0 and tmpdir.tainted?
       tmpdir = '/tmp'
     end
@@ -148,9 +148,25 @@ class Tempfile < SimpleDelegator
       }
     end
 
-    # Equivalent to new().
+    # If no block is given, this is a synonym for new().
+    #
+    # If a block is given, it will be passed tempfile as an argument,
+    # and the tempfile will automatically be closed when the block
+    # terminates.  In this case, open() returns nil.
     def open(*args)
-      new(*args)
+      tempfile = new(*args)
+
+      if block_given?
+	begin
+	  yield(tempfile)
+	ensure
+	  tempfile.close
+	end
+
+	nil
+      else
+	tempfile
+      end
     end
   end
 end

@@ -5,3 +5,5 @@ Win32API.c
 extconf.rb
 getch.rb
 point.rb
+lib/win32/registry.rb
+lib/win32/resolv.rb

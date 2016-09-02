@@ -13,7 +13,7 @@ class OpenStruct
     @table = {}
     if hash
       for k,v in hash
-	@table[k] = v
+	@table[k.to_sym] = v
       end
     end
   end
@@ -26,30 +26,23 @@ class OpenStruct
 	raise ArgumentError, "wrong # of arguments (#{len} for 1)", caller(1)
       end
       mname.chop!
-      @table[mname] = args[0]
-    elsif args.length == 0
-      @table[mname]
+      @table[mname.intern] = args[0]
+    elsif len == 0
+      @table[mid]
     else
-      raise NameError, "undefined method `#{mname}'", caller(1)
+      raise NoMethodError, "undefined method `#{mname}' for #{self}", caller(1)
     end
   end
-  
+
   def delete_field(name)
-    if name.type == Fixnum
-      name = name.id2name
-    end
-    @table.delete name
+    @table.delete name.to_sym
   end
 
   def inspect
-    str = "<#{self.type}"
+    str = "<#{self.class}"
     for k,v in @table
-      str += " "
-      str += k.to_s
-      str += "="
-      str += v.inspect
+      str << " #{k}=#{v.inspect}"
     end
-    str += ">"
-    str
+    str << ">"
   end
 end

@@ -14,9 +14,9 @@ Install_Flags   = DESTDIR="$(DSTROOT)"
 Install_Target  = install
 
 MAJOR = 1
-MINOR = 6
+MINOR = 8
 VERSION = $(MAJOR).$(MINOR)
-SYSSTRING = `uname -p`-darwin`uname -r`
+SYSSTRING = `uname -p`-darwin
 
 post-install:
 	strip -x $(DSTROOT)/usr/bin/ruby
@@ -24,10 +24,10 @@ post-install:
 		-install_name /usr/lib/libruby.$(MAJOR).dylib \
 		-compatibility_version $(VERSION) -current_version $(VERSION) \
 		-all_load -o $(DSTROOT)/usr/lib/libruby.$(MAJOR).dylib \
-		$(DSTROOT)/usr/lib/ruby/$(VERSION)/$(SYSSTRING)/libruby.a
-	ln -s libruby.$(MAJOR).dylib $(DSTROOT)/usr/lib/libruby.$(VERSION).dylib
+		$(OBJROOT)/libruby-static.a
 	ln -s libruby.$(MAJOR).dylib $(DSTROOT)/usr/lib/libruby.dylib
-	rm $(DSTROOT)/usr/lib/ruby/$(VERSION)/$(SYSSTRING)/libruby.a
+	ln -s libruby.$(MAJOR).dylib $(DSTROOT)/usr/lib/libruby.$(VERSION).dylib
+	rm $(DSTROOT)/usr/lib/libruby-static.a
 	strip -x $(DSTROOT)/usr/lib/ruby/$(VERSION)/$(SYSSTRING)/*.bundle
-	strip -x $(DSTROOT)/usr/lib/ruby/$(VERSION)/$(SYSSTRING)/digest/*.bundle
+	strip -x $(DSTROOT)/usr/lib/ruby/$(VERSION)/$(SYSSTRING)/*/*.bundle
 	strip -x $(DSTROOT)/usr/lib/libruby.$(MAJOR).dylib

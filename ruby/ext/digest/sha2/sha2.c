@@ -34,7 +34,7 @@
  */
 
 /* $RoughId: sha2.c,v 1.3 2002/02/26 22:03:36 knu Exp $ */
-/* $Id: sha2.c,v 1.2 2003/04/03 05:35:20 melville Exp $ */
+/* $Id: sha2.c,v 1.4 2003/12/08 03:02:57 melville Exp $ */
 
 #include <stdio.h>
 #include <string.h>	/* memcpy()/memset() or bcopy()/bzero() */

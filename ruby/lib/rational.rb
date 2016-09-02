@@ -1,8 +1,8 @@
 #
 #   rational.rb - 
 #   	$Release Version: 0.5 $
-#   	$Revision: 1.1.1.2 $
-#   	$Date: 2003/05/14 13:58:49 $
+#   	$Revision: 1.1.1.3 $
+#   	$Date: 2003/10/15 10:11:48 $
 #   	by Keiju ISHITSUKA(SHL Japan Inc.)
 #
 # --
@@ -31,8 +31,9 @@
 #   Integer::to_r
 #
 #   Fixnum::**
+#   Fixnum::quo
 #   Bignum::**
-#   
+#   Bignum::quo
 #
 
 def Rational(a, b = 1)
@@ -44,7 +45,7 @@ def Rational(a, b = 1)
 end
   
 class Rational < Numeric
-  @RCS_ID='-$Id: rational.rb,v 1.1.1.2 2003/05/14 13:58:49 melville Exp $-'
+  @RCS_ID='-$Id: rational.rb,v 1.1.1.3 2003/10/15 10:11:48 melville Exp $-'
 
   def Rational.reduce(num, den = 1)
     raise ZeroDivisionError, "denominator is 0" if den == 0
@@ -66,7 +67,9 @@ class Rational < Numeric
   def Rational.new!(num, den = 1)
     new(num, den)
   end
-  
+
+  private_class_method :new
+
   def initialize(num, den)
     if den < 0
       num = -num
@@ -91,7 +94,7 @@ class Rational < Numeric
     elsif a.kind_of?(Float)
       Float(self) + a
     else
-      x , y = a.coerce(self)
+      x, y = a.coerce(self)
       x + y
     end
   end
@@ -106,7 +109,7 @@ class Rational < Numeric
     elsif a.kind_of?(Float)
       Float(self) - a
     else
-      x , y = a.coerce(self)
+      x, y = a.coerce(self)
       x - y
     end
   end
@@ -121,7 +124,7 @@ class Rational < Numeric
     elsif a.kind_of?(Float)
       Float(self) * a
     else
-      x , y = a.coerce(self)
+      x, y = a.coerce(self)
       x * y
     end
   end
@@ -137,7 +140,7 @@ class Rational < Numeric
     elsif a.kind_of?(Float)
       Float(self) / a
     else
-      x , y = a.coerce(self)
+      x, y = a.coerce(self)
       x / y
     end
   end
@@ -160,7 +163,7 @@ class Rational < Numeric
     elsif other.kind_of?(Float)
       Float(self) ** other
     else
-      x , y = other.coerce(self)
+      x, y = other.coerce(self)
       x ** y
     end
   end
@@ -183,6 +186,18 @@ class Rational < Numeric
     end
   end
 
+  def == (other)
+    if other.kind_of?(Rational)
+      @numerator == other.numerator and @denominator == other.denominator
+    elsif other.kind_of?(Integer)
+      self == Rational.new!(other, 1)
+    elsif other.kind_of?(Float)
+      Float(self) == other
+    else
+      other == self
+    end
+  end
+
   def <=> (other)
     if other.kind_of?(Rational)
       num = @numerator * other.denominator
@@ -199,9 +214,11 @@ class Rational < Numeric
       return self <=> Rational.new!(other, 1)
     elsif other.kind_of?(Float)
       return Float(self) <=> other
-    else
-      x , y = other.coerce(self)
+    elsif defined? other.coerce
+      x, y = other.coerce(self)
       return x <=> y
+    else
+      return nil
     end
   end
 
@@ -254,7 +271,7 @@ class Integer
     self
   end
   
-  def denomerator
+  def denominator
     1
   end
   
@@ -312,41 +329,11 @@ class Integer
 end
 
 class Fixnum
-  alias div! /;
-  def div(other)
-    if other.kind_of?(Fixnum)
-      self.div!(other)
-    elsif other.kind_of?(Bignum)
-      x, y = other.coerce(self)
-      x.div!(y)
-    else
-      x, y = other.coerce(self)
-      x / y
-    end
-  end
-  
-#  alias divmod! divmod
-  
-  if not defined? Complex
-    alias power! **;
-  end
-  
-#   def rdiv(other)
-#     if other.kind_of?(Fixnum)
-#       Rational(self, other)
-#     elsif
-#       x, y = other.coerce(self)
-#       if defined?(x.div())
-# 	x.div(y)
-#       else
-# 	x / y
-#       end
-#     end
-  #   end
-  
-  def rdiv(other)
+  undef quo
+  def quo(other)
     Rational.new!(self,1) / other
   end
+  alias rdiv quo
   
   def rpower (other)
     if other >= 0
@@ -355,24 +342,23 @@ class Fixnum
       Rational.new!(self,1)**other
     end
   end
-    
-  if not defined? Complex
+
+  unless defined? 1.power!
+    alias power! ** 
     alias ** rpower
   end
 end
 
 class Bignum
-  alias div! /;
-  alias div /;
-  alias divmod! divmod
-  
-  if not defined? power!
+  unless defined? Complex
     alias power! **
   end
-  
-  def rdiv(other)
+
+  undef quo
+  def quo(other)
     Rational.new!(self,1) / other
   end
+  alias rdiv quo
   
   def rpower (other)
     if other >= 0
@@ -382,9 +368,7 @@ class Bignum
     end
   end
   
-  if not defined? Complex
+  unless defined? Complex
     alias ** rpower
   end
-  
 end
-

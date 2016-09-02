@@ -13,6 +13,7 @@
 # end
 
 require "ftools"
+require "digest/md5"
 
 class PStore
   class Error < StandardError
@@ -22,9 +23,6 @@ class PStore
     dir = File::dirname(file)
     unless File::directory? dir
       raise PStore::Error, format("directory %s does not exist", dir)
-    end
-    unless File::writable? dir
-      raise PStore::Error, format("directory %s not writable", dir)
     end
     if File::exist? file and not File::readable? file
       raise PStore::Error, format("file %s not readable", file)
@@ -41,10 +39,17 @@ class PStore
 
   def [](name)
     in_transaction
-    unless @table.key? name
-      raise PStore::Error, format("undefined root name `%s'", name)
-    end
     @table[name]
+  end
+  def fetch(name, default=PStore::Error)
+    unless @table.key? name
+      if default==PStore::Error
+	raise PStore::Error, format("undefined root name `%s'", name)
+      else
+	default
+      end
+    end
+    self[name]
   end
   def []=(name, value)
     in_transaction
@@ -78,24 +83,29 @@ class PStore
     throw :pstore_abort_transaction
   end
 
-  def transaction
+  def transaction(read_only=false)
     raise PStore::Error, "nested transaction" if @transaction
     begin
       @transaction = true
       value = nil
       backup = @filename+"~"
-      if File::exist?(@filename)
-	file = File::open(@filename, "rb+")
+      begin
+	file = File::open(@filename, read_only ? "rb" : "rb+")
 	orig = true
+      rescue Errno::ENOENT
+	raise if read_only
+	file = File::open(@filename, "wb+")
+      end
+      file.flock(read_only ? File::LOCK_SH : File::LOCK_EX)
+      if read_only
+	@table = Marshal::load(file)
+      elsif orig and (content = file.read) != ""
+	@table = Marshal::load(content)
+	size = content.size
+	md5 = Digest::MD5.digest(content)
+	content = nil		# unreference huge data
       else
 	@table = {}
-	file = File::open(@filename, "wb+")
-	Marshal::dump(@table, file)
-      end
-      file.flock(File::LOCK_EX)
-      if orig
-	File::copy @filename, backup
-	@table = Marshal::load(file)
       end
       begin
 	catch(:pstore_abort_transaction) do
@@ -105,14 +115,19 @@ class PStore
 	@abort = true
 	raise
       ensure
-	unless @abort
-	  begin
-	    file.rewind
-	    Marshal::dump(@table, file)
-	    file.truncate(file.pos)
-	  rescue
-	    File::rename backup, @filename if File::exist?(backup)
-	    raise
+	if !read_only and !@abort
+	  file.rewind
+	  content = Marshal::dump(@table)
+	  if !md5 || size != content.size || md5 != Digest::MD5.digest(content)
+	    File::copy @filename, backup
+	    begin
+	      file.write(content)
+	      file.truncate(file.pos)
+	      content = nil		# unreference huge data
+	    rescue
+	      File::rename backup, @filename if File::exist?(backup)
+	      raise
+	    end
 	  end
 	end
 	if @abort and !orig
@@ -142,5 +157,9 @@ if __FILE__ == $0
       db["root"][0] += 1
       p db["root"][0]
     end
+  end
+
+  db.transaction(true) do
+    p db["root"]
   end
 end

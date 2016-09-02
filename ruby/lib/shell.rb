@@ -1,8 +1,8 @@
 #
 #   shell.rb - 
 #   	$Release Version: 0.6.0 $
-#   	$Revision: 1.1.1.1 $
-#   	$Date: 2002/05/27 17:59:48 $
+#   	$Revision: 1.1.1.2 $
+#   	$Date: 2003/10/15 10:11:48 $
 #   	by Keiju ISHITSUKA(Nippon Rational Inc.)
 #
 # --
@@ -18,7 +18,7 @@ require "shell/command-processor"
 require "shell/process-controller"
 
 class Shell
-  @RCS_ID='-$Id: shell.rb,v 1.1.1.1 2002/05/27 17:59:48 jkh Exp $-'
+  @RCS_ID='-$Id: shell.rb,v 1.1.1.2 2003/10/15 10:11:48 melville Exp $-'
 
   include Error
   extend Exception2MessageMapper
@@ -267,4 +267,3 @@ class Shell
   CommandProcessor.initialize
   CommandProcessor.run_config
 end
-

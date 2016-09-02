@@ -2,11 +2,11 @@
 
   main.c -
 
-  $Author: jkh $
-  $Date: 2002/05/27 17:59:44 $
+  $Author: melville $
+  $Date: 2003/10/15 10:11:46 $
   created at: Fri Aug 19 13:19:58 JST 1994
 
-  Copyright (C) 1993-2000 Yukihiro Matsumoto
+  Copyright (C) 1993-2003 Yukihiro Matsumoto
 
 **********************************************************************/
 
@@ -38,7 +38,7 @@ main(argc, argv, envp)
     int argc;
     char **argv, **envp;
 {
-#if defined(NT)
+#ifdef _WIN32
     NtInitialize(&argc, &argv);
 #endif
 #if defined(__MACOS__) && defined(__MWERKS__)

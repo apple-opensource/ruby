@@ -1,5 +1,5 @@
 #
-# $Id: mailto.rb,v 1.1.1.2 2003/05/14 13:58:50 melville Exp $
+# $Id: mailto.rb,v 1.1.1.3 2003/10/15 10:11:49 melville Exp $
 #
 # Copyright (c) 2001 akira yamada <akira@ruby-lang.org>
 # You can redistribute it and/or modify it under the same term as Ruby.
@@ -172,6 +172,7 @@ module URI
     def to=(v)
       check_to(v)
       set_to(v)
+      v
     end
 
 =begin
@@ -213,6 +214,7 @@ module URI
     def headers=(v)
       check_headers(v)
       set_headers(v)
+      v
     end
 
     def to_str

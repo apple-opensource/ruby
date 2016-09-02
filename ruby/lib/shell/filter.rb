@@ -1,8 +1,8 @@
 #
 #   shell/filter.rb - 
 #   	$Release Version: 0.6.0 $
-#   	$Revision: 1.1.1.1 $
-#   	$Date: 2002/05/27 17:59:49 $
+#   	$Revision: 1.1.1.2 $
+#   	$Date: 2003/10/15 10:11:49 $
 #   	by Keiju ISHITSUKA(Nihon Rational Software Co.,Ltd)
 #
 # --
@@ -47,7 +47,7 @@ class Shell
 	self.input = src
 	self
       else
-	Filter.Fail CanNotMethodApply, "<", to.type
+	Filter.Fail CantApplyMethod, "<", to.class
       end
     end
 
@@ -63,7 +63,7 @@ class Shell
       when IO
 	each(){|l| to << l}
       else
-	Filter.Fail CanNotMethodApply, ">", to.type
+	Filter.Fail CantApplyMethod, ">", to.class
       end
       self
     end
@@ -71,8 +71,8 @@ class Shell
     def >> (to)
       begin
 	Shell.cd(@shell.pwd).append(to, self)
-      rescue CanNotMethodApply
-	Shell.Fail CanNotMethodApply, ">>", to.type
+      rescue CantApplyMethod
+	Shell.Fail CantApplyMethod, ">>", to.class
       end
     end
 

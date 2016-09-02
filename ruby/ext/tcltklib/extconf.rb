@@ -2,7 +2,7 @@
 
 require 'mkmf'
 
-if RUBY_PLATFORM !~ /mswin32|mingw|cygwin/
+if RUBY_PLATFORM !~ /mswin32|mingw|cygwin|bccwin32/
   have_library("nsl", "t_open")
   have_library("socket", "socket")
   have_library("dl", "dlopen")
@@ -22,20 +22,13 @@ def find_tcl(tcllib, stubs)
   func = stubs ? "Tcl_InitStubs" : "Tcl_FindExecutable"
   if tcllib
     find_library(tcllib, func, *paths)
-  elsif RUBY_PLATFORM =~ /mswin32|mingw|cygwin/
-    find_library("tcl", func, *paths) or
-      find_library("tcl84", func, *paths) or
-      find_library("tcl83", func, *paths) or
-      find_library("tcl82", func, *paths) or
-      find_library("tcl80", func, *paths) or
-      find_library("tcl76", func, *paths)
+  elsif find_library("tcl", func, *paths)
+    true
   else
-    find_library("tcl", func, *paths) or
-      find_library("tcl8.4", func, *paths) or
-      find_library("tcl8.3", func, *paths) or
-      find_library("tcl8.2", func, *paths) or
-      find_library("tcl8.0", func, *paths) or
-      find_library("tcl7.6", func, *paths)
+    %w[8.4 8.3 8.2 8.0 7.6].find { |ver|
+      find_library("tcl#{ver}", func, *paths) or
+	find_library("tcl#{ver.delete('.')}", func, *paths)
+    }
   end
 end
 
@@ -44,26 +37,19 @@ def find_tk(tklib, stubs)
   func = stubs ? "Tk_InitStubs" : "Tk_Init"
   if tklib
     find_library(tklib, func, *paths)
-  elsif RUBY_PLATFORM =~ /mswin32|mingw|cygwin/
-    find_library("tk", func, *paths) or
-      find_library("tk84", func, *paths) or
-      find_library("tk83", func, *paths) or
-      find_library("tk82", func, *paths) or
-      find_library("tk80", func, *paths) or
-      find_library("tk42", func, *paths)
+  elsif find_library("tk", func, *paths)
+    true
   else
-    find_library("tk", func, *paths) or
-      find_library("tk8.4", func, *paths) or
-      find_library("tk8.3", func, *paths) or
-      find_library("tk8.2", func, *paths) or
-      find_library("tk8.0", func, *paths) or
-      find_library("tk4.2", func, *paths)
+    %w[8.4 8.3 8.2 8.0 4.2].find { |ver|
+      find_library("tk#{ver}", func, *paths) or
+	find_library("tk#{ver.delete('.')}", func, *paths)
+    }
   end
 end
 
 if have_header("tcl.h") && have_header("tk.h") &&
-    (/mswin32|mingw|cygwin/ =~ RUBY_PLATFORM || find_library("X11", "XOpenDisplay",
-	"/usr/X11/lib", "/usr/X11R6/lib", "/usr/openwin/lib")) &&
+    (/mswin32|mingw|cygwin|bccwin32/ =~ RUBY_PLATFORM || find_library("X11", "XOpenDisplay",
+	"/usr/X11/lib", "/usr/lib/X11", "/usr/X11R6/lib", "/usr/openwin/lib")) &&
     find_tcl(tcllib, stubs) &&
     find_tk(tklib, stubs)
   $CPPFLAGS += ' -DUSE_TCL_STUBS -DUSE_TK_STUBS' if stubs

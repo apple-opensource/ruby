@@ -2,11 +2,11 @@
 
   version.c -
 
-  $Author: jkh $
-  $Date: 2002/05/27 17:59:44 $
+  $Author: melville $
+  $Date: 2003/10/15 10:11:47 $
   created at: Thu Sep 30 20:08:01 JST 1993
 
-  Copyright (C) 1993-2000 Yukihiro Matsumoto
+  Copyright (C) 1993-2003 Yukihiro Matsumoto
 
 **********************************************************************/
 
@@ -40,6 +40,6 @@ ruby_show_version()
 void
 ruby_show_copyright()
 {
-    printf("ruby - Copyright (C) 1993-2002 Yukihiro Matsumoto\n");
+    printf("ruby - Copyright (C) 1993-2003 Yukihiro Matsumoto\n");
     exit(0);
 }

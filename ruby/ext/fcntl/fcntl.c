@@ -2,10 +2,10 @@
 
   fcntl.c -
 
-  $Author: jkh $
+  $Author: melville $
   created at: Mon Apr  7 18:53:05 JST 1997
 
-  Copyright (C) 1997-1998 Yukihiro Matsumoto
+  Copyright (C) 1997-2001 Yukihiro Matsumoto
 
 ************************************************/
 

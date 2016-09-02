@@ -3,10 +3,10 @@
   sprintf.c -
 
   $Author: melville $
-  $Date: 2003/05/14 13:58:45 $
+  $Date: 2003/10/15 10:11:46 $
   created at: Fri Oct 15 10:39:26 JST 1993
 
-  Copyright (C) 1993-2000 Yukihiro Matsumoto
+  Copyright (C) 1993-2003 Yukihiro Matsumoto
   Copyright (C) 2000  Network Applied Communication Laboratory, Inc.
   Copyright (C) 2000  Information-technology Promotion Agency, Japan
 
@@ -15,7 +15,6 @@
 #include "ruby.h"
 #include <ctype.h>
 #include <math.h>
-#include "util.h"
 
 #define BIT_DIGITS(N)   (((N)*146)/485 + 1)  /* log2(10) =~ 146/485 */
 
@@ -39,6 +38,7 @@ remove_sign_bits(str, base)
 	}
     }
     else if (base == 8) {
+	if (*t == '3') t++;
 	while (t<end && *t == '7') {
 	    t++;
 	}
@@ -52,6 +52,26 @@ remove_sign_bits(str, base)
     *s = '\0';
 
     return str;
+}
+
+static char
+sign_bits(base, p)
+    int base;
+    char *p;
+{
+    char c = '.';
+
+    switch (base) {
+      case 16:
+	if (*p == 'X') c = 'F';
+	else c = 'f';
+	break;
+      case 8:
+	c = '7'; break;
+      case 2:
+	c = '1'; break;
+    }
+    return c;
 }
 
 #define FNONE  0
@@ -129,11 +149,12 @@ rb_f_sprintf(argc, argv)
 
     fmt = GETNTHARG(0);
     if (OBJ_TAINTED(fmt)) tainted = 1;
-    p = rb_str2cstr(fmt, &blen);
-    end = p + blen;
+    StringValue(fmt);
+    p = RSTRING(fmt)->ptr;
+    end = p + RSTRING(fmt)->len;
     blen = 0;
     bsiz = 120;
-    result = rb_str_new(0, bsiz);
+    result = rb_str_buf_new(bsiz);
     buf = RSTRING(result)->ptr;
 
     for (; p < end; p++) {
@@ -270,10 +291,12 @@ rb_f_sprintf(argc, argv)
 	    break;
 
 	  case 's':
+	  case 'p':
 	    {
 		VALUE arg = GETARG();
 		long len;
 
+		if (*p == 'p') arg = rb_inspect(arg);
 		str = rb_obj_as_string(arg);
 		if (OBJ_TAINTED(str)) tainted = 1;
 		len = RSTRING(str)->len;
@@ -319,7 +342,7 @@ rb_f_sprintf(argc, argv)
 		char *prefix = 0;
 		int sign = 0;
 		char sc = 0;
-		long v;
+		long v = 0;
 		int base, bignum = 0;
 		int len, pos;
 
@@ -338,11 +361,18 @@ rb_f_sprintf(argc, argv)
 		    break;
 		}
 		if (flags & FSHARP) {
-		    if (*p == 'o') prefix = "0";
-		    else if (*p == 'x') prefix = "0x";
-		    else if (*p == 'X') prefix = "0X";
-		    else if (*p == 'b') prefix = "0b";
-		    else if (*p == 'B') prefix = "0B";
+		    switch (*p) {
+		      case 'o':
+			prefix = "0"; break;
+		      case 'x':
+			prefix = "0x"; break;
+		      case 'X':
+			prefix = "0X"; break;
+		      case 'b':
+			prefix = "0b"; break;
+		      case 'B':
+			prefix = "0B"; break;
+		    }
 		    if (prefix) {
 			width -= strlen(prefix);
 		    }
@@ -356,7 +386,7 @@ rb_f_sprintf(argc, argv)
 		    bignum = 1;
 		    break;
 		  case T_STRING:
-		    val = rb_str2inum(val, 0);
+		    val = rb_str_to_inum(val, 0, Qtrue);
 		    goto bin_retry;
 		  case T_BIGNUM:
 		    bignum = 1;
@@ -369,10 +399,21 @@ rb_f_sprintf(argc, argv)
 		    goto bin_retry;
 		}
 
-		if (*p == 'u' || *p == 'd' || *p == 'i') base = 10;
-		else if (*p == 'x' || *p == 'X') base = 16;
-		else if (*p == 'o') base = 8;
-		else if (*p == 'b' || *p == 'B') base = 2;
+		switch (*p) {
+		  case 'o':
+		    base = 8; break;
+		  case 'x':
+		  case 'X':
+		    base = 16; break;
+		  case 'b':
+		  case 'B':
+		    base = 2; break;
+		  case 'u':
+		  case 'd':
+		  case 'i':
+		  default:
+		    base = 10; break;
+		}
 		if (!bignum) {
 		    if (base == 2) {
 			val = rb_int2big(v);
@@ -436,14 +477,16 @@ rb_f_sprintf(argc, argv)
 		    if (s[0] == '-') {
 			s++;
 			sc = '-';
+                        width--;
 		    }
 		    else if (flags & FPLUS) {
 			sc = '+';
+                        width--;
 		    }
 		    else if (flags & FSPACE) {
 			sc = ' ';
+                        width--;
 		    }
-		    width--;
 		    goto format_integer;
 		}
 		if (!RBIGNUM(val)->sign) {
@@ -510,26 +553,21 @@ rb_f_sprintf(argc, argv)
 		    PUSH(prefix, plen);
 		}
 		CHECK(prec - len);
-		if (v < 0) {
-		    char c = '.';
-
-		    switch (base) {
-		      case 16:
-			if (*p == 'X') c = 'F';
-			else c = 'f';
-			break;
-		      case 8:
-			c = '7'; break;
-		      case 2:
-			c = '1'; break;
-		    }
+		if (!bignum && v < 0) {
+		    char c = sign_bits(base, p);
 		    while (len < prec--) {
 			buf[blen++] = c;
 		    }
 		}
 		else {
+		    char c;
+
+		    if (bignum && !RBIGNUM(val)->sign)
+			c = sign_bits(base, p);
+		    else
+			c = '0';
 		    while (len < prec--) {
-			buf[blen++] = '0';
+			buf[blen++] = c;
 		    }
 		}
 		PUSH(s, len);

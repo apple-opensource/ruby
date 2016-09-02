@@ -1,31 +1,45 @@
 #
 #   tkafter.rb : methods for Tcl/Tk after command
-#                     2000/08/01 by Hidetoshi Nagai <nagai@ai.kyutech.ac.jp>
+#
+#   $Id: tkafter.rb,v 1.1.1.2 2003/10/15 10:11:48 melville Exp $
 #
 require 'tk'
 
-class TkAfter
+class TkTimer
   include TkCore
   extend TkCore
 
-  Tk_CBID = [0]
+  TkCommandNames = ['after'.freeze].freeze
+
+  Tk_CBID = ['a'.freeze, '00000'].freeze
   Tk_CBTBL = {}
 
-  INTERP._invoke("proc", "rb_after", "args", "ruby [format \"TkAfter.callback %%Q!%s!\" $args]")
+  TkCore::INTERP.add_tk_procs('rb_after', 'id', <<-'EOL')
+    if {[set st [catch {ruby [format "TkTimer.callback %%Q!%s!" $id]} ret]] != 0} {
+	return -code $st $ret
+    } {
+	return $ret
+    }
+  EOL
+
 
   ###############################
   # class methods
   ###############################
-  def TkAfter.callback(arg)
+  def self.callback(obj_id)
     @after_id = nil
-    arg = Array(tk_split_list(arg))
-    obj_id = arg.shift
     ex_obj = Tk_CBTBL[obj_id]
-    return nil if ex_obj == nil; # canceled
-    _get_eval_string(ex_obj.do_callback(*arg))
+    return "" if ex_obj == nil; # canceled
+    #_get_eval_string(ex_obj.do_callback)
+    begin
+      ex_obj.cb_call
+    rescue Exception
+      ex_obj.cancel
+      ""
+    end
   end
 
-  def TkAfter.info
+  def self.info
     tk_call('after', 'info').split(' ').collect!{|id|
       ret = Tk_CBTBL.find{|key,val| val.after_id == id}
       (ret == nil)? id: ret[1]
@@ -35,11 +49,11 @@ class TkAfter
   ###############################
   # instance methods
   ###############################
-  def do_callback(*args)
+  def do_callback
     @in_callback = true
     begin
-      ret = @current_proc.call(*args)
-    rescue StandardError, NameError
+      @return_value = @current_proc.call(self)
+    rescue Exception
       if @cancel_on_exception
 	cancel
 	return nil
@@ -48,23 +62,25 @@ class TkAfter
       end
     end
     if @set_next
-      set_next_callback(*args)
+      set_next_callback(@current_args)
     else
       @set_next = true
     end
     @in_callback = false
-    ret
+    @return_value
   end
 
   def set_callback(sleep, args=nil)
-    @after_script = "rb_after #{@id} #{_get_eval_string(args)}"
+    @after_script = "rb_after #{@id}"
     @after_id = tk_call('after', sleep, @after_script)
+    @current_args = args
     @current_script = [sleep, @after_script]
+    self
   end
 
-  def set_next_callback(*args)
+  def set_next_callback(args)
     if @running == false || @proc_max == 0 || @do_loop == 0
-      Tk_CBTBL[@id] = nil ;# for GC
+      Tk_CBTBL.delete(@id) ;# for GC
       @running = false
       return
     end
@@ -72,7 +88,7 @@ class TkAfter
       if @do_loop < 0 || (@do_loop -= 1) > 0
 	@current_pos = 0
       else
-	Tk_CBTBL[@id] = nil ;# for GC
+	Tk_CBTBL.delete(@id) ;# for GC
 	@running = false
 	return
       end
@@ -81,7 +97,7 @@ class TkAfter
     @current_args = args
 
     if @sleep_time.kind_of? Proc
-      sleep = @sleep_time.call(*args)
+      sleep = @sleep_time.call(self)
     else
       sleep = @sleep_time
     end
@@ -91,20 +107,21 @@ class TkAfter
     @current_pos += 1
     @current_proc = cmd
 
-    if cmd_args[0].kind_of? Proc
-      #c = cmd_args.shift
-      #cb_args = c.call(*(cmd_args + args))
-      cb_args = cmd_args[0].call(*args)
-    else
-      cb_args = cmd_args
-    end
-
-    set_callback(sleep, cb_args)
+    set_callback(sleep, cmd_args)
   end
 
   def initialize(*args)
-    @id = format("a%.4d", Tk_CBID[0])
-    Tk_CBID[0] += 1
+    @id = Tk_CBID.join
+    Tk_CBID[1].succ!
+
+    # @cb_cmd = TkCore::INTERP.get_cb_entry(self.method(:do_callback))
+    @cb_cmd = TkCore::INTERP.get_cb_entry(proc{
+					    begin
+					      self.do_callback
+					    rescue
+					      self.cancel
+					    end
+					  })
 
     @set_next = true
 
@@ -115,6 +132,7 @@ class TkAfter
     @current_script = []
     @current_proc = nil
     @current_args = nil
+    @return_value = nil
 
     @sleep_time = 0
     @current_sleep = 0
@@ -132,14 +150,22 @@ class TkAfter
     set_procs(*args) if args != []
 
     @running = false
+    @in_callback = false
   end
 
   attr :after_id
   attr :after_script
   attr :current_proc
+  attr :current_args
   attr :current_sleep
+  alias :current_interval :current_sleep
+  attr :return_value
 
   attr_accessor :loop_exec
+
+  def cb_call
+    @cb_cmd.call
+  end
 
   def get_procs
     [@init_sleep, @init_proc, @init_args, @sleep_time, @loop_exec, @loop_proc]
@@ -219,6 +245,28 @@ class TkAfter
     self
   end
 
+  def delete_procs(*procs)
+    procs.each{|e|
+      if e.kind_of? Proc
+	@loop_proc.delete([e])
+      else
+	@loop_proc.delete(e)
+      end
+    }
+    @proc_max = @loop_proc.size
+
+    cancel if @proc_max == 0
+
+    self
+  end
+
+  def delete_at(n)
+    @loop_proc.delete_at(n)
+    @proc_max = @loop_proc.size
+    cancel if @proc_max == 0
+    self
+  end
+
   def set_start_proc(sleep, init_proc, *init_args)
     if !sleep == 'idle' && !sleep.kind_of?(Integer)
       fail format("%s need to be Integer", sleep.inspect)
@@ -257,8 +305,24 @@ class TkAfter
       set_callback(sleep, @init_args)
       @set_next = false if @in_callback
     else
-      set_next_callback(*@init_args)
+      set_next_callback(@init_args)
     end
+
+    self
+  end
+
+  def reset(*reset_args)
+    restart() if @running
+
+    if @init_proc
+      @return_value = @init_proc.call(self)
+    else
+      @return_value = nil
+    end
+
+    @current_pos   = 0
+    @current_args  = @init_args
+    @set_next = false if @in_callback
 
     self
   end
@@ -276,17 +340,18 @@ class TkAfter
     @running = false
     tk_call 'after', 'cancel', @after_id if @after_id
     @after_id = nil
-    Tk_CBTBL[@id] = nil ;# for GC
+    Tk_CBTBL.delete(@id) ;# for GC
     self
   end
   alias stop cancel
 
   def continue(wait=nil)
+    fail RuntimeError, "is already running" if @running
     sleep, cmd = @current_script
-    return nil if cmd == nil || @running == true
+    fail RuntimeError, "no procedure to continue" unless cmd
     if wait
       if not wait.kind_of? Integer
-	fail format("%s need to be Integer", wait.inspect)
+	fail RuntimeError, format("%s need to be Integer", wait.inspect)
       end
       sleep = wait
     end
@@ -297,7 +362,7 @@ class TkAfter
   end
 
   def skip
-    return nil if @running == false
+    fail RuntimeError, "is not running now" unless @running
     cancel
     Tk_CBTBL[@id] = self
     @running = true
@@ -314,3 +379,5 @@ class TkAfter
     end
   end
 end
+
+TkAfter = TkTimer

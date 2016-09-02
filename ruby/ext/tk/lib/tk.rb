@@ -1,7 +1,7 @@
 #
 #		tk.rb - Tk interface module using tcltklib
-#			$Date: 2003/05/14 13:58:48 $
-#			by Yukihiro Matsumoto <matz@netlab.co.jp>
+#			$Date: 2003/10/15 10:11:48 $
+#			by Yukihiro Matsumoto <matz@netlab.jp>
 
 # use Shigehiro's tcltklib
 require "tcltklib"
@@ -15,8 +15,19 @@ module TkComm
     'None'
   end
 
-  Tk_CMDTBL = {}
-  Tk_WINDOWS = {}
+  #Tk_CMDTBL = {}
+  #Tk_WINDOWS = {}
+  Tk_IDs = ["00000", "00000"].freeze	# [0]-cmdid, [1]-winid
+
+  # for backward compatibility
+  Tk_CMDTBL = Object.new
+  def Tk_CMDTBL.method_missing(id, *args)
+    TkCore::INTERP.tk_cmd_tbl.send(id, *args)
+  end
+  Tk_WINDOWS = Object.new
+  def Tk_WINDOWS.method_missing(id, *args)
+    TkCore::INTERP.tk_windows.send(id, *args)
+  end
 
   def error_at
     frames = caller()
@@ -31,27 +42,43 @@ module TkComm
     return TkRoot.new if path == '.'
 
     begin
-      tk_class = TkCore::INTERP._invoke('winfo', 'class', path)
+      #tk_class = TkCore::INTERP._invoke('winfo', 'class', path)
+      tk_class = Tk.ip_invoke('winfo', 'class', path)
     rescue
       return path
     end
 
-    ruby_class = WidgetClassNames[tk_class]
-    gen_class_name = ruby_class.name + 'GeneratedOnTk'
-    unless Object.const_defined? gen_class_name
-      eval "class #{gen_class_name}<#{ruby_class.name}
-              def initialize(path)
-                @path=path
-                Tk_WINDOWS[@path] = self
-              end
-            end"
+    if ruby_class = WidgetClassNames[tk_class]
+      ruby_class_name = ruby_class.name
+      # gen_class_name = ruby_class_name + 'GeneratedOnTk'
+      gen_class_name = ruby_class_name
+      classname_def = ''
+    elsif Object.const_defined?('Tk' + tk_class)
+      ruby_class_name = 'Tk' + tk_class
+      # gen_class_name = ruby_class_name + 'GeneratedOnTk'
+      gen_class_name = ruby_class_name
+      classname_def = ''
+    else
+      ruby_class_name = 'TkWindow'
+      # gen_class_name = ruby_class_name + tk_class + 'GeneratedOnTk'
+      gen_class_name = 'TkWidget_' + tk_class
+      classname_def = "WidgetClassName = '#{tk_class}'.freeze"
     end
-    eval "#{gen_class_name}.new('#{path}')"
+    unless Object.const_defined? gen_class_name
+      Object.class_eval "class #{gen_class_name}<#{ruby_class_name}
+                           #{classname_def}
+                         end"
+    end
+    Object.class_eval "#{gen_class_name}.new('widgetname'=>'#{path}', 
+                                             'without_creating'=>true)"
   end
+  private :_genobj_for_tkwidget
+  module_function :_genobj_for_tkwidget
 
   def tk_tcl2ruby(val)
     if val =~ /^rb_out (c\d+)/
-      return Tk_CMDTBL[$1]
+      #return Tk_CMDTBL[$1]
+      return TkCore::INTERP.tk_cmd_tbl[$1]
     end
     if val.include? ?\s
       return val.split.collect{|v| tk_tcl2ruby(v)}
@@ -62,12 +89,16 @@ module TkComm
     when /^-?\d+$/
       val.to_i
     when /^\./
-      Tk_WINDOWS[val] ? Tk_WINDOWS[val] : _genobj_for_tkwidget(val)
+      #Tk_WINDOWS[val] ? Tk_WINDOWS[val] : _genobj_for_tkwidget(val)
+      TkCore::INTERP.tk_windows[val]? 
+           TkCore::INTERP.tk_windows[val] : _genobj_for_tkwidget(val)
+    when /^i\d+$/
+      TkImage::Tk_IMGTBL[val]? TkImage::Tk_IMGTBL[val] : val
     when / /
       val.split.collect{|elt|
 	tk_tcl2ruby(elt)
       }
-    when /^-?\d+\.\d*$/
+    when /^-?\d+\.?\d*(e[-+]?\d+)?$/
       val.to_f
     else
       val
@@ -80,7 +111,13 @@ module TkComm
     while idx and idx > 0 and str[idx-1] == ?\\
       idx = str.index('{', idx+1)
     end
-    return tk_tcl2ruby(str) unless idx
+    unless idx
+      list = tk_tcl2ruby(str)
+      unless Array === list
+        list = [list]
+      end
+      return list
+    end
 
     list = tk_tcl2ruby(str[0,idx])
     list = [] if list == ""
@@ -93,6 +130,9 @@ module TkComm
       brace -= 1 if c == ?}
       break if brace == 0
     }
+    if str.size == i + 1
+      return tk_split_list(str[0, i])
+    end
     if str[0, i] == ' '
       list.push ' '
     else
@@ -132,6 +172,13 @@ module TkComm
   end
   private :tk_tcl2ruby, :tk_split_list, :tk_split_simplelist
 
+  def _symbolkey2str(keys)
+    h = {}
+    keys.each{|key,value| h[key.to_s] = value}
+    h
+  end
+  private :_symbolkey2str
+
   def hash_kv(keys)
     conf = []
     if keys and keys != None
@@ -143,6 +190,7 @@ module TkComm
     conf
   end
   private :hash_kv
+  module_function :hash_kv
 
   def array2tk_list(ary)
     ary.collect{|e|
@@ -157,23 +205,24 @@ module TkComm
     }.join(" ")
   end
   private :array2tk_list
+  module_function :array2tk_list
 
   def bool(val)
     case val
     when "1", 1, 'yes', 'true'
-      TRUE
+      true
     else
-      FALSE
+      false
     end
   end
   def number(val)
     case val
     when /^-?\d+$/
       val.to_i
-    when /^-?\d+\.\d*$/
+    when /^-?\d+\.?\d*(e[-+]?\d+)?$/
       val.to_f
     else
-      val
+      fail ArgumentError, format('invalid value for Number:"%s"', val.to_s)
     end
   end
   def string(val)
@@ -186,24 +235,40 @@ module TkComm
     end
   end
   def list(val)
-    tk_split_list(val).to_a
+    tk_split_list(val)
+  end
+  def simplelist(val)
+    tk_split_simplelist(val)
   end
   def window(val)
-    Tk_WINDOWS[val]
-  end
-  def procedure(val)
-    if val =~ /^rb_out (c\d+)/
-      Tk_CMDTBL[$1]
+    if val =~ /^\./
+      #Tk_WINDOWS[val]? Tk_WINDOWS[val] : _genobj_for_tkwidget(val)
+      TkCore::INTERP.tk_windows[val]? 
+           TkCore::INTERP.tk_windows[val] : _genobj_for_tkwidget(val)
     else
       nil
     end
   end
-  private :bool, :number, :string, :list, :window, :procedure
+  def procedure(val)
+    if val =~ /^rb_out (c\d+)/
+      #Tk_CMDTBL[$1]
+      #TkCore::INTERP.tk_cmd_tbl[$1]
+      TkCore::INTERP.tk_cmd_tbl[$1].cmd
+    else
+      #nil
+      val
+    end
+  end
+  private :bool, :number, :string, :list, :simplelist, :window, :procedure
+  module_function :bool, :number, :string, :list, :simplelist
+  module_function :window, :procedure
 
   def _get_eval_string(str)
     return nil if str == None
     if str.kind_of?(String)
       # do nothing
+    elsif str.kind_of?(Symbol)
+      str = str.id2name
     elsif str.kind_of?(Hash)
       str = hash_kv(str).join(" ")
     elsif str.kind_of?(Array)
@@ -219,11 +284,16 @@ module TkComm
     elsif (str.respond_to?(:to_eval))
       str = str.to_eval()
     else
-      str = str.to_s()
+      str = str.to_s() || ''
+      unless str.kind_of? String
+	fail RuntimeError, "fail to convert the object to a string" 
+      end
+      str
     end
     return str
   end
   private :_get_eval_string
+  module_function :_get_eval_string
 
   def ruby2tcl(v)
     if v.kind_of?(Hash)
@@ -236,57 +306,152 @@ module TkComm
   end
   private :ruby2tcl
 
-  Tk_IDs = [0, 0]		# [0]-cmdid, [1]-winid
   def _curr_cmd_id
-    id = format("c%.4d", Tk_IDs[0])
+    #id = format("c%.4d", Tk_IDs[0])
+    id = "c" + TkComm::Tk_IDs[0]
   end
   def _next_cmd_id
     id = _curr_cmd_id
-    Tk_IDs[0] += 1
+    #Tk_IDs[0] += 1
+    TkComm::Tk_IDs[0].succ!
     id
   end
+  private :_curr_cmd_id, :_next_cmd_id
+  module_function :_curr_cmd_id, :_next_cmd_id
+
   def install_cmd(cmd)
     return '' if cmd == ''
     id = _next_cmd_id
-    Tk_CMDTBL[id] = cmd
-    @cmdtbl = [] unless @cmdtbl
+    #Tk_CMDTBL[id] = cmd
+    TkCore::INTERP.tk_cmd_tbl[id] = TkCore::INTERP.get_cb_entry(cmd)
+    @cmdtbl = [] unless defined? @cmdtbl
     @cmdtbl.push id
     return format("rb_out %s", id);
   end
   def uninstall_cmd(id)
     id = $1 if /rb_out (c\d+)/ =~ id
-    Tk_CMDTBL[id] = nil
+    #Tk_CMDTBL.delete(id)
+    TkCore::INTERP.tk_cmd_tbl.delete(id)
   end
   private :install_cmd, :uninstall_cmd
+  module_function :install_cmd
 
-  def install_win(ppath)
-    id = format("w%.4d", Tk_IDs[1])
-    Tk_IDs[1] += 1
-    if !ppath or ppath == "."
-      @path = format(".%s", id);
-    else
-      @path = format("%s.%s", ppath, id)
+  def install_win(ppath,name=nil)
+    if !name or name == ''
+      #name = format("w%.4d", Tk_IDs[1])
+      #Tk_IDs[1] += 1
+      name = "w" + Tk_IDs[1]
+      Tk_IDs[1].succ!
     end
-    Tk_WINDOWS[@path] = self
+    if name[0] == ?.
+      @path = name.dup
+    elsif !ppath or ppath == "."
+      @path = format(".%s", name);
+    else
+      @path = format("%s.%s", ppath, name)
+    end
+    #Tk_WINDOWS[@path] = self
+    TkCore::INTERP.tk_windows[@path] = self
   end
 
   def uninstall_win()
-    Tk_WINDOWS[@path] = nil
+    #Tk_WINDOWS.delete(@path)
+    TkCore::INTERP.tk_windows.delete(@path)
   end
+  private :install_win, :uninstall_win
 
   class Event
-    def initialize(seq,a,b,c,d,f,h,k,m,o,p,s,t,w,x,y,
+    module TypeNum
+      KeyPress         =  2
+      KeyRelease       =  3
+      ButtonPress      =  4
+      ButtonRelease    =  5
+      MotionNotify     =  6
+      EnterNotify      =  7
+      LeaveNotify      =  8
+      FocusIn          =  9
+      FocusOut         = 10
+      KeymapNotify     = 11
+      Expose           = 12
+      GraphicsExpose   = 13
+      NoExpose         = 14
+      VisibilityNotify = 15
+      CreateNotify     = 16
+      DestroyNotify    = 17
+      UnmapNotify      = 18
+      MapNotify	       = 19
+      MapRequest       = 20
+      ReparentNotify   = 21
+      ConfigureNotify  = 22
+      ConfigureRequest = 23
+      GravityNotify    = 24
+      ResizeRequest    = 25
+      CirculateNotify  = 26
+      CirculateRequest = 27
+      PropertyNotify   = 28
+      SelectionClear   = 29
+      SelectionRequest = 30
+      SelectionNotify  = 31
+      ColormapNotify   = 32
+      ClientMessage    = 33
+      MappingNotify    = 34
+    end
+
+    EV_KEY  = '#abcdfhikmopstwxyABDEKNRSTWXY'
+    EV_TYPE = 'nsnnsbnsnsbsxnnnnsnnbsnssnwnn'
+
+    def self.scan_args(arg_str, arg_val)
+      arg_cnv = []
+      arg_str.strip.split(/\s+/).each_with_index{|kwd,idx|
+	if kwd =~ /^%(.)$/
+	  if num = EV_KEY.index($1)
+	    case EV_TYPE[num]
+	    when ?n
+	      begin
+		val = TkComm::number(arg_val[idx])
+	      rescue ArgumentError
+		# ignore --> no convert
+		val = TkComm::string(arg_val[idx])
+	      end
+	      arg_cnv << val
+	    when ?s
+	      arg_cnv << TkComm::string(arg_val[idx])
+	    when ?b
+	      arg_cnv << TkComm::bool(arg_val[idx])
+	    when ?w
+	      arg_cnv << TkComm::window(arg_val[idx])
+	    when ?x
+	      begin
+		arg_cnv << TkComm::number(arg_val[idx])
+	      rescue ArgumentError
+		arg_cnv << arg_val[idx]
+	      end
+	    else
+	      arg_cnv << arg_val[idx]
+	    end
+	  else
+	    arg_cnv << arg_val[idx]
+	  end
+	else
+	  arg_cnv << arg_val[idx]
+	end
+      }
+      arg_cnv
+    end
+
+    def initialize(seq,a,b,c,d,f,h,i,k,m,o,p,s,t,w,x,y,
 	           aa,bb,dd,ee,kk,nn,rr,ss,tt,ww,xx,yy)
       @serial = seq
       @above = a
       @num = b
       @count = c
       @detail = d
-      @focus = (f == 1)
+      @focus = f
       @height = h
+      @win_hex = i
       @keycode = k
       @mode = m
-      @override = (o == 1)
+      @override = o
       @place = p
       @state = s
       @time = t
@@ -296,7 +461,7 @@ module TkComm
       @char = aa
       @borderwidth = bb
       @wheel_delta = dd
-      @send_event = (ee == 1)
+      @send_event = ee
       @keysym = kk
       @keysym_num = nn
       @rootwin_id = rr
@@ -313,6 +478,7 @@ module TkComm
     attr :detail
     attr :focus
     attr :height
+    attr :win_hex
     attr :keycode
     attr :mode
     attr :override
@@ -339,15 +505,16 @@ module TkComm
   def install_bind(cmd, args=nil)
     if args
       id = install_cmd(proc{|*arg|
-	TkUtil.eval_cmd cmd, *arg
+	TkUtil.eval_cmd(cmd, *Event.scan_args(args, arg))
       })
       id + " " + args
     else
-      id = install_cmd(proc{|arg|
-	TkUtil.eval_cmd cmd, Event.new(*arg)
+      args = ' %# %a %b %c %d %f %h %i %k %m %o %p %s %t %w %x %y' + 
+             ' %A %B %D %E %K %N %R %S %T %W %X %Y'
+      id = install_cmd(proc{|*arg|
+	TkUtil.eval_cmd(cmd, Event.new(*Event.scan_args(args, arg)))
       })
-      id + ' %# %a %b %c %d %f %h %k %m %o %p %s %t %w %x %y' + 
-	   ' %A %B %D %E %K %N %R %S %T %W %X %Y'
+      id + args
     end
   end
 
@@ -397,7 +564,8 @@ module TkComm
     if context
       tk_call(*what+["<#{tk_event_sequence(context)}>"]).collect {|cmdline|
 	if cmdline =~ /^rb_out (c\d+)\s+(.*)$/
-	  [Tk_CMDTBL[$1], $2]
+	  #[Tk_CMDTBL[$1], $2]
+	  [TkCore::INTERP.tk_cmd_tbl[$1], $2]
 	else
 	  cmdline
 	end
@@ -423,14 +591,17 @@ module TkComm
 
   def bind(tagOrClass, context, cmd=Proc.new, args=nil)
     _bind(["bind", tagOrClass], context, cmd, args)
+    tagOrClass
   end
 
   def bind_append(tagOrClass, context, cmd=Proc.new, args=nil)
     _bind_append(["bind", tagOrClass], context, cmd, args)
+    tagOrClass
   end
 
   def bind_remove(tagOrClass, context)
     _bind_remove(['bind', tagOrClass], context)
+    tagOrClass
   end
 
   def bindinfo(tagOrClass, context=nil)
@@ -439,10 +610,17 @@ module TkComm
 
   def bind_all(context, cmd=Proc.new, args=nil)
     _bind(['bind', 'all'], context, cmd, args)
+    TkBindTag::ALL
   end
 
   def bind_append_all(context, cmd=Proc.new, args=nil)
     _bind_append(['bind', 'all'], context, cmd, args)
+    TkBindTag::ALL
+  end
+
+  def bind_remove_all(context)
+    _bind_remove(['bind', 'all'], context)
+    TkBindTag::ALL
   end
 
   def bindinfo_all(context=nil)
@@ -471,9 +649,94 @@ module TkCore
   include TkComm
   extend TkComm
 
-  INTERP = TclTkIp.new
+  unless self.const_defined? :INTERP
+    if self.const_defined? :IP_NAME
+      name = IP_NAME.to_s
+    else
+      name = nil
+    end
+    if self.const_defined? :IP_OPTS
+      if IP_OPTS.kind_of?(Hash)
+	opts = hash_kv(IP_OPTS).join(' ')
+      else
+	opts = IP_OPTS.to_s
+      end
+    else
+      opts = ''
+    end
 
-  INTERP._invoke("proc", "rb_out", "args", <<-'EOL')
+    INTERP = TclTkIp.new(name, opts)
+
+    def INTERP.__getip
+      self
+    end
+
+    INTERP.instance_eval{
+      @tk_cmd_tbl = {}
+      @tk_windows = {}
+
+      @tk_table_list = []
+
+      @init_ip_env  = [] # table of Procs
+      @add_tk_procs = [] # table of [name, args, body]
+
+      @cb_entry_class = Class.new{|c|
+	def initialize(ip, cmd)
+	  @ip = ip
+	  @cmd = cmd
+	end
+	attr_reader :ip, :cmd
+	def call(*args)
+	  @ip.cb_eval(@cmd, *args)
+	end
+      }
+    }
+
+    def INTERP.tk_cmd_tbl
+      @tk_cmd_tbl
+    end
+    def INTERP.tk_windows
+      @tk_windows
+    end
+
+    def INTERP.tk_object_table(id)
+      @tk_table_list[id]
+    end
+    def INTERP.create_table
+      id = @tk_table_list.size
+      @tk_table_list << {}
+      obj = Object.new
+      obj.instance_eval <<-EOD
+        def self.method_missing(m, *args)
+	  TkCore::INTERP.tk_object_table(#{id}).send(m, *args)
+        end
+      EOD
+      return obj
+    end
+
+    def INTERP.get_cb_entry(cmd)
+      @cb_entry_class.new(__getip, cmd).freeze
+    end
+    def INTERP.cb_eval(cmd, *args)
+      TkComm._get_eval_string(TkUtil.eval_cmd(cmd, *args))
+    end
+
+    def INTERP.init_ip_env(script = Proc.new)
+      @init_ip_env << script
+      script.call(self)
+    end
+    def INTERP.add_tk_procs(name, args = nil, body = nil)
+      @add_tk_procs << [name, args, body]
+      self._invoke('proc', name, args, body) if args && body
+    end
+    def INTERP.init_ip_internal
+      ip = self
+      @init_ip_env.each{|script| script.call(ip)}
+      @add_tk_procs.each{|name,args,body| ip._invoke('proc',name,args,body)}
+    end
+  end
+
+  INTERP.add_tk_procs('rb_out', 'args', <<-'EOL')
     regsub -all {!} $args {\\!} args
     regsub -all "{" $args "\\{" args
     if {[set st [catch {ruby [format "TkCore.callback %%Q!%s!" $args]} ret]] != 0} {
@@ -483,12 +746,28 @@ module TkCore
     }
   EOL
 
+  EventFlag = TclTkLib::EventFlag
+
   def callback_break
     fail TkCallbackBreak, "Tk callback returns 'break' status"
   end
 
   def callback_continue
     fail TkCallbackContinue, "Tk callback returns 'continue' status"
+  end
+
+  def TkCore.callback(arg)
+    # arg = tk_split_list(arg)
+    arg = tk_split_simplelist(arg)
+    #_get_eval_string(TkUtil.eval_cmd(Tk_CMDTBL[arg.shift], *arg))
+    #_get_eval_string(TkUtil.eval_cmd(TkCore::INTERP.tk_cmd_tbl[arg.shift], 
+    #  			     *arg))
+    cb_obj = TkCore::INTERP.tk_cmd_tbl[arg.shift]
+    cb_obj.call(*arg)
+  end
+
+  def load_cmd_on_ip(tk_cmd)
+    bool(tk_call('auto_load', tk_cmd))
   end
 
   def after(ms, cmd=Proc.new)
@@ -559,9 +838,8 @@ module TkCore
     tk_call('clock','seconds').to_i
   end
 
-  def TkCore.callback(arg)
-    arg = Array(tk_split_list(arg))
-    _get_eval_string(TkUtil.eval_cmd(Tk_CMDTBL[arg.shift], *arg))
+  def windowingsystem
+    tk_call('tk', 'windowingsystem')
   end
 
   def scaling(scale=nil)
@@ -592,7 +870,7 @@ module TkCore
   end
 
   def rb_appsend(interp, async, *args)
-    args = args.collect!{|c| _get_eval_string(c).gsub(/[][$"]/, '\\\\\&')}
+    args = args.collect!{|c| _get_eval_string(c).gsub(/[\[\]$"]/, '\\\\\&')}
     args.push(').to_s"')
     appsend(interp, async, 'ruby "(', *args)
   end
@@ -607,7 +885,7 @@ module TkCore
   end
 
   def rb_appsend_displayof(interp, win, async, *args)
-    args = args.collect!{|c| _get_eval_string(c).gsub(/[][$"]/, '\\\\\&')}
+    args = args.collect!{|c| _get_eval_string(c).gsub(/[\[\]$"]/, '\\\\\&')}
     args.push(').to_s"')
     appsend_displayof(interp, win, async, 'ruby "(', *args)
   end
@@ -616,13 +894,75 @@ module TkCore
     tk_call('info', *args)
   end
 
-  def mainloop
-    TclTkLib.mainloop
+  def mainloop(check_root = true, restart_on_dead = true)
+    unless restart_on_dead
+      TclTkLib.mainloop(check_root)
+    else
+      begin
+	loop do
+	  TclTkLib.mainloop(check_root)
+	  if check_root
+	    begin
+	      break if TkWinfo.exist?('.')
+	    rescue Exception
+	      break
+	    end
+	  end
+	end
+      rescue StandardError
+	if TclTkLib.mainloop_abort_on_exception != nil
+	  STDERR.print("warning: Tk mainloop on ", TkCore::INTERP.inspect, 
+		       " receives ", $!.class.inspect, 
+		       " exception (ignore) : ", $!.message, "\n");
+	end
+	retry
+      end
+    end
   end
 
-  def restart
-    TkCore::INTERP.restart
-    TkComm::Tk_WINDOWS.clear
+  def mainloop_watchdog(check_root = true)
+    # watchdog restarts mainloop when mainloop is dead
+    TclTkLib.mainloop_watchdog(check_root)
+  end
+
+  def do_one_event(flag = TclTkLib::EventFlag::ALL)
+    TclTkLib.do_one_event(flag)
+  end
+
+  def set_eventloop_tick(timer_tick)
+    TclTkLib.set_eventloop_tick(timer_tick)
+  end
+
+  def get_eventloop_tick()
+    TclTkLib.get_eventloop_tick
+  end
+
+  def set_no_event_wait(wait)
+    TclTkLib.set_no_even_wait(wait)
+  end
+
+  def get_no_event_wait()
+    TclTkLib.get_no_eventloop_wait
+  end
+
+  def set_eventloop_weight(loop_max, no_event_tick)
+    TclTkLib.set_eventloop_weight(loop_max, no_event_tick)
+  end
+
+  def get_eventloop_weight()
+    TclTkLib.get_eventloop_weight
+  end
+
+  def restart(app_name = nil, keys = {})
+    TkCore::INTERP.init_ip_internal
+
+    tk_call('set', 'argv0', app_name) if app_name
+    if keys.kind_of?(Hash)
+      # tk_call('set', 'argc', keys.size * 2)
+      tk_call('set', 'argv', hash_kv(keys).join(' '))
+    end
+
+    INTERP.restart
     nil
   end
 
@@ -656,6 +996,22 @@ module TkCore
     tk_call 'tk_chooseDirectory', *hash_kv(keys)
   end
 
+  def ip_eval(cmd_string)
+    res = INTERP._eval(cmd_string)
+    if  INTERP._return_value() != 0
+      fail RuntimeError, res, error_at
+    end
+    return res
+  end
+
+  def ip_invoke(*args)
+    res = INTERP._invoke(*args)
+    if  INTERP._return_value() != 0
+      fail RuntimeError, res, error_at
+    end
+    return res
+  end
+
   def tk_call(*args)
     puts args.inspect if $DEBUG
     args.collect! {|x|ruby2tcl(x)}
@@ -663,12 +1019,14 @@ module TkCore
     args.flatten!
     print "=> ", args.join(" ").inspect, "\n" if $DEBUG
     begin
-      res = INTERP._invoke(*args)
+      # res = INTERP._invoke(*args).taint
+      res = INTERP._invoke(*args)   # _invoke returns a TAITED string
     rescue NameError
       err = $!
       begin
         args.unshift "unknown"
-        res = INTERP._invoke(*args)
+        #res = INTERP._invoke(*args).taint 
+        res = INTERP._invoke(*args)   # _invoke returns a TAITED string
       rescue
 	fail unless /^invalid command/ =~ $!
 	fail err
@@ -685,6 +1043,8 @@ end
 module TkPackage
   include TkCore
   extend TkPackage
+
+  TkCommandNames = ['package'.freeze].freeze
 
   def add_path(path)
     Tk::AUTO_PATH.value = Tk::AUTO_PATH.to_a << path
@@ -741,39 +1101,87 @@ module Tk
   include TkCore
   extend Tk
 
-  TCL_VERSION = INTERP._invoke("info", "tclversion")
-  TK_VERSION  = INTERP._invoke("set", "tk_version")
+  TCL_VERSION = INTERP._invoke("info", "tclversion").freeze
+  TK_VERSION  = INTERP._invoke("set", "tk_version").freeze
 
-  TCL_PATCHLEVEL = INTERP._invoke("info", "patchlevel")
-  TK_PATCHLEVEL  = INTERP._invoke("set", "tk_patchLevel")
+  TCL_PATCHLEVEL = INTERP._invoke("info", "patchlevel").freeze
+  TK_PATCHLEVEL  = INTERP._invoke("set", "tk_patchLevel").freeze
 
-  TCL_LIBRARY = INTERP._invoke("set", "tcl_library")
-  TK_LIBRARY  = INTERP._invoke("set", "tk_library")
-  LIBRARY     = INTERP._invoke("info", "library")
+  TCL_LIBRARY = INTERP._invoke("set", "tcl_library").freeze
+  TK_LIBRARY  = INTERP._invoke("set", "tk_library").freeze
+  LIBRARY     = INTERP._invoke("info", "library").freeze
 
-  PLATFORM = Hash[*tk_split_simplelist(INTERP._eval('array get tcl_platform'))]
+  PLATFORM = Hash[*tk_split_simplelist(INTERP._invoke('array', 'get', 
+						      'tcl_platform'))]
+  PLATFORM.each{|k, v| k.freeze; v.freeze}
+  PLATFORM.freeze
 
-  JAPANIZED_TK = (INTERP._invoke("info", "commands", "kanji") != "")
+  TK_PREV = {}
+  Hash[*tk_split_simplelist(INTERP._invoke('array','get','tkPriv'))].each{|k,v|
+    k.freeze
+    case v
+    when /^-?\d+$/
+      TK_PREV[k] = v.to_i
+    when /^-?\d+\.?\d*(e[-+]?\d+)?$/
+      TK_PREV[k] = v.to_f
+    else
+      TK_PREV[k] = v.freeze
+    end
+  }
+  TK_PREV.freeze
+
+  JAPANIZED_TK = (INTERP._invoke("info", "commands", "kanji") != "").freeze
 
   def root
     TkRoot.new
   end
 
-  def bell
-    tk_call 'bell'
+  def bell(nice = false)
+    if nice
+      tk_call 'bell', '-nice'
+    else
+      tk_call 'bell'
+    end
+  end
+
+  def bell_on_display(win, nice = false)
+    if nice
+      tk_call('bell', '-displayof', win, '-nice')
+    else
+      tk_call('bell', '-displayof', win)
+    end
+  end
+
+  def Tk.destroy(*wins)
+    tk_call('destroy', *wins)
+  end
+
+  def Tk.exit
+    tk_call('destroy', '.')
+  end
+
+  def Tk.current_grabs
+    tk_split_list(tk_call('grab', 'current'))
   end
 
   def Tk.focus(display=nil)
     if display == nil
-      r = tk_call('focus')
+      window(tk_call('focus'))
     else
-      r = tk_call('focus', '-displayof', display)
+      window(tk_call('focus', '-displayof', display))
     end
-    tk_tcl2ruby(r)
   end
 
   def Tk.focus_lastfor(win)
-    tk_tcl2ruby(tk_call('focus', '-lastfor', win))
+    window(tk_call('focus', '-lastfor', win))
+  end
+
+  def Tk.focus_next(win)
+    TkManageFocus.next(win)
+  end
+
+  def Tk.focus_prev(win)
+    TkManageFocus.prev(win)
   end
 
   def Tk.strictMotif(bool=None)
@@ -837,8 +1245,8 @@ module Tk
       if bar
 	@xscrollbar = bar
 	@xscrollbar.orient 'horizontal'
-	self.xscrollcommand {|arg| @xscrollbar.set(*arg)}
-	@xscrollbar.command {|arg| self.xview(*arg)}
+	self.xscrollcommand {|*arg| @xscrollbar.set(*arg)}
+	@xscrollbar.command {|*arg| self.xview(*arg)}
       end
       @xscrollbar
     end
@@ -846,8 +1254,8 @@ module Tk
       if bar
 	@yscrollbar = bar
 	@yscrollbar.orient 'vertical'
-	self.yscrollcommand {|arg| @yscrollbar.set(*arg)}
-	@yscrollbar.command {|arg| self.yview(*arg)}
+	self.yscrollcommand {|*arg| @yscrollbar.set(*arg)}
+	@yscrollbar.command {|*arg| self.yview(*arg)}
       end
       @yscrollbar
     end
@@ -855,80 +1263,180 @@ module Tk
 
   module Wm
     include TkComm
+
+    TkCommandNames = ['wm'.freeze].freeze
+
     def aspect(*args)
       w = tk_call('wm', 'aspect', path, *args)
-      list(w) if args.length == 0
+      if args.length == 0
+	list(w) 
+      else
+	self
+      end
+    end
+    def attributes(slot=nil,value=None)
+      if slot == nil
+	lst = tk_split_list(tk_call('wm', 'attributes', path))
+	info = {}
+	while key = lst.shift
+	  info[key[1..-1]] = lst.shift
+	end
+	info
+      elsif slot.kind_of? Hash
+	tk_call('wm', 'attributes', path, *hash_kv(slot))
+	self
+      elsif value == None
+	tk_call('wm', 'attributes', path, "-#{slot}")
+      else
+	tk_call('wm', 'attributes', path, "-#{slot}", value)
+	self
+      end
     end
     def client(name=None)
-      tk_call 'wm', 'client', path, name
+      if name == None
+	tk_call 'wm', 'client', path
+      else
+        name = '' if name == nil
+	tk_call 'wm', 'client', path, name
+	self
+      end
     end
     def colormapwindows(*args)
-      list(tk_call('wm', 'colormapwindows', path, *args))
+      r = tk_call('wm', 'colormapwindows', path, *args)
+      if args.size == 0
+	list(r)
+      else
+	self
+      end
     end
-    def wm_command(value=None)
-      string(tk_call('wm', 'command', path, value))
+    def wm_command(value=nil)
+      if value
+	tk_call('wm', 'command', path, value)
+	self
+      else
+	procedure(tk_call('wm', 'command', path))
+      end
     end
-    def deiconify
-      tk_call 'wm', 'deiconify', path
+    def deiconify(ex = true)
+      tk_call('wm', 'deiconify', path) if ex
+      self
     end
-    def focusmodel(*args)
-      tk_call 'wm', 'focusmodel', path, *args
+    def focusmodel(mode = nil)
+      if mode
+	tk_call 'wm', 'focusmodel', path, mode
+	self
+      else
+	tk_call 'wm', 'focusmodel', path
+      end
     end
     def frame
       tk_call('wm', 'frame', path)
     end
-    def geometry(*args)
-      tk_call('wm', 'geometry', path, *args)
+    def geometry(geom)
+      if geom
+	tk_call('wm', 'geometry', path, geom)
+	self
+      else
+	tk_call('wm', 'geometry', path)
+      end
     end
     def grid(*args)
       w = tk_call('wm', 'grid', path, *args)
-      list(w) if args.size == 0
+      if args.size == 0
+	list(w) 
+      else
+	self
+      end
     end
     def group(*args)
       w = tk_call 'wm', 'group', path, *args
-      window(w) if args.size == 0
+      if args.size == 0
+	window(w) 
+      else
+	self
+      end
     end
-    def iconbitmap(*args)
-      tk_call 'wm', 'iconbitmap', path, *args
+    def iconbitmap(bmp=nil)
+      if bmp
+	tk_call 'wm', 'iconbitmap', path, bmp
+	self
+      else
+	tk_call 'wm', 'iconbitmap', path
+      end
     end
-    def iconify
-      tk_call 'wm', 'iconify', path
+    def iconify(ex = true)
+      tk_call('wm', 'iconify', path) if ex
+      self
     end
-    def iconmask(*args)
-      tk_call 'wm', 'iconmask', path, *args
+    def iconmask(bmp=nil)
+      if bmp
+	tk_call 'wm', 'iconmask', path, bmp
+	self
+      else
+	tk_call 'wm', 'iconmask', path
+      end
     end
-    def iconname(*args)
-      tk_call 'wm', 'iconname', path, *args
+    def iconname(name=nil)
+      if name
+	tk_call 'wm', 'iconname', path, name
+	self
+      else
+	tk_call 'wm', 'iconname', path
+      end
     end
     def iconposition(*args)
       w = tk_call('wm', 'iconposition', path, *args)
-      list(w) if args.size == 0
+      if args.size == 0
+	list(w) 
+      else
+	self
+      end
     end
     def iconwindow(*args)
       w = tk_call('wm', 'iconwindow', path, *args)
-      window(w) if args.size == 0
+      if args.size == 0
+	window(w)
+      else
+	self
+      end
     end
     def maxsize(*args)
       w = tk_call('wm', 'maxsize', path, *args)
-      list(w) if args.size == 0
+      if args.size == 0
+	list(w) 
+      else
+	self
+      end
     end
     def minsize(*args)
       w = tk_call('wm', 'minsize', path, *args)
-      list(w) if args.size == 0
+      if args.size == 0
+	list(w) 
+      else
+	self
+      end
     end
     def overrideredirect(bool=None)
       if bool == None
 	bool(tk_call('wm', 'overrideredirect', path))
       else
 	tk_call 'wm', 'overrideredirect', path, bool
+	self
       end
     end
-    def positionfrom(*args)
-      tk_call 'wm', 'positionfrom', path, *args
+    def positionfrom(who=None)
+      if who == None
+	r = tk_call('wm', 'positionfrom', path)
+	(r == "")? nil: r
+      else
+	tk_call('wm', 'positionfrom', path, who)
+	self
+      end
     end
     def protocol(name=nil, cmd=nil)
       if cmd
 	tk_call('wm', 'protocol', path, name, cmd)
+	self
       elsif name
 	result = tk_call('wm', 'protocol', path, name)
 	(result == "")? nil : tk_tcl2ruby(result)
@@ -940,22 +1448,55 @@ module Tk
       w = tk_call('wm', 'resizable', path, *args)
       if args.length == 0
 	list(w).collect{|e| bool(e)}
+      else
+	self
       end
     end
-    def sizefrom(*args)
-      tk_call('wm', 'sizefrom', path, *args)
+    def sizefrom(who=None)
+      if who == None
+	r = tk_call('wm', 'sizefrom', path)
+	(r == "")? nil: r
+      else
+	tk_call('wm', 'sizefrom', path, who)
+	self
+      end
     end
-    def state(state=None)
-      tk_call 'wm', 'state', path, state
+    def stackorder
+      list(tk_call('wm', 'stackorder', path))
     end
-    def title(*args)
-      tk_call 'wm', 'title', path, *args
+    def stackorder_isabove(win)
+      bool(tk_call('wm', 'stackorder', path, 'isabove', win))
     end
-    def transient(*args)
-      window(tk_call 'wm', 'transient', path, *args)
+    def stackorder_isbelow(win)
+      bool(tk_call('wm', 'stackorder', path, 'isbelow', win))
     end
-    def withdraw
-      tk_call 'wm', 'withdraw', path
+    def state(state=nil)
+      if state
+	tk_call 'wm', 'state', path, state
+	self
+      else
+	tk_call 'wm', 'state', path
+      end
+    end
+    def title(str=nil)
+      if str
+	tk_call('wm', 'title', path, str)
+	self
+      else
+	tk_call('wm', 'title', path)
+      end
+    end
+    def transient(master=nil)
+      if master
+	tk_call('wm', 'transient', path, master)
+	self
+      else
+	window(tk_call('wm', 'transient', path, master))
+      end
+    end
+    def withdraw(ex = true)
+      tk_call('wm', 'withdraw', path) if ex
+      self
     end
   end
 end
@@ -968,21 +1509,19 @@ if /^8\.[1-9]/ =~ Tk::TCL_VERSION && !Tk::JAPANIZED_TK
     # from tkencoding.rb by ttate@jaist.ac.jp
     alias __eval _eval
     alias __invoke _invoke
-    private :__eval
-    private :__invoke
     
     attr_accessor :encoding
     
     def _eval(cmd)
-      if @encoding
+      if defined? @encoding
 	_fromUTF8(__eval(_toUTF8(cmd, @encoding)), @encoding)
       else
 	__eval(cmd)
       end
     end
-    
+
     def _invoke(*cmds)
-      if @encoding
+      if defined? @encoding
 	cmds = cmds.collect{|cmd| _toUTF8(cmd, @encoding)}
 	_fromUTF8(__invoke(*cmds), @encoding)
       else
@@ -992,25 +1531,43 @@ if /^8\.[1-9]/ =~ Tk::TCL_VERSION && !Tk::JAPANIZED_TK
   end
 
   module Tk
-    def encoding=(name)
-      INTERP.encoding = name
+    module Encoding
+      extend Encoding
+
+      TkCommandNames = ['encoding'.freeze].freeze
+
+      def encoding=(name)
+	TkCore::INTERP.encoding = name
+      end
+
+      def encoding
+	TkCore::INTERP.encoding
+      end
+
+      def encoding_names
+	tk_split_simplelist(tk_call('encoding', 'names'))
+      end
+
+      def encoding_system
+	tk_call('encoding', 'system')
+      end
+
+      def encoding_system=(enc)
+	tk_call('encoding', 'system', enc)
+      end
+
+      def encoding_convertfrom(str, enc=None)
+	TkCore::INTERP.__invoke('encoding', 'convertfrom', enc, str)
+      end
+      alias encoding_convert_from encoding_convertfrom
+
+      def encoding_convertto(str, enc=None)
+	TkCore::INTERP.__invoke('encoding', 'convertto', enc, str)
+      end
+      alias encoding_convert_to encoding_convertto
     end
 
-    def encoding
-      INTERP.encoding
-    end
-
-    def encoding_names
-      tk_split_simplelist(tk_call('encoding', 'names'))
-    end
-
-    def encoding_system
-      tk_call('encoding', 'system')
-    end
-
-    def encoding_system=(enc)
-      tk_call('encoding', 'system', enc)
-    end
+    extend Encoding
   end
 
   # estimate encoding
@@ -1031,64 +1588,97 @@ if /^8\.[1-9]/ =~ Tk::TCL_VERSION && !Tk::JAPANIZED_TK
 
 else
   # dummy methods
+  class TclTkIp
+    alias __eval _eval
+    alias __invoke _invoke
+  end
+
   module Tk
-    def encoding=(name)
-      nil
+    module Encoding
+      extend Encoding
+
+      def encoding=(name)
+	nil
+      end
+      def encoding
+	nil
+      end
+      def encoding_names
+	nil
+      end
+      def encoding_system
+	nil
+      end
+      def encoding_system=(enc)
+	nil
+      end
+
+      def encoding_convertfrom(str, enc=None)
+	str
+      end
+      alias encoding_convert_from encoding_convertfrom
+
+      def encoding_convertto(str, enc=None)
+	str
+      end
+      alias encoding_convert_to encoding_convertto
     end
-    def encoding
-      nil
-    end
-    def encoding_names
-      nil
-    end
-    def encoding_system
-      nil
-    end
-    def encoding_system=(enc)
-      nil
-    end
+
+    extend Encoding
   end
 end
 
 module TkBindCore
   def bind(context, cmd=Proc.new, args=nil)
-    Tk.bind(to_eval, context, cmd, args)
+    Tk.bind(self, context, cmd, args)
   end
 
   def bind_append(context, cmd=Proc.new, args=nil)
-    Tk.bind_append(to_eval, context, cmd, args)
+    Tk.bind_append(self, context, cmd, args)
   end
 
   def bind_remove(context)
-    Tk.bind_remove(to_eval, context)
+    Tk.bind_remove(self, context)
   end
 
   def bindinfo(context=nil)
-    Tk.bindinfo(to_eval, context)
+    Tk.bindinfo(self, context)
   end
 end
 
 class TkBindTag
   include TkBindCore
 
-  BTagID_TBL = {}
-  Tk_BINDTAG_ID = ["btag00000"]
+  #BTagID_TBL = {}
+  BTagID_TBL = TkCore::INTERP.create_table
+  Tk_BINDTAG_ID = ["btag".freeze, "00000"].freeze
+
+  TkCore::INTERP.init_ip_env{ BTagID_TBL.clear }
 
   def TkBindTag.id2obj(id)
     BTagID_TBL[id]? BTagID_TBL[id]: id
   end
 
-  ALL = self.new
-  ALL.instance_eval {
-    @id = 'all'
-    BTagID_TBL[@id] = self
-  }
+  def TkBindTag.new_by_name(name, *args, &b)
+    return BTagID_TBL[name] if BTagID_TBL[name]
+    self.new(*args, &b).instance_eval{
+      BTagID_TBL.delete @id
+      @id = name
+      BTagID_TBL[@id] = self
+    }
+  end
 
-  def initialize(*args)
-    @id = Tk_BINDTAG_ID[0]
-    Tk_BINDTAG_ID[0] = Tk_BINDTAG_ID[0].succ
+  def initialize(*args, &b)
+    @id = Tk_BINDTAG_ID.join
+    Tk_BINDTAG_ID[1].succ!
     BTagID_TBL[@id] = self
-    bind(*args) if args != []
+    bind(*args, &b) if args != []
+  end
+
+  ALL = self.new_by_name('all')
+
+  def name
+    @id
   end
 
   def to_eval
@@ -1101,11 +1691,28 @@ class TkBindTag
 end
 
 class TkBindTagAll<TkBindTag
-  def TkBindTagAll.new(*args)
+  def TkBindTagAll.new(*args, &b)
     $stderr.puts "Warning: TkBindTagALL is obsolete. Use TkBindTag::ALL\n"
 
-    TkBindTag::ALL.bind(*args) if args != []
+    TkBindTag::ALL.bind(*args, &b) if args != []
     TkBindTag::ALL
+  end
+end
+
+class TkDatabaseClass<TkBindTag
+  def self.new(name, *args, &b)
+    return BTagID_TBL[name] if BTagID_TBL[name]
+    super(name, *args, &b)
+  end
+
+  def initialize(name, *args, &b)
+    @id = name
+    BTagID_TBL[@id] = self
+    bind(*args, &b) if args != []
+  end
+
+  def inspect
+    format "#<TkDatabaseClass: %s>", @id
   end
 end
 
@@ -1113,10 +1720,16 @@ class TkVariable
   include Tk
   extend TkCore
 
-  TkVar_CB_TBL = {}
-  Tk_VARIABLE_ID = ["v00000"]
+  TkCommandNames = ['tkwait'.freeze].freeze
 
-  INTERP._invoke("proc", "rb_var", "args", "ruby [format \"TkVariable.callback %%Q!%s!\" $args]")
+  #TkVar_CB_TBL = {}
+  #TkVar_ID_TBL = {}
+  TkVar_CB_TBL = TkCore::INTERP.create_table
+  TkVar_ID_TBL = TkCore::INTERP.create_table
+  Tk_VARIABLE_ID = ["v".freeze, "00000"].freeze
+
+  TkCore::INTERP.add_tk_procs('rb_var', 'args', 
+	"ruby [format \"TkVariable.callback %%Q!%s!\" $args]")
 
   def TkVariable.callback(args)
     name1,name2,op = tk_split_list(args)
@@ -1128,22 +1741,28 @@ class TkVariable
   end
 
   def initialize(val="")
-    @id = Tk_VARIABLE_ID[0]
-    Tk_VARIABLE_ID[0] = Tk_VARIABLE_ID[0].succ
+    @id = Tk_VARIABLE_ID.join
+    Tk_VARIABLE_ID[1].succ!
+    TkVar_ID_TBL[@id] = self
+
+    @trace_var  = nil
+    @trace_elem = nil
+    @trace_opts = nil
+
     if val == []
       INTERP._eval(format('global %s; set %s(0) 0; unset %s(0)', 
 			  @id, @id, @id))
     elsif val.kind_of?(Array)
       a = []
       val.each_with_index{|e,i| a.push(i); a.push(array2tk_list(e))}
-      s = '"' + a.join(" ").gsub(/[][$"]/, '\\\\\&') + '"'
+      s = '"' + a.join(" ").gsub(/[\[\]$"]/, '\\\\\&') + '"'
       INTERP._eval(format('global %s; array set %s %s', @id, @id, s))
     elsif  val.kind_of?(Hash)
       s = '"' + val.to_a.collect{|e| array2tk_list(e)}.join(" ")\
-                   .gsub(/[][$"]/, '\\\\\&') + '"'
+                   .gsub(/[\[\]$"]/, '\\\\\&') + '"'
       INTERP._eval(format('global %s; array set %s %s', @id, @id, s))
     else
-      s = '"' + _get_eval_string(val).gsub(/[][$"]/, '\\\\\&') + '"'
+      s = '"' + _get_eval_string(val).gsub(/[\[\]$"]/, '\\\\\&') + '"'
       INTERP._eval(format('global %s; set %s %s', @id, @id, s))
     end
   end
@@ -1171,7 +1790,7 @@ class TkVariable
 
   def value=(val)
     begin
-      s = '"' + _get_eval_string(val).gsub(/[][$"]/, '\\\\\&') + '"'
+      s = '"' + _get_eval_string(val).gsub(/[\[\]$"]/, '\\\\\&') + '"'
       INTERP._eval(format('global %s; set %s %s', @id, @id, s))
     rescue
       if INTERP._eval(format('global %s; array exists %s', @id, @id)) != "1"
@@ -1183,12 +1802,12 @@ class TkVariable
 	elsif val.kind_of?(Array)
 	  a = []
 	  val.each_with_index{|e,i| a.push(i); a.push(array2tk_list(e))}
-	  s = '"' + a.join(" ").gsub(/[][$"]/, '\\\\\&') + '"'
+	  s = '"' + a.join(" ").gsub(/[\[\]$"]/, '\\\\\&') + '"'
 	  INTERP._eval(format('global %s; unset %s; array set %s %s', 
 			      @id, @id, @id, s))
 	elsif  val.kind_of?(Hash)
 	  s = '"' + val.to_a.collect{|e| array2tk_list(e)}.join(" ")\
-	                        .gsub(/[][$"]/, '\\\\\&') + '"'
+	                        .gsub(/[\[\]$"]/, '\\\\\&') + '"'
 	  INTERP._eval(format('global %s; unset %s; array set %s %s', 
 			      @id, @id, @id, s))
 	else
@@ -1220,6 +1839,10 @@ class TkVariable
     string(value).to_s
   end
 
+  def to_sym
+    value.intern
+  end
+
   def inspect
     format "#<TkVariable: %s>", @id
   end
@@ -1227,9 +1850,11 @@ class TkVariable
   def ==(other)
     case other
     when TkVariable
-      self.equal(self)
+      self.equal?(other)
     when String
       self.to_s == other
+    when Symbol
+      self.to_sym == other
     when Integer
       self.to_i == other
     when Float
@@ -1392,10 +2017,16 @@ class TkVariable
 end
 
 class TkVarAccess<TkVariable
+  def self.new(name, *args)
+    return TkVar_ID_TBL[name] if TkVar_ID_TBL[name]
+    super(name, *args)
+  end
+
   def initialize(varname, val=nil)
     @id = varname
+    TkVar_ID_TBL[@id] = self
     if val
-      s = '"' + _get_eval_string(val).gsub(/[][$"]/, '\\\\\&') + '"' #"
+      s = '"' + _get_eval_string(val).gsub(/[\[\]$"]/, '\\\\\&') + '"' #"
       INTERP._eval(format('global %s; set %s %s', @id, @id, s))
     end
   end
@@ -1414,36 +2045,96 @@ module Tk
   AUTO_PATH = TkVarAccess.new('auto_path', auto_path)
 
   TCL_PACKAGE_PATH = TkVarAccess.new('tcl_pkgPath')
+
+  TCL_PRECISION = TkVarAccess.new('tcl_precision')
 end
 
 module TkSelection
   include Tk
   extend Tk
-  def clear(win=Tk.root)
-    tk_call 'selection', 'clear', win.path
+
+  TkCommandNames = ['selection'.freeze].freeze
+
+  def self.clear(sel=nil)
+    if sel
+      tk_call 'selection', 'clear', '-selection', sel
+    else
+      tk_call 'selection', 'clear'
+    end
   end
-  def get(type=None)
-    tk_call 'selection', 'get', type
+  def self.clear_on_display(win, sel=nil)
+    if sel
+      tk_call 'selection', 'clear', '-displayof', win, '-selection', sel
+    else
+      tk_call 'selection', 'clear', '-displayof', win
+    end
   end
-  def TkSelection.handle(win, func, type=None, format=None)
-    tk_call 'selection', 'handle', win.path, func, type, format
-  end
-  def handle(func, type=None, format=None)
-    TkSelection.handle self, func, type, format
-  end
-  def TkSelection.own(win=None, func=None)
-    window(tk_call 'selection', 'own', win, func)
-  end
-  def own(func=None)
-    TkSelection.own self, func
+  def clear(sel=nil)
+    TkSelection.clear_on_display(self, sel)
+    self
   end
 
-  module_function :clear, :get
+  def self.get(keys=nil)
+    tk_call 'selection', 'get', *hash_kv(keys)
+  end
+  def self.get_on_display(win, keys=nil)
+    tk_call 'selection', 'get', '-displayof', win, *hash_kv(keys)
+  end
+  def get(keys=nil)
+    TkSelection.get_on_display(self, sel)
+  end
+
+  def self.handle(win, func=Proc.new, keys=nil, &b)
+    if func.kind_of?(Hash) && keys == nil
+      keys = func
+      func = Proc.new(&b)
+    end
+    args = ['selection', 'handle']
+    args += hash_kv(keys)
+    args += [win, func]
+    tk_call(*args)
+  end
+  def handle(func=Proc.new, keys=nil, &b)
+    TkSelection.handle(self, func, keys, &b)
+  end
+
+  def self.get_owner(sel=nil)
+    if sel
+      window(tk_call('selection', 'own', '-selection', sel))
+    else
+      window(tk_call('selection', 'own'))
+    end
+  end
+  def self.get_owner_on_display(win, sel=nil)
+    if sel
+      window(tk_call('selection', 'own', '-displayof', win, '-selection', sel))
+    else
+      window(tk_call('selection', 'own', '-displayof', win))
+    end
+  end
+  def get_owner(sel=nil)
+    TkSelection.get_owner_on_display(self, sel)
+    self
+  end
+
+  def self.set_owner(win, keys=nil)
+    tk_call('selection', 'own', *(hash_kv(keys) << win))
+  end
+  def set_owner(keys=nil)
+    TkSelection.set_owner(self, keys)
+    self
+  end
 end
 
 module TkKinput
   include Tk
   extend Tk
+
+  TkCommandNames = [
+    'kinput_start'.freeze, 
+    'kinput_send_spot'.freeze, 
+    'kanjiInput'.freeze
+  ].freeze
 
   def TkKinput.start(window, style=None)
     tk_call 'kinput_start', window.path, style
@@ -1507,6 +2198,8 @@ module TkXIM
   include Tk
   extend Tk
 
+  TkCommandNames = ['imconfigure'.freeze].freeze
+
   def TkXIM.useinputmethods(window=nil, value=nil)
     if window
       if value
@@ -1520,6 +2213,20 @@ module TkXIM
       else
         tk_call 'tk', 'useinputmethods'
       end
+    end
+  end
+
+  def TkXIM.caret(window, keys=nil)
+    if keys
+      tk_call('tk', 'caret', window, *hash_kv(keys))
+      self
+    else
+      lst = tk_split_list(tk_call('tk', 'caret', window))
+      info = {}
+      while key = lst.shift
+	info[key[1..-1]] = lst.shift
+      end
+      info
     end
   end
 
@@ -1561,36 +2268,54 @@ module TkXIM
     TkXIM.useinputmethods(self, value)
   end
 
-  def imconfigure(window, slot, value=None)
-    TkXIM.configinfo(window, slot, value)
+  def caret(keys=nil)
+    TkXIM.caret(self, keys=nil)
+  end
+
+  def imconfigure(slot, value=None)
+    TkXIM.configinfo(self, slot, value)
   end
 
   def imconfiginfo(slot=nil)
-    TkXIM.configinfo(window, slot)
+    TkXIM.configinfo(self, slot)
   end
 end
 
 module TkWinfo
   include Tk
   extend Tk
-  def TkWinfo.atom(name)
-    number(tk_call 'winfo', 'atom', name)
+
+  TkCommandNames = ['winfo'.freeze].freeze
+
+  def TkWinfo.atom(name, win=nil)
+    if win
+      number(tk_call('winfo', 'atom', '-displayof', win, name))
+    else
+      number(tk_call('winfo', 'atom', name))
+    end
   end
   def winfo_atom(name)
-    TkWinfo.atom name
+    TkWinfo.atom(name, self)
   end
-  def TkWinfo.atomname(id)
-    tk_call 'winfo', 'atomname', id
+
+  def TkWinfo.atomname(id, win=nil)
+    if win
+      tk_call('winfo', 'atomname', '-displayof', win, id)
+    else
+      tk_call('winfo', 'atomname', id)
+    end
   end
   def winfo_atomname(id)
-    TkWinfo.atomname id
+    TkWinfo.atomname(id, self)
   end
+
   def TkWinfo.cells(window)
     number(tk_call('winfo', 'cells', window.path))
   end
   def winfo_cells
     TkWinfo.cells self
   end
+
   def TkWinfo.children(window)
     c = tk_call('winfo', 'children', window.path)
     list(c)
@@ -1598,61 +2323,75 @@ module TkWinfo
   def winfo_children
     TkWinfo.children self
   end
+
   def TkWinfo.classname(window)
     tk_call 'winfo', 'class', window.path
   end
   def winfo_classname
     TkWinfo.classname self
   end
+  alias winfo_class winfo_classname
+
   def TkWinfo.colormapfull(window)
      bool(tk_call('winfo', 'colormapfull', window.path))
   end
   def winfo_colormapfull
     TkWinfo.colormapfull self
   end
-  def TkWinfo.containing(rootX, rootY)
-    path = tk_call('winfo', 'containing', rootX, rootY)
-    window(path)
+
+  def TkWinfo.containing(rootX, rootY, win=nil)
+    if win
+      window(tk_call('winfo', 'containing', '-displayof', win, rootX, rootY))
+    else
+      window(tk_call('winfo', 'containing', rootX, rootY))
+    end
   end
   def winfo_containing(x, y)
-    TkWinfo.containing x, y
+    TkWinfo.containing(x, y, self)
   end
+
   def TkWinfo.depth(window)
     number(tk_call('winfo', 'depth', window.path))
   end
   def winfo_depth
     TkWinfo.depth self
   end
+
   def TkWinfo.exist?(window)
     bool(tk_call('winfo', 'exists', window.path))
   end
   def winfo_exist?
     TkWinfo.exist? self
   end
-  def TkWinfo.fpixels(window, number)
-    number(tk_call('winfo', 'fpixels', window.path, number))
+
+  def TkWinfo.fpixels(window, dist)
+    number(tk_call('winfo', 'fpixels', window.path, dist))
   end
-  def winfo_fpixels(number)
-    TkWinfo.fpixels self, number
+  def winfo_fpixels(dist)
+    TkWinfo.fpixels self, dist
   end
+
   def TkWinfo.geometry(window)
     tk_call('winfo', 'geometry', window.path)
   end
   def winfo_geometry
     TkWinfo.geometry self
   end
+
   def TkWinfo.height(window)
     number(tk_call('winfo', 'height', window.path))
   end
   def winfo_height
     TkWinfo.height self
   end
+
   def TkWinfo.id(window)
     tk_call('winfo', 'id', window.path)
   end
   def winfo_id
     TkWinfo.id self
   end
+
   def TkWinfo.interps(window=nil)
     if window
       tk_split_simplelist(tk_call('winfo', 'interps',
@@ -1664,215 +2403,253 @@ module TkWinfo
   def winfo_interps
     TkWinfo.interps self
   end
+
   def TkWinfo.mapped?(window)
     bool(tk_call('winfo', 'ismapped', window.path))
   end
   def winfo_mapped?
     TkWinfo.mapped? self
   end
+
   def TkWinfo.manager(window)
     tk_call('winfo', 'manager', window.path)
   end
   def winfo_manager
     TkWinfo.manager self
   end
+
   def TkWinfo.appname(window)
     tk_call('winfo', 'name', window.path)
   end
   def winfo_appname
     TkWinfo.appname self
   end
+
   def TkWinfo.parent(window)
     window(tk_call('winfo', 'parent', window.path))
   end
   def winfo_parent
     TkWinfo.parent self
   end
-  def TkWinfo.widget(id)
-    window(tk_call('winfo', 'pathname', id))
+
+  def TkWinfo.widget(id, win=nil)
+    if win
+      window(tk_call('winfo', 'pathname', '-displayof', win, id))
+    else
+      window(tk_call('winfo', 'pathname', id))
+    end
   end
   def winfo_widget(id)
-    TkWinfo.widget id
+    TkWinfo.widget id, self
   end
-  def TkWinfo.pixels(window, number)
-    number(tk_call('winfo', 'pixels', window.path, number))
+
+  def TkWinfo.pixels(window, dist)
+    number(tk_call('winfo', 'pixels', window.path, dist))
   end
-  def winfo_pixels(number)
-    TkWinfo.pixels self, number
+  def winfo_pixels(dist)
+    TkWinfo.pixels self, dist
   end
+
   def TkWinfo.reqheight(window)
     number(tk_call('winfo', 'reqheight', window.path))
   end
   def winfo_reqheight
     TkWinfo.reqheight self
   end
+
   def TkWinfo.reqwidth(window)
     number(tk_call('winfo', 'reqwidth', window.path))
   end
   def winfo_reqwidth
     TkWinfo.reqwidth self
   end
+
   def TkWinfo.rgb(window, color)
     list(tk_call('winfo', 'rgb', window.path, color))
   end
   def winfo_rgb(color)
     TkWinfo.rgb self, color
   end
+
   def TkWinfo.rootx(window)
     number(tk_call('winfo', 'rootx', window.path))
   end
   def winfo_rootx
     TkWinfo.rootx self
   end
+
   def TkWinfo.rooty(window)
     number(tk_call('winfo', 'rooty', window.path))
   end
   def winfo_rooty
     TkWinfo.rooty self
   end
+
   def TkWinfo.screen(window)
     tk_call 'winfo', 'screen', window.path
   end
   def winfo_screen
     TkWinfo.screen self
   end
+
   def TkWinfo.screencells(window)
     number(tk_call('winfo', 'screencells', window.path))
   end
   def winfo_screencells
     TkWinfo.screencells self
   end
+
   def TkWinfo.screendepth(window)
     number(tk_call('winfo', 'screendepth', window.path))
   end
   def winfo_screendepth
     TkWinfo.screendepth self
   end
+
   def TkWinfo.screenheight (window)
     number(tk_call('winfo', 'screenheight', window.path))
   end
   def winfo_screenheight
     TkWinfo.screenheight self
   end
+
   def TkWinfo.screenmmheight(window)
     number(tk_call('winfo', 'screenmmheight', window.path))
   end
   def winfo_screenmmheight
     TkWinfo.screenmmheight self
   end
+
   def TkWinfo.screenmmwidth(window)
     number(tk_call('winfo', 'screenmmwidth', window.path))
   end
   def winfo_screenmmwidth
     TkWinfo.screenmmwidth self
   end
+
   def TkWinfo.screenvisual(window)
-    tk_call 'winfo', 'screenvisual', window.path
+    tk_call('winfo', 'screenvisual', window.path)
   end
   def winfo_screenvisual
     TkWinfo.screenvisual self
   end
+
   def TkWinfo.screenwidth(window)
     number(tk_call('winfo', 'screenwidth', window.path))
   end
   def winfo_screenwidth
     TkWinfo.screenwidth self
   end
+
   def TkWinfo.server(window)
     tk_call 'winfo', 'server', window.path
   end
   def winfo_server
     TkWinfo.server self
   end
+
   def TkWinfo.toplevel(window)
     window(tk_call('winfo', 'toplevel', window.path))
   end
   def winfo_toplevel
     TkWinfo.toplevel self
   end
+
   def TkWinfo.visual(window)
-    tk_call 'winfo', 'visual', window.path
+    tk_call('winfo', 'visual', window.path)
   end
   def winfo_visual
     TkWinfo.visual self
   end
+
   def TkWinfo.visualid(window)
-    tk_call 'winfo', 'visualid', window.path
+    tk_call('winfo', 'visualid', window.path)
   end
   def winfo_visualid
     TkWinfo.visualid self
   end
+
   def TkWinfo.visualsavailable(window, includeids=false)
     if includeids
-      v = tk_call('winfo', 'visualsavailable', window.path, "includeids")
+      list(tk_call('winfo', 'visualsavailable', window.path, "includeids"))
     else
-      v = tk_call('winfo', 'visualsavailable', window.path)
+      list(tk_call('winfo', 'visualsavailable', window.path))
     end
-    list(v)
   end
   def winfo_visualsavailable(includeids=false)
     TkWinfo.visualsavailable self, includeids
   end
+
   def TkWinfo.vrootheight(window)
     number(tk_call('winfo', 'vrootheight', window.path))
   end
   def winfo_vrootheight
     TkWinfo.vrootheight self
   end
+
   def TkWinfo.vrootwidth(window)
     number(tk_call('winfo', 'vrootwidth', window.path))
   end
   def winfo_vrootwidth
     TkWinfo.vrootwidth self
   end
+
   def TkWinfo.vrootx(window)
     number(tk_call('winfo', 'vrootx', window.path))
   end
   def winfo_vrootx
     TkWinfo.vrootx self
   end
+
   def TkWinfo.vrooty(window)
     number(tk_call('winfo', 'vrooty', window.path))
   end
   def winfo_vrooty
     TkWinfo.vrooty self
   end
+
   def TkWinfo.width(window)
     number(tk_call('winfo', 'width', window.path))
   end
   def winfo_width
     TkWinfo.width self
   end
+
   def TkWinfo.x(window)
     number(tk_call('winfo', 'x', window.path))
   end
   def winfo_x
     TkWinfo.x self
   end
+
   def TkWinfo.y(window)
     number(tk_call('winfo', 'y', window.path))
   end
   def winfo_y
     TkWinfo.y self
   end
+
   def TkWinfo.viewable(window)
-    bool(tk_call 'winfo', 'viewable', window.path)
+    bool(tk_call('winfo', 'viewable', window.path))
   end
   def winfo_viewable
     TkWinfo.viewable self
   end
+
   def TkWinfo.pointerx(window)
     number(tk_call('winfo', 'pointerx', window.path))
   end
   def winfo_pointerx
     TkWinfo.pointerx self
   end
+
   def TkWinfo.pointery(window)
     number(tk_call('winfo', 'pointery', window.path))
   end
   def winfo_pointery
     TkWinfo.pointery self
   end
+
   def TkWinfo.pointerxy(window)
     list(tk_call('winfo', 'pointerxy', window.path))
   end
@@ -1884,6 +2661,9 @@ end
 module TkPack
   include Tk
   extend Tk
+
+  TkCommandNames = ['pack'.freeze].freeze
+
   def configure(win, *args)
     if args[-1].kind_of?(Hash)
       keys = args.pop
@@ -1927,6 +2707,8 @@ module TkGrid
   include Tk
   extend Tk
 
+  TkCommandNames = ['grid'.freeze].freeze
+
   def bbox(*args)
     list(tk_call('grid', 'bbox', *args))
   end
@@ -1935,9 +2717,15 @@ module TkGrid
     if args[-1].kind_of?(Hash)
       keys = args.pop
     end
-    wins = [widget.epath]
+    wins = []
+    args.unshift(widget)
     for i in args
-      wins.push i.epath
+      case i
+      when '-', 'x', '^'  # RELATIVE PLACEMENT
+	wins.push(i)
+      else
+	wins.push(i.epath)
+      end
     end
     tk_call "grid", 'configure', *(wins+hash_kv(keys))
   end
@@ -1952,7 +2740,7 @@ module TkGrid
 
   def columnconfiginfo(master, index, slot=nil)
     if slot
-      tk_call 'grid', 'columnconfigure', master, index, "-#{slot}"
+      tk_call('grid', 'columnconfigure', master, index, "-#{slot}").to_i
     else
       ilist = list(tk_call('grid', 'columnconfigure', master, index))
       info = {}
@@ -1965,7 +2753,7 @@ module TkGrid
 
   def rowconfiginfo(master, index, slot=nil)
     if slot
-      tk_call 'grid', 'rowconfigure', master, index, "-#{slot}"
+      tk_call('grid', 'rowconfigure', master, index, "-#{slot}").to_i
     else
       ilist = list(tk_call('grid', 'rowconfigure', master, index))
       info = {}
@@ -2022,6 +2810,8 @@ module TkPlace
   include Tk
   extend Tk
 
+  TkCommandNames = ['place'.freeze].freeze
+
   def configure(win, slot, value=None)
     if slot.kind_of? Hash
       tk_call 'place', 'configure', win.epath, *hash_kv(slot)
@@ -2067,23 +2857,229 @@ module TkPlace
   module_function :configure, :configinfo, :forget, :info, :slaves
 end
 
-module TkOption
+module TkOptionDB
   include Tk
   extend Tk
-  def add pat, value, pri=None
+
+  TkCommandNames = ['option'.freeze].freeze
+
+  module Priority
+    WidgetDefault = 20
+    StartupFile   = 40
+    UserDefault   = 60
+    Interactive   = 80
+  end
+
+  def add(pat, value, pri=None)
     tk_call 'option', 'add', pat, value, pri
   end
   def clear
     tk_call 'option', 'clear'
   end
-  def get win, name, klass
-    tk_call 'option', 'get', win ,name, klass
+  def get(win, name, klass)
+    tk_call('option', 'get', win ,name, klass).taint
   end
-  def readfile file, pri=None
+  def readfile(file, pri=None)
     tk_call 'option', 'readfile', file, pri
   end
   module_function :add, :clear, :get, :readfile
+      
+  def read_with_encoding(file, f_enc=nil, pri=None)
+    i_enc = Tk.encoding()
+
+    unless f_enc
+      f_enc = i_enc
+    end
+
+    cline = ''
+    open(file, 'r') {|f|
+      while line = f.gets
+	cline += line.chomp!
+	case cline
+	when /\\$/    # continue
+	  cline.chop!
+	  next
+	when /^!/     # coment
+	  cline = ''
+	  next
+	when /^([^:]+):\s(.*)$/
+	  pat = $1
+	  val = $2
+	  p "ResourceDB: #{[pat, val].inspect}" if $DEBUG
+	  pat = TkCore::INTERP._toUTF8(pat, f_enc)
+	  pat = TkCore::INTERP._fromUTF8(pat, i_enc)
+	  val = TkCore::INTERP._toUTF8(val, f_enc)
+	  val = TkCore::INTERP._fromUTF8(val, i_enc)
+	  add(pat, val, pri)
+	  cline = ''
+	else          # unknown --> ignore
+	  cline = ''
+	  next
+	end
+      end
+    }
+  end
+  module_function :read_with_encoding
+
+  # support procs on the resource database
+  @@resource_proc_class = Class.new
+  class << @@resource_proc_class
+    private :new
+ 
+    CARRIER    = '.'.freeze
+    METHOD_TBL = TkCore::INTERP.create_table
+    ADD_METHOD = false
+    SAFE_MODE  = 4
+
+    def __closed_block_check__(str)
+      depth = 0
+      str.scan(/[{}]/){|x|
+	if x == "{"
+	  depth += 1
+	elsif x == "}"
+	  depth -= 1
+	end
+	if depth <= 0 && !($' =~ /\A\s*\Z/)
+	  fail RuntimeError, "bad string for procedure : #{str.inspect}"
+	end
+      }
+      str
+    end
+
+    def __check_proc_string__(str)
+      # If you want to check the proc_string, do it in this method.
+      # Please define this in the block given to 'new_proc_class' method. 
+      str
+    end
+
+    def method_missing(id, *args)
+      res_proc = self::METHOD_TBL[id]
+      unless res_proc.kind_of? Proc
+        if id == :new || !(self::METHOD_TBL.has_key?(id) || self::ADD_METHOD)
+          raise NoMethodError, 
+                "not support resource-proc '#{id.id2name}' for #{self.name}"
+        end
+        proc_str = TkOptionDB.get(self::CARRIER, id.id2name, '').strip
+        proc_str = '{' + proc_str + '}' unless /\A\{.*\}\Z/ =~ proc_str
+	proc_str = __closed_block_check__(proc_str)
+        proc_str = __check_proc_string__(proc_str)
+        res_proc = eval 'Proc.new' + proc_str
+        self::METHOD_TBL[id] = res_proc
+      end
+      proc{
+         $SAFE = self::SAFE_MODE
+         res_proc.call(*args)
+      }.call
+    end
+
+    private :__closed_block_check__, :__check_proc_string__, :method_missing
+  end
+  @@resource_proc_class.freeze
+
+  def __create_new_class(klass, func, safe = 4, add = false, parent = nil)
+    klass = klass.to_s if klass.kind_of? Symbol
+    unless (?A..?Z) === klass[0]
+      fail ArgumentError, "bad string '#{klass}' for class name"
+    end
+    unless func.kind_of? Array
+      fail ArgumentError, "method-list must be Array"
+    end
+    func_str = func.join(' ')
+    if parent == nil
+      install_win(parent)
+    elsif parent <= @@resource_proc_class
+      install_win(parent::CARRIER)
+    else
+      fail ArgumentError, "parent must be Resource-Proc class"
+    end
+    carrier = Tk.tk_call('frame', @path, '-class', klass)
+
+    body = <<-"EOD"
+      class #{klass} < TkOptionDB.module_eval('@@resource_proc_class')
+        CARRIER    = '#{carrier}'.freeze
+        METHOD_TBL = TkCore::INTERP.create_table
+        ADD_METHOD = #{add}
+        SAFE_MODE  = #{safe}
+        %w(#{func_str}).each{|f| METHOD_TBL[f.intern] = nil }
+      end
+    EOD
+
+    if parent.kind_of?(Class) && parent <= @@resource_proc_class
+      parent.class_eval(body)
+      eval(parent.name + '::' + klass)
+    else
+      eval(body)
+      eval('TkOptionDB::' + klass)
+    end
+  end
+  module_function :__create_new_class
+  private_class_method :__create_new_class
+
+  def __remove_methods_of_proc_class(klass)
+    # for security, make these methods invalid
+    class << klass
+      attr_reader :class_eval, :name, :superclass, 
+	:ancestors, :const_defined?, :const_get, :const_set, 
+	:constants, :included_modules, :instance_methods, 
+	:method_defined?, :module_eval, :private_instance_methods, 
+	:protected_instance_methods, :public_instance_methods, 
+	:remove_const, :remove_method, :undef_method, 
+	:to_s, :inspect, :display, :method, :methods, 
+	:instance_eval, :instance_variables, :kind_of?, :is_a?,
+	:private_methods, :protected_methods, :public_methods
+    end
+  end
+  module_function :__remove_methods_of_proc_class
+  private_class_method :__remove_methods_of_proc_class
+
+  RAND_BASE_CNT = [0]
+  RAND_BASE_HEAD = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+  RAND_BASE_CHAR = RAND_BASE_HEAD + 'abcdefghijklmnopqrstuvwxyz0123456789_'
+  def __get_random_basename
+    name = '%s%03d' % [RAND_BASE_HEAD[rand(RAND_BASE_HEAD.size),1], 
+                       RAND_BASE_CNT[0]]
+    len = RAND_BASE_CHAR.size
+    (6+rand(10)).times{
+      name << RAND_BASE_CHAR[rand(len),1]
+    }
+    RAND_BASE_CNT[0] = RAND_BASE_CNT[0] + 1
+    name
+  end
+  module_function :__get_random_basename
+  private_class_method :__get_random_basename
+
+  # define new proc class :
+  # If you want to modify the new class or create a new subclass, 
+  # you must do such operation in the block parameter. 
+  # Because the created class is flozen after evaluating the block. 
+  def new_proc_class(klass, func, safe = 4, add = false, parent = nil, &b)
+    new_klass = __create_new_class(klass, func, safe, add, parent)
+    new_klass.class_eval(&b) if block_given?
+    __remove_methods_of_proc_class(new_klass)
+    new_klass.freeze
+    new_klass
+  end
+  module_function :new_proc_class
+
+  def eval_under_random_base(parent = nil, &b)
+    new_klass = __create_new_class(__get_random_basename(), 
+				   [], 4, false, parent)
+    ret = new_klass.class_eval(&b) if block_given?
+    __remove_methods_of_proc_class(new_klass)
+    new_klass.freeze
+    ret
+  end
+  module_function :eval_under_random_base
+
+  def new_proc_class_random(klass, func, safe = 4, add = false, &b)
+    eval_under_random_base(){
+      TkOption.new_proc_class(klass, func, safe, add, self, &b)
+    }
+  end
+  module_function :new_proc_class_random
 end
+TkOption = TkOptionDB
+TkResourceDB = TkOptionDB
 
 module TkTreatFont
   def font_configinfo
@@ -2096,6 +3092,7 @@ module TkTreatFont
   alias fontobj font_configinfo
 
   def font_configure(slot)
+    slot = _symbolkey2str(slot)
     if (fnt = slot.delete('font'))
       if fnt.kind_of? TkFont
 	return fnt.call_font_configure(self.path, self.path,'configure',slot)
@@ -2130,6 +3127,7 @@ module TkTreatFont
     else
       fobj.latin_replace(ltn)
     end
+    self
   end
   alias asciifont_configure latinfont_configure
 
@@ -2146,6 +3144,7 @@ module TkTreatFont
     else
       fobj.kanji_replace(knj)
     end
+    self
   end
 
   def font_copy(window, tag=nil)
@@ -2161,6 +3160,7 @@ module TkTreatFont
       }
       fontobj.replace(window.fontobj.latin_font, window.fontobj.kanji_font)
     end
+    self
   end
 
   def latinfont_copy(window, tag=nil)
@@ -2169,6 +3169,7 @@ module TkTreatFont
     else
       fontobj.latin_replace(window.fontobj.latin_font)
     end
+    self
   end
   alias asciifont_copy latinfont_copy
 
@@ -2178,15 +3179,16 @@ module TkTreatFont
     else
       fontobj.kanji_replace(window.fontobj.kanji_font)
     end
+    self
   end
 end
 
 module TkTreatItemFont
   def __conf_cmd(idx)
-    raise NotImplementError, "need to define `__conf_cmd'"
+    raise NotImplementedError, "need to define `__conf_cmd'"
   end
   def __item_pathname(tagOrId)
-    raise NotImplementError, "need to define `__item_pathname'"
+    raise NotImplementedError, "need to define `__item_pathname'"
   end
   private :__conf_cmd, :__item_pathname
 
@@ -2203,6 +3205,7 @@ module TkTreatItemFont
 
   def tagfont_configure(tagOrId, slot)
     pathname = __item_pathname(tagOrId)
+    slot = _symbolkey2str(slot)
     if (fnt = slot.delete('font'))
       if fnt.kind_of? TkFont
 	return fnt.call_font_configure(pathname, self.path, 
@@ -2243,6 +3246,7 @@ module TkTreatItemFont
     else
       fobj.latin_replace(ltn)
     end
+    self
   end
   alias asciitagfont_configure latintagfont_configure
 
@@ -2262,6 +3266,7 @@ module TkTreatItemFont
     else
       fobj.kanji_replace(knj)
     end
+    self
   end
 
   def tagfont_copy(tagOrId, window, wintag=nil)
@@ -2278,6 +3283,7 @@ module TkTreatItemFont
       tagfontobj(tagOrId).replace(window.fontobj.latin_font, 
 				window.fontobj.kanji_font)
     end
+    self
   end
 
   def latintagfont_copy(tagOrId, window, wintag=nil)
@@ -2286,6 +3292,7 @@ module TkTreatItemFont
     else
       tagfontobj(tagOrId).latin_replace(window.fontobj.latin_font)
     end
+    self
   end
   alias asciitagfont_copy latintagfont_copy
 
@@ -2295,6 +3302,7 @@ module TkTreatItemFont
     else
       tagfontobj(tagOrId).kanji_replace(window.fontobj.kanji_font)
     end
+    self
   end
 end
 
@@ -2329,7 +3337,9 @@ class TkObject<TkKernel
       begin
 	cget name
       rescue
-	fail NameError, "undefined local variable or method `#{name}' for #{self.to_s}", error_at
+	fail NameError, 
+	     "undefined local variable or method `#{name}' for #{self.to_s}", 
+	     error_at
       end
     else
       fail NameError, "undefined method `#{name}' for #{self.to_s}", error_at
@@ -2345,26 +3355,30 @@ class TkObject<TkKernel
   end
 
   def cget(slot)
-    case slot
+    case slot.to_s
     when 'text', 'label', 'show', 'data', 'file'
       tk_call path, 'cget', "-#{slot}"
     else
-      tk_tcl2ruby tk_call path, 'cget', "-#{slot}"
+      tk_tcl2ruby tk_call(path, 'cget', "-#{slot}")
     end
   end
 
   def configure(slot, value=None)
     if slot.kind_of? Hash
-      if (slot['font'] || slot['kanjifont'] ||
-	  slot['latinfont'] || slot['asciifont'] )
-	font_configure(slot.dup)
-      else
+      if (slot['font'] || slot[:font] || 
+          slot['kanjifont'] || slot[:kanjifont] || 
+	  slot['latinfont'] || slot[:latinfont] || 
+          slot['asciifont'] || slot[:asciifont] )
+	font_configure(slot)
+      elsif slot.size > 0
 	tk_call path, 'configure', *hash_kv(slot)
       end
 
     else
-      if (slot == 'font' || slot == 'kanjifont' ||
-	  slot == 'latinfont' || slot == 'asciifont')
+      if (slot == 'font' || slot == :font || 
+          slot == 'kanjifont' || slot == :kanjifont || 
+	  slot == 'latinfont' || slot == :latinfont || 
+          slot == 'asciifont' || slot == :asciifont )
 	if value == None
 	  fontobj
 	else
@@ -2374,6 +3388,7 @@ class TkObject<TkKernel
 	tk_call path, 'configure', "-#{slot}", value
       end
     end
+    self
   end
 
   def configure_cmd(slot, value)
@@ -2381,11 +3396,12 @@ class TkObject<TkKernel
   end
 
   def configinfo(slot = nil)
-    if slot == 'font' || slot == 'kanjifont'
+    if slot == 'font' || slot == :font || 
+       slot == 'kanjifont' || slot == :kanjifont
       fontobj
     else
       if slot
-	case slot
+	case slot.to_s
 	when 'text', 'label', 'show', 'data', 'file'
 	  conf = tk_split_simplelist(tk_send('configure', "-#{slot}") )
 	else
@@ -2440,39 +3456,71 @@ class TkObject<TkKernel
 
   def tk_trace_variable(v)
     unless v.kind_of?(TkVariable)
-      fail ArgumentError, format("requires TkVariable given %s", v.type)
+      fail ArgumentError, 
+	format("type error (%s); must be TkVariable object", v.class)
     end
     v
   end
   private :tk_trace_variable
 
   def destroy
-    tk_call 'trace', 'vdelete', @tk_vn, 'w', @var_id if @var_id
+    # tk_call 'trace', 'vdelete', @tk_vn, 'w', @var_id if @var_id
   end
 end
 
 class TkWindow<TkObject
+  include TkWinfo
   extend TkBindCore
 
+  WidgetClassName = ''.freeze
+  def self.to_eval
+    self::WidgetClassName
+  end
+
   def initialize(parent=nil, keys=nil)
-    install_win(if parent then parent.path end)
-    if self.method(:create_self).arity == 0
-      p 'create_self has no arg' if $DEBUG
-      create_self
-      if keys
-	# tk_call @path, 'configure', *hash_kv(keys)
-	configure(keys)
+    if parent.kind_of? Hash
+      keys = _symbolkey2str(parent)
+      keydup = true
+      parent = keys.delete('parent')
+      widgetname = keys.delete('widgetname')
+      install_win(if parent then parent.path end, widgetname)
+      without_creating = keys.delete('without_creating')
+      if without_creating && !widgetname 
+        fail ArgumentError, 
+             "if set 'without_creating' to true, need to define 'widgetname'"
+      end
+    elsif keys
+      keys = _symbolkey2str(keys)
+      widgetname = keys.delete('widgetname')
+      install_win(if parent then parent.path end, widgetname)
+      without_creating = keys.delete('without_creating')
+      if without_creating && !widgetname 
+        fail ArgumentError, 
+             "if set 'without_creating' to true, need to define 'widgetname'"
       end
     else
-      p 'create_self has an arg' if $DEBUG
+      install_win(if parent then parent.path end)
+    end
+    if self.method(:create_self).arity == 0
+      p 'create_self has no arg' if $DEBUG
+      create_self unless without_creating
+      if keys
+        # tk_call @path, 'configure', *hash_kv(keys)
+        configure(keys)
+      end
+    else
+      p 'create_self has args' if $DEBUG
       fontkeys = {}
       if keys
-	keys = keys.dup
-	['font', 'kanjifont', 'latinfont', 'asciifont'].each{|key|
-	  fontkeys[key] = keys.delete(key) if keys.key?(key)
-	}
+        ['font', 'kanjifont', 'latinfont', 'asciifont'].each{|key|
+          fontkeys[key] = keys.delete(key) if keys.key?(key)
+        }
       end
-      create_self(keys)
+      if without_creating && keys
+        configure(keys)
+      else
+        create_self(keys)
+      end
       font_configure(fontkeys) unless fontkeys.empty?
     end
   end
@@ -2481,7 +3529,40 @@ class TkWindow<TkObject
   end
   private :create_self
 
+  def bind_class
+    @db_class || self.class()
+  end
+
+  def database_classname
+    TkWinfo.classname(self)
+  end
+  def database_class
+    name = database_classname()
+    if WidgetClassNames[name]
+      WidgetClassNames[name]
+    else
+      TkDatabaseClass.new(name)
+    end
+  end
+  def self.database_classname
+    self::WidgetClassName
+  end
+  def self.database_class
+    WidgetClassNames[self::WidgetClassName]
+  end
+
   def pack(keys = nil)
+    tk_call 'pack', epath, *hash_kv(keys)
+    self
+  end
+
+  def pack_in(target, keys = nil)
+    if keys
+      keys = keys.dup
+      keys['in'] = target
+    else
+      keys = {'in'=>target}
+    end
     tk_call 'pack', epath, *hash_kv(keys)
     self
   end
@@ -2526,6 +3607,17 @@ class TkWindow<TkObject
     self
   end
 
+  def grid_in(target, keys = nil)
+    if keys
+      keys = keys.dup
+      keys['in'] = target
+    else
+      keys = {'in'=>target}
+    end
+    tk_call 'grid', epath, *hash_kv(keys)
+    self
+  end
+
   def ungrid
     tk_call 'grid', 'forget', epath
     self
@@ -2554,7 +3646,7 @@ class TkWindow<TkObject
 
   def grid_columnconfiginfo(index, slot=nil)
     if slot
-      tk_call('grid', 'columnconfigure', epath, index, "-#{slot}")
+      tk_call('grid', 'columnconfigure', epath, index, "-#{slot}").to_i
     else
       ilist = list(tk_call('grid', 'columnconfigure', epath, index))
       info = {}
@@ -2567,7 +3659,7 @@ class TkWindow<TkObject
 
   def grid_rowconfiginfo(index, slot=nil)
     if slot
-      tk_call('grid', 'rowconfigure', epath, index, "-#{slot}")
+      tk_call('grid', 'rowconfigure', epath, index, "-#{slot}").to_i
     else
       ilist = list(tk_call('grid', 'rowconfigure', epath, index))
       info = {}
@@ -2607,6 +3699,17 @@ class TkWindow<TkObject
   end
 
   def place(keys = nil)
+    tk_call 'place', epath, *hash_kv(keys)
+    self
+  end
+
+  def place_in(target, keys = nil)
+    if keys
+      keys = keys.dup
+      keys['in'] = target
+    else
+      keys = {'in'=>target}
+    end
     tk_call 'place', epath, *hash_kv(keys)
     self
   end
@@ -2666,24 +3769,43 @@ class TkWindow<TkObject
   def grab(*args)
     if !args or args.length == 0
       tk_call 'grab', 'set', path
+      self
     elsif args.length == 1
       case args[0]
-      when 'global'
-	return(tk_call 'grab', 'set', '-global', path)
-      when 'release'
-	return(tk_call 'grab', 'release', path)
+      when 'global', :global
+	#return(tk_call('grab', 'set', '-global', path))
+	tk_call('grab', 'set', '-global', path)
+	return self
+      when 'release', :release
+	#return tk_call('grab', 'release', path)
+	tk_call('grab', 'release', path)
+	return self
       else
 	val = tk_call('grab', args[0], path)
       end
       case args[0]
-      when 'current'
+      when 'current', :current
 	return window(val)
-      when 'status'
+      when 'status', :status
 	return val
       end
+      self
     else
       fail ArgumentError, 'wrong # of args'
     end
+  end
+
+  def grab_current
+    grab('current')
+  end
+  def grab_set
+    grab('set')
+  end
+  def grab_set_global
+    grab('global')
+  end
+  def grab_status
+    grab('status')
   end
 
   def lower(below=None)
@@ -2705,12 +3827,28 @@ class TkWindow<TkObject
   end
 
   def destroy
-    tk_call 'destroy', epath
-    if @cmdtbl
+    super
+    children = []
+    rexp = /^#{self.path}\.[^.]+$/
+    TkCore::INTERP.tk_windows.each{|path, obj|
+      children << [path, obj] if path =~ rexp
+    }
+    if defined?(@cmdtbl)
       for id in @cmdtbl
 	uninstall_cmd id
       end
     end
+
+    children.each{|path, obj|
+      if defined?(@cmdtbl)
+	for id in @cmdtbl
+	  uninstall_cmd id
+	end
+      end
+      TkCore::INTERP.tk_windows.delete(path)
+    }
+
+    tk_call 'destroy', epath
     uninstall_win
   end
 
@@ -2725,8 +3863,9 @@ class TkWindow<TkObject
 
   def bindtags(taglist=nil)
     if taglist
-      fail ArgumentError unless taglist.kind_of? Array
+      fail ArgumentError, "taglist must be Array" unless taglist.kind_of? Array
       tk_call('bindtags', path, taglist)
+      taglist
     else
       list(tk_call('bindtags', path)).collect{|tag|
 	if tag.kind_of?(String) 
@@ -2743,23 +3882,68 @@ class TkWindow<TkObject
       }
     end
   end
+
+  def bindtags=(taglist)
+    bindtags(taglist)
+  end
+
+  def bindtags_shift
+    taglist = bindtags
+    tag = taglist.shift
+    bindtags(taglist)
+    tag
+  end
+
+  def bindtags_unshift(tag)
+    bindtags(bindtags().unshift(tag))
+  end
 end
 
 class TkRoot<TkWindow
   include Wm
+
+=begin
   ROOT = []
-  def TkRoot.new
-    return ROOT[0] if ROOT[0]
-    new = super
+  def TkRoot.new(keys=nil)
+    if ROOT[0]
+      Tk_WINDOWS["."] = ROOT[0]
+      return ROOT[0]
+    end
+    new = super(:without_creating=>true, :widgetname=>'.')
+    if keys  # wm commands
+      keys.each{|k,v|
+	if v.kind_of? Array
+	  new.send(k,*v)
+	else
+	  new.send(k,v)
+	end
+      }
+    end
     ROOT[0] = new
     Tk_WINDOWS["."] = new
+  end
+=end
+  def TkRoot.new(keys=nil, &b)
+    unless TkCore::INTERP.tk_windows['.']
+      TkCore::INTERP.tk_windows['.'] = 
+	super(:without_creating=>true, :widgetname=>'.')
+    end
+    root = TkCore::INTERP.tk_windows['.']
+    if keys  # wm commands
+      keys.each{|k,v|
+	if v.kind_of? Array
+	  root.send(k,*v)
+	else
+	  root.send(k,v)
+	end
+      }
+    end
+    root.instance_eval(&b) if block_given?
+    root
   end
 
   WidgetClassName = 'Tk'.freeze
   WidgetClassNames[WidgetClassName] = self
-  def self.to_eval
-    WidgetClassName
-  end
 
   def create_self
     @path = '.'
@@ -2772,11 +3956,9 @@ end
 class TkToplevel<TkWindow
   include Wm
 
+  TkCommandNames = ['toplevel'.freeze].freeze
   WidgetClassName = 'Toplevel'.freeze
   WidgetClassNames[WidgetClassName] = self
-  def self.to_eval
-    WidgetClassName
-  end
 
 ################# old version
 #  def initialize(parent=nil, screen=nil, classname=nil, keys=nil)
@@ -2810,16 +3992,40 @@ class TkToplevel<TkWindow
 #  end
 #################
 
+  def _wm_command_option_chk(keys)
+    keys = {} unless keys
+    new_keys = {}
+    wm_cmds = {}
+    keys.each{|k,v|
+      if Wm.method_defined?(k)
+	case k
+	when 'screen','class','colormap','container','use','visual'
+	  new_keys[k] = v
+	else
+	  case self.method(k).arity
+	  when -1,1
+	    wm_cmds[k] = v
+	  else
+	    new_keys[k] = v
+	  end
+	end
+      else
+	new_keys[k] = v
+      end
+    }
+    [new_keys, wm_cmds]
+  end
+  private :_wm_command_option_chk
+
   def initialize(parent=nil, screen=nil, classname=nil, keys=nil)
-    if screen.kind_of? Hash
-      keys = screen
-    else
-      @screen = screen
+    my_class_name = nil
+    if self.class < WidgetClassNames[WidgetClassName]
+      my_class_name = self.class.name
+      my_class_name = nil if my_class_name == ''
     end
-    @classname = classname
-    if keys.kind_of? Hash
+    if parent.kind_of? Hash
+      keys = _symbolkey2str(parent)
       if keys.key?('classname')
-	keys = keys.dup
 	keys['class'] = keys.delete('classname')
       end
       @classname = keys['class']
@@ -2828,8 +4034,75 @@ class TkToplevel<TkWindow
       @screen    = keys['screen']
       @use       = keys['use']
       @visual    = keys['visual']
+      if !@classname && my_class_name
+	keys['class'] = @classname = my_class_name 
+      end
+      if @classname.kind_of? TkBindTag
+	@db_class = @classname
+	@classname = @classname.id
+      elsif @classname
+	@db_class = TkDatabaseClass.new(@classname)
+      else
+	@db_class = self.class
+	@classname = @db_class::WidgetClassName
+      end
+      keys, cmds = _wm_command_option_chk(keys)
+      super(keys)
+      cmds.each{|k,v| 
+	if v.kind_of? Array
+	  self.send(k,*v)
+	else
+	  self.send(k,v)
+	end
+      }
+      return
     end
+
+    if screen.kind_of? Hash
+      keys = screen
+    else
+      @screen = screen
+      if classname.kind_of? Hash
+	keys = classname
+      else
+	@classname = classname
+      end
+    end
+    if keys.kind_of? Hash
+      keys = _symbolkey2str(keys)
+      if keys.key?('classname')
+	keys['class'] = keys.delete('classname')
+      end
+      @classname = keys['class']  unless @classname
+      @colormap  = keys['colormap']
+      @container = keys['container']
+      @screen    = keys['screen'] unless @screen
+      @use       = keys['use']
+      @visual    = keys['visual']
+    else
+      keys = {}
+    end
+    if !@classname && my_class_name
+      keys['class'] = @classname = my_class_name 
+    end
+    if @classname.kind_of? TkBindTag
+      @db_class = @classname
+      @classname = @classname.id
+    elsif @classname
+      @db_class = TkDatabaseClass.new(@classname)
+    else
+      @db_class = self.class
+      @classname = @db_class::WidgetClassName
+    end
+    keys, cmds = _wm_command_option_chk(keys)
     super(parent, keys)
+    cmds.each{|k,v| 
+      if v.kind_of? Array
+	self.send(k,*v)
+      else
+	self.send(k,v)
+      end
+    }
   end
 
   def create_self(keys)
@@ -2843,14 +4116,52 @@ class TkToplevel<TkWindow
   def specific_class
     @classname
   end
+
+  def self.database_class
+    if self == WidgetClassNames[WidgetClassName] || self.name == ''
+      self
+    else
+      TkDatabaseClass.new(self.name)
+    end
+  end
+  def self.database_classname
+    self.database_class.name
+  end
+
+  def self.bind(*args)
+    if self == WidgetClassNames[WidgetClassName] || self.name == ''
+      super(*args)
+    else
+      TkDatabaseClass.new(self.name).bind(*args)
+    end
+  end
+  def self.bind_append(*args)
+    if self == WidgetClassNames[WidgetClassName] || self.name == ''
+      super(*args)
+    else
+      TkDatabaseClass.new(self.name).bind_append(*args)
+    end
+  end
+  def self.bind_remove(*args)
+    if self == WidgetClassNames[WidgetClassName] || self.name == ''
+      super(*args)
+    else
+      TkDatabaseClass.new(self.name).bind_remove(*args)
+    end
+  end
+  def self.bindinfo(*args)
+    if self == WidgetClassNames[WidgetClassName] || self.name == ''
+      super(*args)
+    else
+      TkDatabaseClass.new(self.name).bindinfo(*args)
+    end
+  end
 end
 
 class TkFrame<TkWindow
+  TkCommandNames = ['frame'.freeze].freeze
   WidgetClassName = 'Frame'.freeze
   WidgetClassNames[WidgetClassName] = self
-  def self.to_eval
-    WidgetClassName
-  end
 
 ################# old version
 #  def initialize(parent=nil, keys=nil)
@@ -2875,17 +4186,41 @@ class TkFrame<TkWindow
 #################
 
   def initialize(parent=nil, keys=nil)
-    if keys.kind_of? Hash
-      if keys.key?('classname')
-	keys = keys.dup
-	keys['class'] = keys.delete('classname')
-      end
-      @classname = keys['class']
-      @colormap  = keys['colormap']
-      @container = keys['container']
-      @visual    = keys['visual']
+    my_class_name = nil
+    if self.class < WidgetClassNames[WidgetClassName]
+      my_class_name = self.class.name
+      my_class_name = nil if my_class_name == ''
     end
-    super(parent, keys)
+    if parent.kind_of? Hash
+      keys = _symbolkey2str(parent)
+    else
+      if keys
+        keys = _symbolkey2str(keys)
+        keys['parent'] = parent
+      else
+        keys = {'parent'=>parent}
+      end
+    end
+    if keys.key?('classname')
+       keys['class'] = keys.delete('classname')
+    end
+    @classname = keys['class']
+    @colormap  = keys['colormap']
+    @container = keys['container']
+    @visual    = keys['visual']
+    if !@classname && my_class_name
+      keys['class'] = @classname = my_class_name
+    end
+    if @classname.kind_of? TkBindTag
+      @db_class = @classname
+      @classname = @classname.id
+    elsif @classname
+      @db_class = TkDatabaseClass.new(@classname)
+    else
+      @db_class = self.class
+      @classname = @db_class::WidgetClassName
+    end
+    super(keys)
   end
 
   def create_self(keys)
@@ -2895,14 +4230,182 @@ class TkFrame<TkWindow
       tk_call 'frame', @path
     end
   end
+
+  def database_classname
+    @classname
+  end
+
+  def self.database_class
+    if self == WidgetClassNames[WidgetClassName] || self.name == ''
+      self
+    else
+      TkDatabaseClass.new(self.name)
+    end
+  end
+  def self.database_classname
+    self.database_class.name
+  end
+
+  def self.bind(*args)
+    if self == WidgetClassNames[WidgetClassName] || self.name == ''
+      super(*args)
+    else
+      TkDatabaseClass.new(self.name).bind(*args)
+    end
+  end
+  def self.bind_append(*args)
+    if self == WidgetClassNames[WidgetClassName] || self.name == ''
+      super(*args)
+    else
+      TkDatabaseClass.new(self.name).bind_append(*args)
+    end
+  end
+  def self.bind_remove(*args)
+    if self == WidgetClassNames[WidgetClassName] || self.name == ''
+      super(*args)
+    else
+      TkDatabaseClass.new(self.name).bind_remove(*args)
+    end
+  end
+  def self.bindinfo(*args)
+    if self == WidgetClassNames[WidgetClassName] || self.name == ''
+      super(*args)
+    else
+      TkDatabaseClass.new(self.name).bindinfo(*args)
+    end
+  end
 end
 
+class TkLabelFrame<TkFrame
+  TkCommandNames = ['labelframe'.freeze].freeze
+  WidgetClassName = 'Labelframe'.freeze
+  WidgetClassNames[WidgetClassName] = self
+  def create_self(keys)
+    if keys and keys != None
+      tk_call 'labelframe', @path, *hash_kv(keys)
+    else
+      tk_call 'labelframe', @path
+    end
+  end
+end
+TkLabelframe = TkLabelFrame
+
+class TkPanedWindow<TkWindow
+  TkCommandNames = ['panedwindow'.freeze].freeze
+  WidgetClassName = 'Panedwindow'.freeze
+  WidgetClassNames[WidgetClassName] = self
+  def create_self(keys)
+    if keys and keys != None
+      tk_call 'panedwindow', @path, *hash_kv(keys)
+    else
+      tk_call 'panedwindow', @path
+    end
+  end
+
+  def add(*args)
+    keys = args.pop
+    fail ArgumentError, "no window in arguments" unless keys
+    if keys && keys.kind_of?(Hash)
+      fail ArgumentError, "no window in arguments" if args == []
+      args += hash_kv(keys)
+    else
+      args.push(keys) if keys
+    end
+    tk_send('add', *args)
+    self
+  end
+
+  def forget(win, *wins)
+    tk_send('forget', win, *wins)
+    self
+  end
+  alias del forget
+  alias delete forget
+  alias remove forget
+
+  def identify(x, y)
+    list(tk_send('identify', x, y))
+  end
+
+  def proxy_coord
+    list(tk_send('proxy', 'coord'))
+  end
+  def proxy_forget
+    tk_send('proxy', 'forget')
+    self
+  end
+  def proxy_place(x, y)
+    tk_send('proxy', 'place', x, y)
+    self
+  end
+
+  def sash_coord(index)
+    list(tk_send('sash', 'coord', index))
+  end
+  def sash_dragto(index)
+    tk_send('sash', 'dragto', index, x, y)
+    self
+  end
+  def sash_mark(index, x, y)
+    tk_send('sash', 'mark', index, x, y)
+    self
+  end
+  def sash_place(index, x, y)
+    tk_send('sash', 'place', index, x, y)
+    self
+  end
+
+  def panecget(win, key)
+    tk_tcl2ruby(tk_send('panecget', win, "-#{key}"))
+  end
+
+  def paneconfigure(win, key, value=nil)
+    if key.kind_of? Hash
+      tk_send('paneconfigure', win, *hash_kv(key))
+    else
+      tk_send('paneconfigure', win, "-#{key}", value)
+    end
+    self
+  end
+
+  def paneconfiginfo(win, key=nil)
+    if key
+      conf = tk_split_list(tk_send('paneconfigure', win, "-#{key}"))
+      conf[0] = conf[0][1..-1]
+      conf
+    else
+      tk_split_simplelist(tk_send('paneconfigure', win)).collect{|conflist|
+	conf = tk_split_simplelist(conflist)
+	conf[0] = conf[0][1..-1]
+	if conf[3]
+	  if conf[3].index('{')
+	    conf[3] = tk_split_list(conf[3]) 
+	  else
+	    conf[3] = tk_tcl2ruby(conf[3]) 
+	  end
+	end
+	if conf[4]
+	  if conf[4].index('{')
+	    conf[4] = tk_split_list(conf[4]) 
+	  else
+	    conf[4] = tk_tcl2ruby(conf[4]) 
+	  end
+	end
+	conf
+      }
+    end
+  end
+
+  def panes
+    list(tk_send('panes'))
+  end
+end
+TkPanedwindow = TkPanedWindow
+
 class TkLabel<TkWindow
+  TkCommandNames = ['label'.freeze].freeze
   WidgetClassName = 'Label'.freeze
   WidgetClassNames[WidgetClassName] = self
-  def self.to_eval
-    WidgetClassName
-  end
   def create_self(keys)
     if keys and keys != None
       tk_call 'label', @path, *hash_kv(keys)
@@ -2916,10 +4419,9 @@ class TkLabel<TkWindow
 end
 
 class TkButton<TkLabel
-  WidgetClassNames['Button'] = self
-  def TkButton.to_eval
-    'Button'
-  end
+  TkCommandNames = ['button'.freeze].freeze
+  WidgetClassName = 'Button'.freeze
+  WidgetClassNames[WidgetClassName] = self
   def create_self(keys)
     if keys and keys != None
       tk_call 'button', @path, *hash_kv(keys)
@@ -2932,14 +4434,14 @@ class TkButton<TkLabel
   end
   def flash
     tk_send 'flash'
+    self
   end
 end
 
 class TkRadioButton<TkButton
-  WidgetClassNames['Radiobutton'] = self
-  def TkRadioButton.to_eval
-    'Radiobutton'
-  end
+  TkCommandNames = ['radiobutton'.freeze].freeze
+  WidgetClassName = 'Radiobutton'.freeze
+  WidgetClassNames[WidgetClassName] = self
   def create_self(keys)
     if keys and keys != None
       tk_call 'radiobutton', @path, *hash_kv(keys)
@@ -2949,9 +4451,11 @@ class TkRadioButton<TkButton
   end
   def deselect
     tk_send 'deselect'
+    self
   end
   def select
     tk_send 'select'
+    self
   end
   def variable(v)
     configure 'variable', tk_trace_variable(v)
@@ -2960,10 +4464,9 @@ end
 TkRadiobutton = TkRadioButton
 
 class TkCheckButton<TkRadioButton
-  WidgetClassNames['Checkbutton'] = self
-  def TkCheckButton.to_eval
-    'Checkbutton'
-  end
+  TkCommandNames = ['checkbutton'.freeze].freeze
+  WidgetClassName = 'Checkbutton'.freeze
+  WidgetClassNames[WidgetClassName] = self
   def create_self(keys)
     if keys and keys != None
       tk_call 'checkbutton', @path, *hash_kv(keys)
@@ -2973,15 +4476,15 @@ class TkCheckButton<TkRadioButton
   end
   def toggle
     tk_send 'toggle'
+    self
   end
 end
 TkCheckbutton = TkCheckButton
 
 class TkMessage<TkLabel
-  WidgetClassNames['Message'] = self
-  def TkMessage.to_eval
-    'Message'
-  end
+  TkCommandNames = ['message'.freeze].freeze
+  WidgetClassName = 'Message'.freeze
+  WidgetClassNames[WidgetClassName] = self
   def create_self(keys)
     if keys and keys != None
       tk_call 'message', @path, *hash_kv(keys)
@@ -2992,18 +4495,50 @@ class TkMessage<TkLabel
 end
 
 class TkScale<TkWindow
+  TkCommandNames = ['scale'.freeze].freeze
   WidgetClassName = 'Scale'.freeze
   WidgetClassNames[WidgetClassName] = self
-  def self.to_eval
-    WidgetClassName
-  end
 
   def create_self(keys)
     if keys and keys != None
+      if keys.key?('command')
+	cmd = keys.delete('command')
+	keys['command'] = proc{|val| cmd.call(val.to_f)}
+      end
       tk_call 'scale', @path, *hash_kv(keys)
     else
       tk_call 'scale', @path
     end
+  end
+
+  def _wrap_command_arg(cmd)
+    proc{|val|
+      if val.kind_of?(String)
+	cmd.call(number(val))
+      else
+	cmd.call(val)
+      end
+    }
+  end
+  private :_wrap_command_arg
+
+  def configure_cmd(slot, value)
+    configure(slot=>value)
+  end
+
+  def configure(slot, value=None)
+    if (slot == 'command' || slot == :command)
+      configure('command'=>value)
+    elsif slot.kind_of?(Hash) && 
+	(slot.key?('command') || slot.key?(:command))
+      slot = _symbolkey2str(slot)
+      slot['command'] = _wrap_command_arg(slot.delete('command'))
+    end
+    super(slot, value)
+  end
+
+  def command(cmd=Proc.new)
+    configure('command'=>cmd)
   end
 
   def get(x=None, y=None)
@@ -3032,11 +4567,9 @@ class TkScale<TkWindow
 end
 
 class TkScrollbar<TkWindow
+  TkCommandNames = ['scrollbar'.freeze].freeze
   WidgetClassName = 'Scrollbar'.freeze
   WidgetClassNames[WidgetClassName] = self
-  def self.to_eval
-    WidgetClassName
-  end
 
   def create_self(keys)
     if keys and keys != None
@@ -3069,6 +4602,7 @@ class TkScrollbar<TkWindow
 
   def set(first, last)
     tk_send "set", first, last
+    self
   end
 
   def activate(element=None)
@@ -3082,35 +4616,37 @@ class TkTextWin<TkWindow
   end
 
   def bbox(index)
-    tk_send 'bbox', index
+    list(tk_send('bbox', index))
   end
   def delete(first, last=None)
     tk_send 'delete', first, last
+    self
   end
   def get(*index)
     tk_send 'get', *index
   end
-  def index(index)
-    tk_send 'index', index
-  end
-  def insert(index, chars, *args)
-    tk_send 'insert', index, chars, *args
+  def insert(index, *args)
+    tk_send 'insert', index, *args
+    self
   end
   def scan_mark(x, y)
     tk_send 'scan', 'mark', x, y
+    self
   end
   def scan_dragto(x, y)
     tk_send 'scan', 'dragto', x, y
+    self
   end
   def see(index)
     tk_send 'see', index
+    self
   end
 end
 
 module TkTreatListItemFont
   include TkTreatItemFont
 
-  ItemCMD = ['itemconfigure', TkComm::None]
+  ItemCMD = ['itemconfigure'.freeze, TkComm::None].freeze
   def __conf_cmd(idx)
     ItemCMD[idx]
   end
@@ -3124,10 +4660,10 @@ class TkListbox<TkTextWin
   include TkTreatListItemFont
   include Scrollable
 
-  WidgetClassNames['Listbox'] = self
-  def TkListbox.to_eval
-    'Listbox'
-  end
+  TkCommandNames = ['listbox'.freeze].freeze
+  WidgetClassName = 'Listbox'.freeze
+  WidgetClassNames[WidgetClassName] = self
+
   def create_self(keys)
     if keys and keys != None
       tk_call 'listbox', @path, *hash_kv(keys)
@@ -3138,6 +4674,7 @@ class TkListbox<TkTextWin
 
   def activate(y)
     tk_send 'activate', y
+    self
   end
   def curselection
     list(tk_send('curselection'))
@@ -3158,47 +4695,59 @@ class TkListbox<TkTextWin
   end
   def selection_anchor(index)
     tk_send 'selection', 'anchor', index
+    self
   end
   def selection_clear(first, last=None)
     tk_send 'selection', 'clear', first, last
+    self
   end
   def selection_includes(index)
     bool(tk_send('selection', 'includes', index))
   end
   def selection_set(first, last=None)
     tk_send 'selection', 'set', first, last
+    self
+  end
+
+  def index(index)
+    tk_send('index', index).to_i
   end
 
   def itemcget(index, key)
-    case key
+    case key.to_s
     when 'text', 'label', 'show'
-      tk_send 'itemcget', index, "-#{key}"
+      tk_send('itemcget', index, "-#{key}")
     else
-      tk_tcl2ruby tk_send 'itemcget', index, "-#{key}"
+      tk_tcl2ruby(tk_send('itemcget', index, "-#{key}"))
     end
   end
   def itemconfigure(index, key, val=None)
     if key.kind_of? Hash
-      if (key['font'] || key['kanjifont'] ||
-	  key['latinfont'] || key['asciifont'])
-	tagfont_configure(index, key.dup)
+      if (key['font'] || key[:font] || 
+          key['kanjifont'] || key[:kanjifont] || 
+	  key['latinfont'] || key[:latinfont] || 
+          key['asciifont'] || key[:asciifont] )
+	tagfont_configure(index, _symbolkey2str(key))
       else
 	tk_send 'itemconfigure', index, *hash_kv(key)
       end
 
     else
-      if (key == 'font' || key == 'kanjifont' ||
-	  key == 'latinfont' || key == 'asciifont' )
+      if (key == 'font' || key == :font || 
+          key == 'kanjifont' || key == :kanjifont || 
+	  key == 'latinfont' || key == :latinfont || 
+          key == 'asciifont' || key == :asciifont )
 	tagfont_configure(index, {key=>val})
       else
 	tk_call 'itemconfigure', index, "-#{key}", val
       end
     end
+    self
   end
 
   def itemconfiginfo(index, key=nil)
     if key
-      case key
+      case key.to_s
       when 'text', 'label', 'show'
 	conf = tk_split_simplelist(tk_send('itemconfigure',index,"-#{key}"))
       else
@@ -3237,11 +4786,11 @@ end
 module TkTreatMenuEntryFont
   include TkTreatItemFont
 
-  ItemCMD = ['entryconfigure', TkComm::None]
+  ItemCMD = ['entryconfigure'.freeze, TkComm::None].freeze
   def __conf_cmd(idx)
     ItemCMD[idx]
   end
-
+  
   def __item_pathname(tagOrId)
     self.path + ';' + tagOrId.to_s
   end
@@ -3250,11 +4799,10 @@ end
 class TkMenu<TkWindow
   include TkTreatMenuEntryFont
 
+  TkCommandNames = ['menu'.freeze].freeze
   WidgetClassName = 'Menu'.freeze
   WidgetClassNames[WidgetClassName] = self
-  def self.to_eval
-    WidgetClassName
-  end
+
   def create_self(keys)
     if keys and keys != None
       tk_call 'menu', @path, *hash_kv(keys)
@@ -3264,36 +4812,61 @@ class TkMenu<TkWindow
   end
   def activate(index)
     tk_send 'activate', index
+    self
   end
   def add(type, keys=nil)
     tk_send 'add', type, *hash_kv(keys)
+    self
+  end
+  def add_cascade(keys=nil)
+    add('cascade', keys)
+  end
+  def add_checkbutton(keys=nil)
+    add('checkbutton', keys)
+  end
+  def add_command(keys=nil)
+    add('command', keys)
+  end
+  def add_radiobutton(keys=nil)
+    add('radiobutton', keys)
+  end
+  def add_separator(keys=nil)
+    add('separator', keys)
   end
   def index(index)
-    tk_send 'index', index
+    ret = tk_send('index', index)
+    (ret == 'none')? nil: number(ret)
   end
   def invoke(index)
     tk_send 'invoke', index
   end
   def insert(index, type, keys=nil)
     tk_send 'insert', index, type, *hash_kv(keys)
+    self
   end
   def delete(index, last=None)
     tk_send 'delete', index, last
+    self
   end
   def popup(x, y, index=None)
-    tk_call 'tk_popup', path, x, y, index
+    tk_call('tk_popup', path, x, y, index)
+    self
   end
   def post(x, y)
     tk_send 'post', x, y
+    self
   end
   def postcascade(index)
     tk_send 'postcascade', index
+    self
   end
   def postcommand(cmd=Proc.new)
     configure_cmd 'postcommand', cmd
+    self
   end
   def tearoffcommand(cmd=Proc.new)
     configure_cmd 'tearoffcommand', cmd
+    self
   end
   def menutype(index)
     tk_send 'type', index
@@ -3305,35 +4878,40 @@ class TkMenu<TkWindow
     number(tk_send('yposition', index))
   end
   def entrycget(index, key)
-    case key
+    case key.to_s
     when 'text', 'label', 'show'
       tk_send 'entrycget', index, "-#{key}"
     else
-      tk_tcl2ruby tk_send 'entrycget', index, "-#{key}"
+      tk_tcl2ruby tk_send('entrycget', index, "-#{key}")
     end
   end
   def entryconfigure(index, key, val=None)
     if key.kind_of? Hash
-      if (key['font'] || key['kanjifont'] ||
-	  key['latinfont'] || key['asciifont'])
-	tagfont_configure(index, key.dup)
+      if (key['font'] || key[:font] || 
+          key['kanjifont'] || key[:kanjifont] || 
+	  key['latinfont'] || key[:latinfont] || 
+          key['asciifont'] || key[:asciifont])
+	tagfont_configure(index, _symbolkey2str(key))
       else
 	tk_send 'entryconfigure', index, *hash_kv(key)
       end
 
     else
-      if (key == 'font' || key == 'kanjifont' ||
-	  key == 'latinfont' || key == 'asciifont' )
-	tagfont_configure(index, {key=>val})
+      if (key == 'font' || key == :font || 
+          key == 'kanjifont' || key == :kanjifont || 
+	  key == 'latinfont' || key == :latinfont || 
+          key == 'asciifont' || key == :asciifont )
+	tagfont_configure({key=>val})
       else
 	tk_call 'entryconfigure', index, "-#{key}", val
       end
     end
+    self
   end
 
   def entryconfiginfo(index, key=nil)
     if key
-      case key
+      case key.to_s
       when 'text', 'label', 'show'
 	conf = tk_split_simplelist(tk_send('entryconfigure',index,"-#{key}"))
       else
@@ -3371,20 +4949,34 @@ end
 
 class TkMenuClone<TkMenu
   def initialize(parent, type=None)
+    widgetname = nil
+    if parent.kind_of? Hash
+      keys = _symbolkey2str(parent)
+      parent = keys.delete('parent')
+      widgetname = keys.delete('widgetname')
+      type = keys.delete('type'); type = None unless type
+    end
     unless parent.kind_of?(TkMenu)
       fail ArgumentError, "parent must be TkMenu"
     end
     @parent = parent
-    install_win(@parent.path)
+    install_win(@parent.path, widgetname)
     tk_call @parent.path, 'clone', @path, type
   end
 end
 
 module TkSystemMenu
   def initialize(parent, keys=nil)
-    fail unless parent.kind_of? TkMenu
-    @path = format("%s.%s", parent.path, self.type::SYSMENU_NAME)
-    TkComm::Tk_WINDOWS[@path] = self
+    if parent.kind_of? Hash
+      keys = _symbolkey2str(parent)
+      parent = keys.delete('parent')
+    end
+    unless parent.kind_of? TkMenu
+      fail ArgumentError, "parent must be a TkMenu object"
+    end
+    @path = format("%s.%s", parent.path, self.class::SYSMENU_NAME)
+    #TkComm::Tk_WINDOWS[@path] = self
+    TkCore::INTERP.tk_windows[@path] = self
     if self.method(:create_self).arity == 0
       p 'create_self has no arg' if $DEBUG
       create_self
@@ -3415,10 +5007,9 @@ class TkSysMenu_Apple<TkMenu
 end
 
 class TkMenubutton<TkLabel
-  WidgetClassNames['Menubutton'] = self
-  def TkMenubutton.to_eval
-    'Menubutton'
-  end
+  TkCommandNames = ['menubutton'.freeze].freeze
+  WidgetClassName = 'Menubutton'.freeze
+  WidgetClassNames[WidgetClassName] = self
   def create_self(keys)
     if keys and keys != None
       tk_call 'menubutton', @path, *hash_kv(keys)
@@ -3429,21 +5020,30 @@ class TkMenubutton<TkLabel
 end
 
 class TkOptionMenubutton<TkMenubutton
+  TkCommandNames = ['tk_optionMenu'.freeze].freeze
+
   class OptionMenu<TkMenu
-    def initialize(parent)
-      @path = parent.path + '.menu'
-      TkComm::Tk_WINDOWS[@path] = self
+    def initialize(path)  #==> return value of tk_optionMenu
+      @path = path
+      #TkComm::Tk_WINDOWS[@path] = self
+      TkCore::INTERP.tk_windows[@path] = self
     end
   end
 
   def initialize(parent=nil, var=TkVariable.new, firstval=nil, *vals)
-    fail unless var.kind_of? TkVariable
+    if parent.kind_of? Hash
+       keys = _symbolkey2str(parent)
+       parent = keys['parent']
+       var = keys['variable'] if keys['variable']
+       firstval, *vals = keys['values']
+    end
+    fail 'variable option must be TkVariable' unless var.kind_of? TkVariable
     @variable = var
     firstval = @variable.value unless firstval
     @variable.value = firstval
     install_win(if parent then parent.path end)
-    @menu = OptionMenu.new(self)
-    tk_call 'tk_optionMenu', @path, @variable.id, firstval, *vals
+    @menu = OptionMenu.new(tk_call('tk_optionMenu', @path, @variable.id, 
+				   firstval, *vals))
   end
 
   def value
@@ -3452,10 +5052,12 @@ class TkOptionMenubutton<TkMenubutton
 
   def activate(index)
     @menu.activate(index)
+    self
   end
   def add(value)
     @menu.add('radiobutton', 'variable'=>@variable, 
 	      'label'=>value, 'value'=>value)
+    self
   end
   def index(index)
     @menu.index(index)
@@ -3466,27 +5068,34 @@ class TkOptionMenubutton<TkMenubutton
   def insert(index, value)
     @menu.add(index, 'radiobutton', 'variable'=>@variable, 
 	      'label'=>value, 'value'=>value)
+    self
   end
   def delete(index, last=None)
     @menu.delete(index, last)
+    self
   end
   def yposition(index)
     @menu.yposition(index)
   end
-  def menucget(index, key)
-    @menu.cget(index, key)
+  def menu
+    @menu
   end
-  def menuconfigure(index, key, val=None)
-    @menu.configure(index, key, val)
+  def menucget(key)
+    @menu.cget(key)
   end
-  def menuconfiginfo(index, key=nil)
-    @menu.configinfo(index, key)
+  def menuconfigure(key, val=None)
+    @menu.configure(key, val)
+    self
+  end
+  def menuconfiginfo(key=nil)
+    @menu.configinfo(key)
   end
   def entrycget(index, key)
     @menu.entrycget(index, key)
   end
   def entryconfigure(index, key, val=None)
     @menu.entryconfigure(index, key, val)
+    self
   end
   def entryconfiginfo(index, key=nil)
     @menu.entryconfiginfo(index, key)
@@ -3498,9 +5107,20 @@ module TkComposite
   extend Tk
 
   def initialize(parent=nil, *args)
-    @frame = TkFrame.new(parent)
-    @path = @epath = @frame.path
-    initialize_composite(*args)
+    @delegates = {} 
+    @delegates['DEFAULT'] = @frame
+
+    if parent.kind_of? Hash
+      keys = _symbolkey2str(parent)
+      parent = keys['parent']
+      keys['parent'] = @frame = TkFrame.new(parent)
+      @path = @epath = @frame.path
+      initialize_composite(keys)
+    else
+      @frame = TkFrame.new(parent)
+      @path = @epath = @frame.path
+      initialize_composite(*args)
+    end
   end
 
   def epath
@@ -3511,10 +5131,6 @@ module TkComposite
   private :initialize_composite
 
   def delegate(option, *wins)
-    unless @delegates
-      @delegates = {} 
-      @delegates['DEFAULT'] = @frame
-    end
     if @delegates[option].kind_of?(Array)
       for i in wins
 	@delegates[option].push(i)
@@ -3549,27 +5165,88 @@ module TkClipboard
   include Tk
   extend Tk
 
-  def clear
-    tk_call 'clipboard', 'clear'
-  end
-  def get
-    begin
-      tk_call 'selection', 'get', '-selection', 'CLIPBOARD'
-    rescue
-      ''
+  TkCommandNames = ['clipboard'.freeze].freeze
+
+  def self.clear(win=nil)
+    if win
+      tk_call 'clipboard', 'clear', '-displayof', win
+    else
+      tk_call 'clipboard', 'clear'
     end
   end
-  def set(data)
-    clear
-    append(data)
-  end
-  def append(data)
-    tk_call 'clipboard', 'append', data
+  def self.clear_on_display(win)
+    tk_call 'clipboard', 'clear', '-displayof', win
   end
 
-  module_function :clear, :set, :get, :append
+  def self.get(type=nil)
+    if type
+      tk_call 'clipboard', 'get', '-type', type
+    else
+      tk_call 'clipboard', 'get'
+    end
+  end
+  def self.get_on_display(win, type=nil)
+    if type
+      tk_call 'clipboard', 'get', '-displayof', win, '-type', type
+    else
+      tk_call 'clipboard', 'get', '-displayof', win
+    end
+  end
+
+  def self.set(data, keys=nil)
+    clear
+    append(data, keys)
+  end
+  def self.set_on_display(win, data, keys=nil)
+    clear(win)
+    append_on_display(win, data, keys)
+  end
+
+  def self.append(data, keys=nil)
+    args = ['clipboard', 'append']
+    args += hash_kv(keys)
+    args += ['--', data]
+    tk_call(*args)
+  end
+  def self.append_on_display(win, data, keys=nil)
+    args = ['clipboard', 'append', '-displayof', win]
+    args += hash_kv(keys)
+    args += ['--', data]
+    tk_call(*args)
+  end
+
+  def clear
+    TkClipboard.clear_on_display(self)
+    self
+  end
+  def get(type=nil)
+    TkClipboard.get_on_display(self, type)
+  end
+  def set(data, keys=nil)
+    TkClipboard.set_on_display(self, data, keys)
+    self
+  end
+  def append(data, keys=nil)
+    TkClipboard.append_on_display(self, data, keys)
+    self
+  end
 end
 
+# widget_destroy_hook
+require 'tkvirtevent'
+TkBindTag::ALL.bind(TkVirtualEvent.new('Destroy'), proc{|xpath| 
+		      path = xpath[1..-1]
+		      if (widget = TkCore::INTERP.tk_windows[path])
+			if widget.respond_to?(:__destroy_hook__)
+			  begin
+			    widget.__destroy_hook__
+			  rescue Exception
+			  end
+			end
+		      end
+		    }, 'x%W')
+
+# autoload
 autoload :TkCanvas, 'tkcanvas'
 autoload :TkImage, 'tkcanvas'
 autoload :TkBitmapImage, 'tkcanvas'
@@ -3578,15 +5255,18 @@ autoload :TkEntry, 'tkentry'
 autoload :TkSpinbox, 'tkentry'
 autoload :TkText, 'tktext'
 autoload :TkDialog, 'tkdialog'
+autoload :TkDialog2, 'tkdialog'
 autoload :TkWarning, 'tkdialog'
+autoload :TkWarning2, 'tkdialog'
 autoload :TkMenubar, 'tkmenubar'
 autoload :TkAfter, 'tkafter'
+autoload :TkTimer, 'tkafter'
 autoload :TkPalette, 'tkpalette'
 autoload :TkFont, 'tkfont'
-autoload :TkVirtualEvent, 'tkvirtevent'
 autoload :TkBgError, 'tkbgerror'
 autoload :TkManageFocus, 'tkmngfocus'
 autoload :TkPalette, 'tkpalette'
 autoload :TkWinDDE, 'tkwinpkg'
 autoload :TkWinRegistry, 'tkwinpkg'
 autoload :TkMacResource, 'tkmacpkg'
+autoload :TkConsole, 'tkconsole'

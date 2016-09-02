@@ -4,7 +4,7 @@
  * <amos+ruby@utdallas.edu>
  *
  * $RoughId: syslog.c,v 1.21 2002/02/25 12:21:17 knu Exp $
- * $Id: syslog.c,v 1.1.1.2 2003/05/14 13:58:47 melville Exp $
+ * $Id: syslog.c,v 1.1.1.3 2003/10/15 10:11:48 melville Exp $
  */
 
 #include "ruby.h"
@@ -54,7 +54,6 @@ static VALUE mSyslog_close(VALUE self)
 static VALUE mSyslog_open(int argc, VALUE *argv, VALUE self)
 {
     VALUE ident, opt, fac;
-    int mask;
 
     if (syslog_opened) {
         rb_raise(rb_eRuntimeError, "syslog already open");

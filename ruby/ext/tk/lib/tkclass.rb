@@ -1,7 +1,9 @@
 #
 #		tkclass.rb - Tk classes
-#			$Date: 2002/05/27 17:59:47 $
+#			Date: 2000/11/27 09:23:36
 #			by Yukihiro Matsumoto <matz@caelum.co.jp>
+#
+#			$Id: tkclass.rb,v 1.1.1.2 2003/10/15 10:11:48 melville Exp $
 
 require "tk"
 
@@ -13,6 +15,7 @@ Radiobutton = TkRadioButton
 Checkbutton = TkCheckButton
 Message = TkMessage
 Entry = TkEntry
+Spinbox = TkSpinbox
 Text = TkText
 Scale = TkScale
 Scrollbar = TkScrollbar
@@ -28,10 +31,16 @@ Polygon = TkcPolygon
 Rectangle = TkcRectangle
 TextItem = TkcText
 WindowItem = TkcWindow
+BitmapImage = TkBitmapImage
+PhotoImage = TkPhotoImage
 Selection = TkSelection
 Winfo = TkWinfo
 Pack = TkPack
+Grid = TkGrid
+Place = TkPlace
 Variable = TkVariable
+Font = TkFont
+VirtualEvent = TkVirtualEvent
 
 def Mainloop
   Tk.mainloop

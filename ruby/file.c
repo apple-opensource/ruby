@@ -3,22 +3,23 @@
   file.c -
 
   $Author: melville $
-  $Date: 2003/05/14 13:58:43 $
+  $Date: 2003/10/15 10:11:46 $
   created at: Mon Nov 15 12:24:34 JST 1993
 
-  Copyright (C) 1993-2000 Yukihiro Matsumoto
+  Copyright (C) 1993-2003 Yukihiro Matsumoto
   Copyright (C) 2000  Network Applied Communication Laboratory, Inc.
   Copyright (C) 2000  Information-technology Promotion Agency, Japan
 
 **********************************************************************/
 
-#ifdef NT
+#ifdef _WIN32
 #include "missing/file.h"
 #endif
 
 #include "ruby.h"
 #include "rubyio.h"
 #include "rubysig.h"
+#include "util.h"
 #include "dln.h"
 
 #ifdef HAVE_UNISTD_H
@@ -33,26 +34,19 @@ int flock _((int, int));
 
 #ifdef HAVE_SYS_PARAM_H
 # include <sys/param.h>
-#else
+#endif
+#ifndef MAXPATHLEN
 # define MAXPATHLEN 1024
 #endif
 
 #include <time.h>
-#ifdef HAVE_SYS_TIME_H
-# include <sys/time.h>
-#else
-#ifndef NT
-struct timeval {
-        long    tv_sec;         /* seconds */
-        long    tv_usec;        /* and microseconds */
-};
-#endif /* NT */
-#endif
 
 VALUE rb_time_new _((time_t, time_t));
 
 #ifdef HAVE_UTIME_H
 #include <utime.h>
+#elif defined HAVE_SYS_UTIME_H
+#include <sys/utime.h>
 #endif
 
 #ifdef HAVE_PWD_H
@@ -66,31 +60,32 @@ char *strrchr _((const char*,const char));
 #include <sys/types.h>
 #include <sys/stat.h>
 
-#ifndef HAVE_LSTAT
-#define lstat rb_sys_stat
+#ifdef HAVE_SYS_MKDEV_H
+#include <sys/mkdev.h>
 #endif
- 
+
+#ifndef HAVE_LSTAT
+#define lstat(path,st) stat(path,st)
+#endif
+
 VALUE rb_cFile;
 VALUE rb_mFileTest;
 static VALUE rb_cStat;
 
-static int
+static long
 apply2files(func, vargs, arg)
     void (*func)();
     VALUE vargs;
     void *arg;
 {
-    int i;
+    long i;
     VALUE path;
     struct RArray *args = RARRAY(vargs);
 
     for (i=0; i<args->len; i++) {
-	Check_SafeStr(args->ptr[i]);
-    }
-
-    for (i=0; i<args->len; i++) {
 	path = args->ptr[i];
-	(*func)(RSTRING(path)->ptr, arg);
+	SafeStringValue(path);
+	(*func)(StringValueCStr(path), arg);
     }
 
     return args->len;
@@ -107,20 +102,17 @@ rb_file_path(obj)
     return rb_str_new2(fptr->path);
 }
 
-#ifdef NT
-#include "missing/file.h"
-#endif
-
 static VALUE
 stat_new_0(klass, st)
     VALUE klass;
     struct stat *st;
 {
-    struct stat *nst;
-    if (!st) rb_bug("stat_new() called with bad value");
+    struct stat *nst = 0;
 
-    nst = ALLOC(struct stat);
-    *nst = *st;
+    if (st) {
+	nst = ALLOC(struct stat);
+	*nst = *st;
+    }
     return Data_Wrap_Struct(klass, NULL, free, nst);
 }
 
@@ -137,7 +129,7 @@ get_stat(self)
 {
     struct stat* st;
     Data_Get_Struct(self, struct stat, st);
-    if (!st) rb_bug("collapsed File::Stat");
+    if (!st) rb_raise(rb_eTypeError, "uninitialized File::Stat");
     return st;
 }
 
@@ -155,7 +147,7 @@ rb_stat_cmp(self, other)
 	else
 	    return INT2FIX(1);
     }
-    rb_raise(rb_eTypeError, "operand is not File::Stat");
+    return Qnil;
 }
 
 static VALUE
@@ -169,14 +161,18 @@ static VALUE
 rb_stat_ino(self)
     VALUE self;
 {
-    return UINT2NUM(get_stat(self)->st_ino);
+    return ULONG2NUM(get_stat(self)->st_ino);
 }
 
 static VALUE
 rb_stat_mode(self)
     VALUE self;
 {
-    return UINT2NUM(get_stat(self)->st_mode);
+#ifdef __BORLANDC__
+    return UINT2NUM((unsigned short)(get_stat(self)->st_mode));
+#else
+     return UINT2NUM(get_stat(self)->st_mode);
+#endif
 }
 
 static VALUE
@@ -205,9 +201,33 @@ rb_stat_rdev(self)
     VALUE self;
 {
 #ifdef HAVE_ST_RDEV
-    return INT2NUM(get_stat(self)->st_rdev);
+    return ULONG2NUM(get_stat(self)->st_rdev);
 #else
-    return INT2FIX(0);
+    return Qnil;
+#endif
+}
+
+static VALUE
+rb_stat_rdev_major(self)
+    VALUE self;
+{
+#if defined(HAVE_ST_RDEV) && defined(major)
+    long rdev = get_stat(self)->st_rdev;
+    return ULONG2NUM(major(rdev));
+#else
+    return Qnil;
+#endif
+}
+
+static VALUE
+rb_stat_rdev_minor(self)
+    VALUE self;
+{
+#if defined(HAVE_ST_RDEV) && defined(minor)
+    long rdev = get_stat(self)->st_rdev;
+    return ULONG2NUM(minor(rdev));
+#else
+    return Qnil;
 #endif
 }
 
@@ -215,7 +235,7 @@ static VALUE
 rb_stat_size(self)
     VALUE self;
 {
-    return INT2NUM(get_stat(self)->st_size);
+    return OFFT2NUM(get_stat(self)->st_size);
 }
 
 static VALUE
@@ -223,9 +243,9 @@ rb_stat_blksize(self)
     VALUE self;
 {
 #ifdef HAVE_ST_BLKSIZE
-    return UINT2NUM(get_stat(self)->st_blksize);
+    return ULONG2NUM(get_stat(self)->st_blksize);
 #else
-    return INT2FIX(0);
+    return Qnil;
 #endif
 }
 
@@ -234,9 +254,9 @@ rb_stat_blocks(self)
     VALUE self;
 {
 #ifdef HAVE_ST_BLOCKS
-    return UINT2NUM(get_stat(self)->st_blocks);
+    return ULONG2NUM(get_stat(self)->st_blocks);
 #else
-    return INT2FIX(0);
+    return Qnil;
 #endif
 }
 
@@ -286,23 +306,36 @@ rb_stat_inspect(self)
         {"ctime",   rb_stat_ctime},
     };
 
-    str = rb_str_new2("#<");
-    rb_str_cat2(str, rb_class2name(CLASS_OF(self)));
-    rb_str_cat2(str, " ");
+    str = rb_str_buf_new2("#<");
+    rb_str_buf_cat2(str, rb_obj_classname(self));
+    rb_str_buf_cat2(str, " ");
 
     for (i = 0; i < sizeof(member)/sizeof(member[0]); i++) {
-	VALUE str2;
-	char *p;
+	VALUE v;
 
 	if (i > 0) {
-	    rb_str_cat2(str, ", ");
+	    rb_str_buf_cat2(str, ", ");
 	}
-	rb_str_cat2(str, member[i].name);
-	rb_str_cat2(str, "=");
-	str2 = rb_inspect((*member[i].func)(self));
-	rb_str_append(str, str2);
+	rb_str_buf_cat2(str, member[i].name);
+	rb_str_buf_cat2(str, "=");
+	v = (*member[i].func)(self);
+	if (i == 2) {		/* mode */
+	    char buf[32];
+
+	    sprintf(buf, "0%o", NUM2INT(v));
+	    rb_str_buf_cat2(str, buf);
+	}
+	else if (i == 0 || i == 6) { /* dev/rdev */
+	    char buf[32];
+
+	    sprintf(buf, "0x%lx", NUM2ULONG(v));
+	    rb_str_buf_cat2(str, buf);
+	}
+	else {
+	    rb_str_append(str, rb_inspect(v));
+	}
     }
-    rb_str_cat2(str, ">");
+    rb_str_buf_cat2(str, ">");
     OBJ_INFECT(str, self);
 
     return str;
@@ -313,18 +346,18 @@ rb_stat(file, st)
     VALUE file;
     struct stat *st;
 {
-    if (TYPE(file) == T_FILE) {
+    VALUE tmp;
+
+    tmp = rb_check_convert_type(file, T_FILE, "IO", "to_io");
+    if (!NIL_P(tmp)) {
 	OpenFile *fptr;
 
 	rb_secure(2);
-	GetOpenFile(file, fptr);
+	GetOpenFile(tmp, fptr);
 	return fstat(fileno(fptr->f), st);
     }
-    Check_SafeStr(file);
-#if defined DJGPP
-    if (RSTRING(file)->len == 0) return -1;
-#endif
-    return rb_sys_stat(RSTRING(file)->ptr, st);
+    SafeStringValue(file);
+    return stat(StringValueCStr(file), st);
 }
 
 static VALUE
@@ -333,9 +366,9 @@ rb_file_s_stat(klass, fname)
 {
     struct stat st;
 
-    Check_SafeStr(fname);
-    if (rb_sys_stat(RSTRING(fname)->ptr, &st) == -1) {
-	rb_sys_fail(RSTRING(fname)->ptr);
+    SafeStringValue(fname);
+    if (rb_stat(fname, &st) < 0) {
+	rb_sys_fail(StringValueCStr(fname));
     }
     return stat_new(&st);
 }
@@ -361,8 +394,8 @@ rb_file_s_lstat(klass, fname)
 #ifdef HAVE_LSTAT
     struct stat st;
 
-    Check_SafeStr(fname);
-    if (lstat(RSTRING(fname)->ptr, &st) == -1) {
+    SafeStringValue(fname);
+    if (lstat(StringValueCStr(fname), &st) == -1) {
 	rb_sys_fail(RSTRING(fname)->ptr);
     }
     return stat_new(&st);
@@ -395,13 +428,17 @@ static int
 group_member(gid)
     GETGROUPS_T gid;
 {
-#if !defined(NT)
+#ifndef _WIN32
     if (getgid() ==  gid)
 	return Qtrue;
 
 # ifdef HAVE_GETGROUPS
 #  ifndef NGROUPS
+#   ifdef NGROUPS_MAX
+#    define NGROUPS NGROUPS_MAX
+#   else
 #    define NGROUPS 32
+#   endif
 #  endif
     {
 	GETGROUPS_T gary[NGROUPS];
@@ -426,36 +463,37 @@ eaccess(path, mode)
      const char *path;
      int mode;
 {
-#ifdef S_IXGRP
-  struct stat st;
-  int euid;
+#if defined(S_IXGRP) && !defined(_WIN32)
+    struct stat st;
+    int euid;
 
-  if (rb_sys_stat(path, &st) < 0) return (-1);
+    if (stat(path, &st) < 0) return -1;
 
-  euid = geteuid();
-  if (euid == 0) {
-      /* Root can read or write any file. */
-      if (!(mode & X_OK))
-	return 0;
+    euid = geteuid();
 
-      /* Root can execute any file that has any one of the execute
-	 bits set. */
-      if (st.st_mode & S_IXUGO)
-	return 0;
+    if (euid == 0) {
+	/* Root can read or write any file. */
+	if (!(mode & X_OK))
+	    return 0;
 
-      return -1;
-  }
+	/* Root can execute any file that has any one of the execute
+	   bits set. */
+	if (st.st_mode & S_IXUGO)
+	    return 0;
 
-  if (st.st_uid == euid)        /* owner */
-      mode <<= 6;
-  else if (getegid() == st.st_gid || group_member(st.st_gid))
-      mode <<= 3;
+	return -1;
+    }
 
-  if ((st.st_mode & mode) == mode) return 0;
+    if (st.st_uid == euid)        /* owner */
+	mode <<= 6;
+    else if (getegid() == st.st_gid || group_member(st.st_gid))
+	mode <<= 3;
 
-  return -1;
-#else  /* !NT */
-  return access(path, mode);
+    if ((st.st_mode & mode) == mode) return 0;
+
+    return -1;
+#else
+    return access(path, mode);
 #endif
 }
 
@@ -499,6 +537,14 @@ test_l(obj, fname)
 #ifndef S_ISLNK
 #  ifdef _S_ISLNK
 #    define S_ISLNK(m) _S_ISLNK(m)
+#  elif defined __BORLANDC__
+#    ifdef _S_IFLNK
+#      define S_ISLNK(m) (((unsigned short)(m) & S_IFMT) == _S_IFLNK)
+#    else
+#      ifdef S_IFLNK
+#        define S_ISLNK(m) (((unsigned short)(m) & S_IFMT) == S_IFLNK)
+#      endif
+#    endif
 #  else
 #    ifdef _S_IFLNK
 #      define S_ISLNK(m) ((m & S_IFMT) == _S_IFLNK)
@@ -513,8 +559,8 @@ test_l(obj, fname)
 #ifdef S_ISLNK
     struct stat st;
 
-    Check_SafeStr(fname);
-    if (lstat(RSTRING(fname)->ptr, &st) < 0) return Qfalse;
+    SafeStringValue(fname);
+    if (lstat(StringValueCStr(fname), &st) < 0) return Qfalse;
     if (S_ISLNK(st.st_mode)) return Qtrue;
 #endif
 
@@ -528,6 +574,14 @@ test_S(obj, fname)
 #ifndef S_ISSOCK
 #  ifdef _S_ISSOCK
 #    define S_ISSOCK(m) _S_ISSOCK(m)
+#  elif defined __BORLANDC__
+#    ifdef _S_IFSOCK
+#      define S_ISSOCK(m) (((unsigned short)(m) & S_IFMT) == _S_IFSOCK)
+#    else
+#      ifdef S_IFSOCK
+#        define S_ISSOCK(m) (((unsigned short)(m) & S_IFMT) == S_IFSOCK)
+#      endif
+#    endif
 #  else
 #    ifdef _S_IFSOCK
 #      define S_ISSOCK(m) ((m & S_IFMT) == _S_IFSOCK)
@@ -601,8 +655,8 @@ static VALUE
 test_r(obj, fname)
     VALUE obj, fname;
 {
-    Check_SafeStr(fname);
-    if (eaccess(RSTRING(fname)->ptr, R_OK) < 0) return Qfalse;
+    SafeStringValue(fname);
+    if (eaccess(StringValueCStr(fname), R_OK) < 0) return Qfalse;
     return Qtrue;
 }
 
@@ -610,8 +664,8 @@ static VALUE
 test_R(obj, fname)
     VALUE obj, fname;
 {
-    Check_SafeStr(fname);
-    if (access(RSTRING(fname)->ptr, R_OK) < 0) return Qfalse;
+    SafeStringValue(fname);
+    if (access(StringValueCStr(fname), R_OK) < 0) return Qfalse;
     return Qtrue;
 }
 
@@ -619,8 +673,8 @@ static VALUE
 test_w(obj, fname)
     VALUE obj, fname;
 {
-    Check_SafeStr(fname);
-    if (eaccess(RSTRING(fname)->ptr, W_OK) < 0) return Qfalse;
+    SafeStringValue(fname);
+    if (eaccess(StringValueCStr(fname), W_OK) < 0) return Qfalse;
     return Qtrue;
 }
 
@@ -628,8 +682,8 @@ static VALUE
 test_W(obj, fname)
     VALUE obj, fname;
 {
-    Check_SafeStr(fname);
-    if (access(RSTRING(fname)->ptr, W_OK) < 0) return Qfalse;
+    SafeStringValue(fname);
+    if (access(StringValueCStr(fname), W_OK) < 0) return Qfalse;
     return Qtrue;
 }
 
@@ -637,8 +691,8 @@ static VALUE
 test_x(obj, fname)
     VALUE obj, fname;
 {
-    Check_SafeStr(fname);
-    if (eaccess(RSTRING(fname)->ptr, X_OK) < 0) return Qfalse;
+    SafeStringValue(fname);
+    if (eaccess(StringValueCStr(fname), X_OK) < 0) return Qfalse;
     return Qtrue;
 }
 
@@ -646,8 +700,8 @@ static VALUE
 test_X(obj, fname)
     VALUE obj, fname;
 {
-    Check_SafeStr(fname);
-    if (access(RSTRING(fname)->ptr, X_OK) < 0) return Qfalse;
+    SafeStringValue(fname);
+    if (access(StringValueCStr(fname), X_OK) < 0) return Qfalse;
     return Qtrue;
 }
 
@@ -685,7 +739,7 @@ test_s(obj, fname)
 
     if (rb_stat(fname, &st) < 0) return Qnil;
     if (st.st_size == 0) return Qnil;
-    return rb_int2inum(st.st_size);
+    return OFFT2NUM(st.st_size);
 }
 
 static VALUE
@@ -714,7 +768,7 @@ static VALUE
 test_grpowned(obj, fname)
     VALUE obj, fname;
 {
-#ifndef NT
+#ifndef _WIN32
     struct stat st;
 
     if (rb_stat(fname, &st) < 0) return Qfalse;
@@ -725,13 +779,14 @@ test_grpowned(obj, fname)
 
 #if defined(S_ISUID) || defined(S_ISGID) || defined(S_ISVTX)
 static VALUE
-check3rdbyte(file, mode)
-    const char *file;
+check3rdbyte(fname, mode)
+    VALUE fname;
     int mode;
 {
     struct stat st;
 
-    if (rb_sys_stat(file, &st) < 0) return Qfalse;
+    SafeStringValue(fname);
+    if (stat(StringValueCStr(fname), &st) < 0) return Qfalse;
     if (st.st_mode & mode) return Qtrue;
     return Qfalse;
 }
@@ -742,8 +797,7 @@ test_suid(obj, fname)
     VALUE obj, fname;
 {
 #ifdef S_ISUID
-    Check_SafeStr(fname);
-    return check3rdbyte(RSTRING(fname)->ptr, S_ISUID);
+    return check3rdbyte(fname, S_ISUID);
 #else
     return Qfalse;
 #endif
@@ -754,8 +808,7 @@ test_sgid(obj, fname)
     VALUE obj, fname;
 {
 #ifdef S_ISGID
-    Check_SafeStr(fname);
-    return check3rdbyte(RSTRING(fname)->ptr, S_ISGID);
+    return check3rdbyte(fname, S_ISGID);
 #else
     return Qfalse;
 #endif
@@ -766,8 +819,7 @@ test_sticky(obj, fname)
     VALUE obj, fname;
 {
 #ifdef S_ISVTX
-    Check_SafeStr(fname);
-    return check3rdbyte(RSTRING(fname)->ptr, S_ISVTX);
+    return check3rdbyte(fname, S_ISVTX);
 #else
     return Qnil;
 #endif
@@ -780,8 +832,8 @@ rb_file_s_size(klass, fname)
     struct stat st;
 
     if (rb_stat(fname, &st) < 0)
-	rb_sys_fail(RSTRING(fname)->ptr);
-    return rb_int2inum(st.st_size);
+	rb_sys_fail(StringValueCStr(fname));
+    return OFFT2NUM(st.st_size);
 }
 
 static VALUE
@@ -792,9 +844,11 @@ rb_file_ftype(st)
 
     if (S_ISREG(st->st_mode)) {
 	t = "file";
-    } else if (S_ISDIR(st->st_mode)) {
+    }
+    else if (S_ISDIR(st->st_mode)) {
 	t = "directory";
-    } else if (S_ISCHR(st->st_mode)) {
+    }
+    else if (S_ISCHR(st->st_mode)) {
 	t = "characterSpecial";
     }
 #ifdef S_ISBLK
@@ -830,8 +884,8 @@ rb_file_s_ftype(klass, fname)
 {
     struct stat st;
 
-    Check_SafeStr(fname);
-    if (lstat(RSTRING(fname)->ptr, &st) == -1) {
+    SafeStringValue(fname);
+    if (lstat(StringValueCStr(fname), &st) == -1) {
 	rb_sys_fail(RSTRING(fname)->ptr);
     }
 
@@ -845,7 +899,7 @@ rb_file_s_atime(klass, fname)
     struct stat st;
 
     if (rb_stat(fname, &st) < 0)
-	rb_sys_fail(RSTRING(fname)->ptr);
+	rb_sys_fail(StringValueCStr(fname));
     return rb_time_new(st.st_atime, 0);
 }
 
@@ -918,7 +972,7 @@ chmod_internal(path, mode)
     const char *path;
     int mode;
 {
-    if (chmod(path, mode) == -1)
+    if (chmod(path, mode) < 0)
 	rb_sys_fail(path);
 }
 
@@ -929,14 +983,15 @@ rb_file_s_chmod(argc, argv)
 {
     VALUE vmode;
     VALUE rest;
-    int mode, n;
+    int mode;
+    long n;
 
     rb_secure(2);
     rb_scan_args(argc, argv, "1*", &vmode, &rest);
     mode = NUM2INT(vmode);
 
-    n = apply2files(chmod_internal, rest, mode);
-    return INT2FIX(n);
+    n = apply2files(chmod_internal, rest, (void *)(long)mode);
+    return LONG2FIX(n);
 }
 
 static VALUE
@@ -962,6 +1017,44 @@ rb_file_chmod(obj, vmode)
     return INT2FIX(0);
 }
 
+#if defined(HAVE_LCHMOD)
+static void
+lchmod_internal(path, mode)
+    const char *path;
+    int mode;
+{
+    if (lchmod(path, mode) < 0)
+	rb_sys_fail(path);
+}
+
+static VALUE
+rb_file_s_lchmod(argc, argv)
+    int argc;
+    VALUE *argv;
+{
+    VALUE vmode;
+    VALUE rest;
+    int mode;
+    long n;
+
+    rb_secure(2);
+    rb_scan_args(argc, argv, "1*", &vmode, &rest);
+    mode = NUM2INT(vmode);
+
+    n = apply2files(lchmod_internal, rest, (void *)(long)mode);
+    return LONG2FIX(n);
+}
+#else
+static VALUE
+rb_file_s_lchmod(argc, argv)
+    int argc;
+    VALUE *argv;
+{
+    rb_notimplement();
+    return Qnil;		/* not reached */
+}
+#endif
+
 struct chown_args {
     int owner, group;
 };
@@ -982,7 +1075,7 @@ rb_file_s_chown(argc, argv)
 {
     VALUE o, g, rest;
     struct chown_args arg;
-    int n;
+    long n;
 
     rb_secure(2);
     rb_scan_args(argc, argv, "2*", &o, &g, &rest);
@@ -1000,7 +1093,7 @@ rb_file_s_chown(argc, argv)
     }
 
     n = apply2files(chown_internal, rest, &arg);
-    return INT2FIX(n);
+    return LONG2FIX(n);
 }
 
 static VALUE
@@ -1011,7 +1104,7 @@ rb_file_chown(obj, owner, group)
 
     rb_secure(2);
     GetOpenFile(obj, fptr);
-#if defined(DJGPP) || defined(__CYGWIN32__) || defined(NT) || defined(__EMX__)
+#if defined(DJGPP) || defined(__CYGWIN32__) || defined(_WIN32) || defined(__EMX__)
     if (!fptr->path) return Qnil;
     if (chown(fptr->path, NUM2INT(owner), NUM2INT(group)) == -1)
 	rb_sys_fail(fptr->path);
@@ -1022,6 +1115,53 @@ rb_file_chown(obj, owner, group)
 
     return INT2FIX(0);
 }
+
+#if defined(HAVE_LCHOWN) && !defined(__CHECKER__)
+static void
+lchown_internal(path, args)
+    const char *path;
+    struct chown_args *args;
+{
+    if (lchown(path, args->owner, args->group) < 0)
+	rb_sys_fail(path);
+}
+
+static VALUE
+rb_file_s_lchown(argc, argv)
+    int argc;
+    VALUE *argv;
+{
+    VALUE o, g, rest;
+    struct chown_args arg;
+    long n;
+
+    rb_secure(2);
+    rb_scan_args(argc, argv, "2*", &o, &g, &rest);
+    if (NIL_P(o)) {
+	arg.owner = -1;
+    }
+    else {
+	arg.owner = NUM2INT(o);
+    }
+    if (NIL_P(g)) {
+	arg.group = -1;
+    }
+    else {
+	arg.group = NUM2INT(g);
+    }
+
+    n = apply2files(lchown_internal, rest, &arg);
+    return LONG2FIX(n);
+}
+#else
+static VALUE
+rb_file_s_lchown(argc, argv)
+    int argc;
+    VALUE *argv;
+{
+    rb_notimplement();
+}
+#endif
 
 struct timeval rb_time_timeval();
 
@@ -1043,7 +1183,7 @@ rb_file_s_utime(argc, argv)
 {
     VALUE atime, mtime, rest;
     struct timeval tvp[2];
-    int n;
+    long n;
 
     rb_scan_args(argc, argv, "2*", &atime, &mtime, &rest);
 
@@ -1051,27 +1191,16 @@ rb_file_s_utime(argc, argv)
     tvp[1] = rb_time_timeval(mtime);
 
     n = apply2files(utime_internal, rest, tvp);
-    return INT2FIX(n);
+    return LONG2FIX(n);
 }
 
 #else
 
-#ifndef HAVE_UTIME_H
-# ifdef NT
-#   if defined(__BORLANDC__)
-#     include <utime.h>
-#   else
-#  include <sys/utime.h>
-#   endif
-#   if defined(_MSC_VER) || defined __MINGW32__
-#  define utimbuf _utimbuf
-#   endif
-# else
+#if !defined HAVE_UTIME_H && !defined HAVE_SYS_UTIME_H
 struct utimbuf {
     long actime;
     long modtime;
 };
-# endif
 #endif
 
 static void
@@ -1089,7 +1218,7 @@ rb_file_s_utime(argc, argv)
     VALUE *argv;
 {
     VALUE atime, mtime, rest;
-    int n;
+    long n;
     struct timeval tv;
     struct utimbuf utbuf;
 
@@ -1101,20 +1230,35 @@ rb_file_s_utime(argc, argv)
     utbuf.modtime = tv.tv_sec;
 
     n = apply2files(utime_internal, rest, &utbuf);
-    return INT2FIX(n);
+    return LONG2FIX(n);
 }
 
 #endif
+
+NORETURN(static void sys_fail2 _((VALUE,VALUE)));
+static void
+sys_fail2(s1, s2)
+    VALUE s1, s2;
+{
+    char *buf;
+    int len;
+
+    len = RSTRING(s1)->len + RSTRING(s2)->len + 5;
+    buf = ALLOCA_N(char, len);
+    snprintf(buf, len, "%s or %s", RSTRING(s1)->ptr, RSTRING(s2)->ptr);
+    rb_sys_fail(buf);
+}
 
 static VALUE
 rb_file_s_link(klass, from, to)
     VALUE klass, from, to;
 {
-    Check_SafeStr(from);
-    Check_SafeStr(to);
+    SafeStringValue(from);
+    SafeStringValue(to);
 
-    if (link(RSTRING(from)->ptr, RSTRING(to)->ptr) < 0)
-	rb_sys_fail(RSTRING(from)->ptr);
+    if (link(StringValueCStr(from), StringValueCStr(to)) < 0) {
+	sys_fail2(from, to);
+    }
     return INT2FIX(0);
 }
 
@@ -1123,11 +1267,12 @@ rb_file_s_symlink(klass, from, to)
     VALUE klass, from, to;
 {
 #ifdef HAVE_SYMLINK
-    Check_SafeStr(from);
-    Check_SafeStr(to);
+    SafeStringValue(from);
+    SafeStringValue(to);
 
-    if (symlink(RSTRING(from)->ptr, RSTRING(to)->ptr) < 0)
-	rb_sys_fail(RSTRING(from)->ptr);
+    if (symlink(StringValueCStr(from), StringValueCStr(to)) < 0) {
+	sys_fail2(from, to);
+    }
     return INT2FIX(0);
 #else
     rb_notimplement();
@@ -1140,15 +1285,25 @@ rb_file_s_readlink(klass, path)
     VALUE klass, path;
 {
 #ifdef HAVE_READLINK
-    char buf[MAXPATHLEN];
-    int cc;
+    char *buf;
+    int size = 100;
+    int rv;
+    VALUE v;
 
-    Check_SafeStr(path);
-
-    if ((cc = readlink(RSTRING(path)->ptr, buf, MAXPATHLEN)) < 0)
+    SafeStringValue(path);
+    buf = xmalloc(size);
+    while ((rv = readlink(StringValueCStr(path), buf, size)) == size) {
+	size *= 2;
+	buf = xrealloc(buf, size);
+    }
+    if (rv < 0) {
+	free(buf);
 	rb_sys_fail(RSTRING(path)->ptr);
+    }
+    v = rb_tainted_str_new(buf, rv);
+    free(buf);
 
-    return rb_tainted_str_new(buf, cc);
+    return v;
 #else
     rb_notimplement();
     return Qnil;		/* not reached */
@@ -1167,26 +1322,40 @@ static VALUE
 rb_file_s_unlink(klass, args)
     VALUE klass, args;
 {
-    int n;
+    long n;
 
     rb_secure(2);
     n = apply2files(unlink_internal, args, 0);
-    return INT2FIX(n);
+    return LONG2FIX(n);
 }
 
 static VALUE
 rb_file_s_rename(klass, from, to)
     VALUE klass, from, to;
 {
-    Check_SafeStr(from);
-    Check_SafeStr(to);
+    const char *src, *dst;
+    SafeStringValue(from);
+    SafeStringValue(to);
 
-    if (rename(RSTRING(from)->ptr, RSTRING(to)->ptr) < 0) {
+    src = StringValueCStr(from);
+    dst = StringValueCStr(to);
+    if (rename(src, dst) < 0) {
 #if defined __CYGWIN__
 	extern unsigned long __attribute__((stdcall)) GetLastError();
 	errno = GetLastError(); /* This is a Cygwin bug */
+#elif defined DOSISH && !defined _WIN32
+	if (errno == EEXIST
+#if defined (__EMX__)
+	    || errno == EACCES
 #endif
-	rb_sys_fail(RSTRING(from)->ptr);
+	    ) {
+	    if (chmod(dst, 0666) == 0 &&
+		unlink(dst) == 0 &&
+		rename(src, dst) == 0)
+		return INT2FIX(0);
+	}
+#endif
+	sys_fail2(from, to);
     }
 
     return INT2FIX(0);
@@ -1208,33 +1377,184 @@ rb_file_s_umask(argc, argv)
 	omask = umask(NUM2INT(argv[0]));
     }
     else {
-	rb_raise(rb_eArgError, "wrong # of argument");
+	rb_raise(rb_eArgError, "wrong number of argument");
     }
     return INT2FIX(omask);
 }
 
 #if defined DOSISH
+#define DOSISH_UNC
 #define isdirsep(x) ((x) == '/' || (x) == '\\')
 #else
 #define isdirsep(x) ((x) == '/')
 #endif
+#ifndef CharNext		/* defined as CharNext[AW] on Windows. */
+# if defined(DJGPP)
+#   define CharNext(p) ((p) + mblen(p, MB_CUR_MAX))
+# else
+#   define CharNext(p) ((p) + 1)
+# endif
+#endif
 
-VALUE
-rb_file_s_expand_path(argc, argv)
-    int argc;
-    VALUE *argv;
+#ifdef __CYGWIN__
+#undef DOSISH
+#define DOSISH_UNC
+#define DOSISH_DRIVE_LETTER
+#endif
+
+#ifdef DOSISH_DRIVE_LETTER
+static inline int
+has_drive_letter(buf)
+    const char *buf;
 {
-    VALUE fname, dname;
-    char *s, *p;
-    char buf[MAXPATHLEN+2];
-    char *bend = buf + sizeof(buf) - 2;
+    if (ISALPHA(buf[0]) && buf[1] == ':') {
+	return 1;
+    }
+    else {
+	return 0;
+    }
+}
+
+static void
+getcwdofdrv(drv, buf, len)
+    int drv;
+    char *buf;
+    int len;
+{
+    char drive[4];
+    char oldcwd[MAXPATHLEN+1];
+
+    drive[0] = drv;
+    drive[1] = ':';
+    drive[2] = '\0';
+
+    /* the only way that I know to get the current directory
+       of a particular drive is to change chdir() to that drive,
+       so save the old cwd before chdir()
+    */
+    getcwd(oldcwd, MAXPATHLEN);
+    if (chdir(drive) == 0) {
+	getcwd(buf, len);
+	chdir(oldcwd);
+    }
+    else {
+	/* perhaps the drive is not exist. we return only drive letter */
+	strncpy(buf, drive, len);
+    }
+}
+#endif
+
+static inline char *
+skiproot(path)
+    const char *path;
+{
+#ifdef DOSISH_DRIVE_LETTER
+    if (has_drive_letter(path)) path += 2;
+#endif
+    while (isdirsep(*path)) path++;
+    return (char *)path;
+}
+
+static inline char *
+nextdirsep(s)
+    const char *s;
+{
+    while (*s && !isdirsep(*s)) {
+	s = CharNext(s);
+    }
+    return (char *)s;
+}
+
+#if defined(DOSISH_UNC) || defined(DOSISH_DRIVE_LETTER) 
+static inline char *
+skipprefix(path)
+    const char *path;
+{
+#ifdef DOSISH_UNC
+    if (isdirsep(path[0]) && isdirsep(path[1])) {
+	if (*(path = nextdirsep(path + 2)))
+	    path = nextdirsep(path + 1);
+	return (char *)path;
+    }
+#endif
+#ifdef DOSISH_DRIVE_LETTER
+    if (has_drive_letter(path))
+	return (char *)(path + 2);
+#endif
+    return (char *)path;
+}
+#else
+#define skipprefix(path) (path)
+#endif
+
+static char *
+strrdirsep(path)
+    const char *path;
+{
+    char *last = NULL;
+    while (*path) {
+	if (isdirsep(*path)) {
+	    const char *tmp = path++;
+	    while (isdirsep(*path)) path++;
+	    if (!*path) break;
+	    last = (char *)tmp;
+	}
+	else {
+	    path = CharNext(path);
+	}
+    }
+    return last;
+}
+
+static char *
+chompdirsep(path)
+    const char *path;
+{
+    while (*path) {
+	if (isdirsep(*path)) {
+	    const char *last = path++;
+	    while (isdirsep(*path)) path++;
+	    if (!*path) return (char *)last;
+	}
+	else {
+	    path = CharNext(path);
+	}
+    }
+    return (char *)path;
+}
+
+#define BUFCHECK(cond) while (cond) {\
+    long bdiff = p - buf;\
+    buflen *= 2;\
+    rb_str_resize(result, buflen);\
+    buf = RSTRING(result)->ptr;\
+    p = buf + bdiff;\
+    pend = buf + buflen;\
+}
+
+#define BUFINIT() (\
+    p = buf = RSTRING(result)->ptr,\
+    buflen = RSTRING(result)->len,\
+    pend = p + buflen)
+
+#if !defined(TOLOWER)
+#define TOLOWER(c) (ISUPPER(c) ? tolower(c) : (c))
+#endif
+
+static int is_absolute_path _((const char*));
+
+static VALUE
+file_expand_path(fname, dname, result)
+    VALUE fname, dname, result;
+{
+    char *s, *buf, *b, *p, *pend, *root;
+    long buflen;
     int tainted;
 
-    rb_scan_args(argc, argv, "11", &fname, &dname);
-
+    s = StringValuePtr(fname);
+    BUFINIT();
     tainted = OBJ_TAINTED(fname);
-    s = STR2CSTR(fname);
-    p = buf;
+
     if (s[0] == '~') {
 	if (isdirsep(s[1]) || s[1] == '\0') {
 	    char *dir = getenv("HOME");
@@ -1242,9 +1562,17 @@ rb_file_s_expand_path(argc, argv)
 	    if (!dir) {
 		rb_raise(rb_eArgError, "couldn't find HOME environment -- expanding `%s'", s);
 	    }
-	    if (strlen(dir) > MAXPATHLEN) goto toolong;
+	    BUFCHECK(strlen(dir) > buflen);
 	    strcpy(buf, dir);
-	    p = &buf[strlen(buf)];
+#if defined DOSISH || defined __CYGWIN__
+	    for (p = buf; *p; p = CharNext(p)) {
+		if (*p == '\\') {
+		    *p = '/';
+		}
+	    }
+#else
+	    p = buf + strlen(dir);
+#endif
 	    s++;
 	    tainted = 1;
 	}
@@ -1253,10 +1581,10 @@ rb_file_s_expand_path(argc, argv)
 	    struct passwd *pwPtr;
 	    s++;
 #endif
-	    while (*s && !isdirsep(*s)) {
-		*p++ = *s++;
-		if (p >= bend) goto toolong;
-	    }
+	    s = nextdirsep(b = s);
+	    BUFCHECK(p + (s-b) >= pend);
+	    memcpy(p, b, s-b);
+	    p += s-b;
 	    *p = '\0';
 #ifdef HAVE_PWD_H
 	    pwPtr = getpwnam(buf);
@@ -1264,103 +1592,166 @@ rb_file_s_expand_path(argc, argv)
 		endpwent();
 		rb_raise(rb_eArgError, "user %s doesn't exist", buf);
 	    }
-	    if (strlen(pwPtr->pw_dir) > MAXPATHLEN) goto toolong;
+	    BUFCHECK(strlen(pwPtr->pw_dir) > buflen);
 	    strcpy(buf, pwPtr->pw_dir);
-	    p = &buf[strlen(buf)];
+	    p = buf + strlen(pwPtr->pw_dir);
 	    endpwent();
 #endif
 	}
     }
-#if defined DOSISH || __CYGWIN__
+#ifdef DOSISH_DRIVE_LETTER
     /* skip drive letter */
-    else if (ISALPHA(s[0]) && s[1] == ':' && isdirsep(s[2])) {
-	while (*s && !isdirsep(*s)) {
-	    *p++ = *s++;
-	    if (p >= bend) goto toolong;
-	}
-    }
-#endif
-    else if (!isdirsep(*s)) {
-	if (!NIL_P(dname)) {
-	    dname = rb_file_s_expand_path(1, &dname);
-	    if (OBJ_TAINTED(dname)) tainted = 1;
-	    if (strlen(RSTRING(dname)->ptr) > MAXPATHLEN) goto toolong;
-	    strcpy(buf, RSTRING(dname)->ptr);
+    else if (has_drive_letter(s)) {
+	if (isdirsep(s[2])) {
+	    /* specified drive letter, and full path */
+	    /* skip drive letter */
+	    BUFCHECK(p + 2 >= pend);
+	    memcpy(p, s, 2);
+	    p += 2;
+	    s += 2;
 	}
 	else {
-	    tainted = 1;
-#ifdef HAVE_GETCWD
-	    getcwd(buf, MAXPATHLEN);
-#else
-	    getwd(buf);
-#endif
+	    /* specified drive, but not full path */
+	    int same = 0;
+	    if (!NIL_P(dname)) {
+		file_expand_path(dname, Qnil, result);
+		BUFINIT();
+		if (has_drive_letter(p) && TOLOWER(p[0]) == TOLOWER(s[0])) {
+		    /* ok, same drive */
+		    same = 1;
+		}
+	    }
+	    if (!same) {
+		BUFCHECK(buflen < MAXPATHLEN);
+		getcwdofdrv(*s, buf, MAXPATHLEN);
+		tainted = 1;
+	    }
+	    p = chompdirsep(skiproot(buf));
+	    s += 2;
 	}
-	p = &buf[strlen(buf)];
-	while (p > buf && *(p - 1) == '/') p--;
+    }
+#endif
+    else if (!is_absolute_path(s)) {
+	if (!NIL_P(dname)) {
+	    file_expand_path(dname, Qnil, result);
+	    BUFINIT();
+	}
+	else {
+	    char *dir = my_getcwd();
+
+	    tainted = 1;
+	    BUFCHECK(strlen(dir) > buflen);
+	    strcpy(buf, dir);
+	    free(dir);
+	}
+#if defined DOSISH || defined __CYGWIN__
+	if (isdirsep(*s)) {
+	    /* specified full path, but not drive letter nor UNC */
+	    /* we need to get the drive letter or UNC share name */
+	    p = skipprefix(buf);
+	}
+	else
+#endif
+	    p = chompdirsep(skiproot(buf));
     }
     else {
-	while (*s && isdirsep(*s)) {
-	    *p++ = '/';
-	    if (p >= bend) goto toolong;
-	    s++;
-	}
-	if (p > buf && *s) p--;
+	b = s;
+	do s++; while (isdirsep(*s));
+	p = buf + (s - b);
+	BUFCHECK(p >= pend);
+	memset(buf, '/', p - buf);
     }
-    *p = '/';
+    if (p > buf && p[-1] == '/')
+	--p;
+    else
+	*p = '/';
 
-    for ( ; *s; s++) {
+    p[1] = 0;
+    root = skipprefix(buf);
+
+    b = s;
+    while (*s) {
 	switch (*s) {
 	  case '.':
-	    if (!isdirsep(*p)) {
-		*++p = '.';
-	    }
-	    else if (*(s+1)) {
-		switch (*++s) {
+	    if (b == s++) {	/* beginning of path element */
+		switch (*s) {
+		  case '\0':
+		    b = s;
+		    break;
 		  case '.':
-		    if (*(s+1) == '\0' || isdirsep(*(s+1))) { 
+		    if (*(s+1) == '\0' || isdirsep(*(s+1))) {
 			/* We must go back to the parent */
-			if (isdirsep(*p) && p > buf) p--;
-			while (p > buf && !isdirsep(*p)) p--;
-		    }
-		    else {
-			*++p = '.';
-			*++p = *s;
-			if (p >= bend) goto toolong;
+			*p = '\0';
+			if (!(b = strrdirsep(root))) {
+			    *p = '/';
+			}
+			else {
+			    p = b;
+			}
+			b = ++s;
 		    }
 		    break;
 		  case '/':
-#if defined DOSISH
+#if defined DOSISH || defined __CYGWIN__
 		  case '\\':
 #endif
-		    if (!isdirsep(*p)) *++p = '/'; 
+		    b = ++s;
 		    break;
 		  default:
-		    *++p = '.'; *++p = *s; break;
+		    /* ordinary path element, beginning don't move */
+		    break;
 		}
 	    }
 	    break;
 	  case '/':
-#if defined DOSISH
+#if defined DOSISH || defined __CYGWIN__
 	  case '\\':
 #endif
-	    if (!isdirsep(*p)) *++p = '/'; break;
+	    if (s > b) {
+		long rootdiff = root - buf;
+		BUFCHECK(p + (s-b+1) >= pend);
+		root = buf + rootdiff;
+		memcpy(++p, b, s-b);
+		p += s-b;
+		*p = '/';
+	    }
+	    b = ++s;
+	    break;
 	  default:
-	    *++p = *s;
-	    if (p >= bend) goto toolong;
+	    s = CharNext(s);
+	    break;
 	}
     }
-  
-    /* Place a \0 at end. If path ends with a "/", delete it */
-    if (p == buf || !isdirsep(*p)) p++;
+
+    if (s > b) {
+	BUFCHECK(p + (s-b) >= pend);
+	memcpy(++p, b, s-b);
+	p += s-b;
+    }
+    if (p == skiproot(buf) - 1) p++;
+
+    if (tainted) OBJ_TAINT(result);
+    RSTRING(result)->len = p - buf;
     *p = '\0';
+    return result;
+}
 
-    fname = rb_str_new2(buf);
-    if (tainted) OBJ_TAINT(fname);
-    return fname;
+VALUE
+rb_file_expand_path(fname, dname)
+    VALUE fname, dname;
+{
+    return file_expand_path(fname, dname, rb_str_new(0, MAXPATHLEN + 2));
+}
 
-  toolong:
-    rb_raise(rb_eArgError, "argument too long (size=%ld)", RSTRING(fname)->len);
-    return Qnil;		/* not reached */
+VALUE
+rb_file_s_expand_path(argc, argv)
+    int argc;
+    VALUE *argv;
+{
+    VALUE fname, dname;
+    rb_scan_args(argc, argv, "11", &fname, &dname);
+
+    return rb_file_expand_path(fname, dname);
 }
 
 static int
@@ -1369,9 +1760,9 @@ rmext(p, e)
 {
     int l1, l2;
 
-    l1 = strlen(p);
     if (!e) return 0;
 
+    l1 = chompdirsep(p) - p;
     l2 = strlen(e);
     if (l2 == 2 && e[1] == '*') {
 	e = strrchr(p, *e);
@@ -1380,7 +1771,7 @@ rmext(p, e)
     }
     if (l1 < l2) return l1;
 
-    if (strcmp(p+l1-l2, e) == 0) {
+    if (strncmp(p+l1-l2, e, l2) == 0) {
 	return l1-l2;
     }
     return 0;
@@ -1392,28 +1783,39 @@ rb_file_s_basename(argc, argv)
     VALUE *argv;
 {
     VALUE fname, fext, basename;
-    char *name, *p, *ext;
+    char *name, *p, *ext = NULL;
     int f;
 
     if (rb_scan_args(argc, argv, "11", &fname, &fext) == 2) {
-	ext = STR2CSTR(fext);
+	ext = StringValueCStr(fext);
     }
-    name = STR2CSTR(fname);
-    p = strrchr(name, '/');
-    if (!p) {
-	if (NIL_P(fext) || !(f = rmext(name, ext)))
-	    return fname;
-	basename = rb_str_new(name, f);
+    StringValue(fname);
+    if (RSTRING(fname)->len == 0 || !*(name = RSTRING(fname)->ptr))
+	return fname;
+    if (!*(name = skiproot(name))) {
+	p = name - 1;
+	f = 1;
+#ifdef DOSISH_DRIVE_LETTER
+	if (*p == ':') {
+	    p++;
+	    f = 0;
+	}
+#endif
+    }
+    else if (!(p = strrdirsep(name))) {
+	if (NIL_P(fext) || !(f = rmext(name, ext))) {
+	    f = chompdirsep(name) - name;
+	    if (f == RSTRING(fname)->len) return fname;
+	}
+	p = name;
     }
     else {
-	p++;			/* skip last `/' */
+	while (isdirsep(*p)) p++; /* skip last / */
 	if (NIL_P(fext) || !(f = rmext(p, ext))) {
-	    basename = rb_str_new2(p);
-	}
-	else {
-	    basename = rb_str_new(p, f);
+	    f = chompdirsep(p) - p;
 	}
     }
+    basename = rb_str_new(p, f);
     OBJ_INFECT(basename, fname);
     return basename;
 }
@@ -1422,35 +1824,137 @@ static VALUE
 rb_file_s_dirname(klass, fname)
     VALUE klass, fname;
 {
-    char *name, *p;
+    char *name, *root, *p;
     VALUE dirname;
 
-    name = STR2CSTR(fname);
-    p = strrchr(name, '/');
+    name = StringValueCStr(fname);
+    root = skiproot(name);
+#ifdef DOSISH_UNC
+    if (root > name + 2 && isdirsep(*name))
+	name = root - 2;
+#else
+    if (root > name + 1)
+	name = root - 1;
+#endif
+    p = strrdirsep(root);
     if (!p) {
-	return rb_str_new2(".");
+	p = root;
     }
     if (p == name)
-	p++;
+	return rb_str_new2(".");
     dirname = rb_str_new(name, p - name);
-    if (OBJ_TAINTED(fname)) OBJ_TAINT(dirname);
+#ifdef DOSISH_DRIVE_LETTER
+    if (root == name + 2 && name[1] == ':')
+	rb_str_cat(dirname, ".", 1);
+#endif
+    OBJ_INFECT(dirname, fname);
     return dirname;
+}
+
+static VALUE
+rb_file_s_extname(klass, fname)
+    VALUE klass, fname;
+{
+    char *name, *p, *e;
+    VALUE extname;
+
+    name = StringValueCStr(fname);
+    p = strrdirsep(name);	/* get the last path component */
+    if (!p)
+ 	p = name;
+    else
+ 	p++;
+ 
+     e = strrchr(p, '.');	/* get the last dot of the last component */
+     if (!e || e == p)		/* no dot, or the only dot is first? */
+	 return rb_str_new2("");
+     extname = rb_str_new(e, chompdirsep(e) - e);	/* keep the dot, too! */
+     OBJ_INFECT(extname, fname);
+     return extname;
 }
 
 static VALUE
 rb_file_s_split(klass, path)
     VALUE klass, path;
 {
+    StringValue(path);		/* get rid of converting twice */
     return rb_assoc_new(rb_file_s_dirname(Qnil, path), rb_file_s_basename(1,&path));
 }
 
 static VALUE separator;
 
+static VALUE rb_file_join _((VALUE ary, VALUE sep));
+
+static VALUE
+file_inspect_join(ary, arg)
+    VALUE ary;
+    VALUE *arg;
+{
+    return rb_file_join(arg[0], arg[1]);
+}
+
+static VALUE
+rb_file_join(ary, sep)
+    VALUE ary, sep;
+{
+    long len, i;
+    int taint = 0;
+    VALUE result, tmp;
+    char *name;
+
+    if (RARRAY(ary)->len == 0) return rb_str_new(0, 0);
+    if (OBJ_TAINTED(ary)) taint = 1;
+    if (OBJ_TAINTED(sep)) taint = 1;
+
+    len = 1;
+    for (i=0; i<RARRAY(ary)->len; i++) {
+	if (TYPE(RARRAY(ary)->ptr[i]) == T_STRING) {
+	    len += RSTRING(RARRAY(ary)->ptr[i])->len;
+	}
+	else {
+	    len += 10;
+	}
+    }
+    if (!NIL_P(sep) && TYPE(sep) == T_STRING) {
+	len += RSTRING(sep)->len * RARRAY(ary)->len - 1;
+    }
+    result = rb_str_buf_new(len);
+    for (i=0; i<RARRAY(ary)->len; i++) {
+	tmp = RARRAY(ary)->ptr[i];
+	switch (TYPE(tmp)) {
+	  case T_STRING:
+	    break;
+	  case T_ARRAY:
+	    if (rb_inspecting_p(tmp)) {
+		tmp = rb_str_new2("[...]");
+	    }
+	    else {
+		VALUE args[2];
+
+		args[0] = tmp;
+		args[1] = sep;
+		tmp = rb_protect_inspect(file_inspect_join, ary, (VALUE)args);
+	    }
+	    break;
+	  default:
+	    tmp = rb_obj_as_string(tmp);
+	}
+	name = StringValueCStr(result);
+	if (i > 0 && !NIL_P(sep) && !*chompdirsep(name))
+	    rb_str_buf_append(result, sep);
+	rb_str_buf_append(result, tmp);
+	if (OBJ_TAINTED(tmp)) taint = 1;
+    }
+
+    if (taint) OBJ_TAINT(result);
+    return result;
+}
+
 static VALUE
 rb_file_s_join(klass, args)
     VALUE klass, args;
 {
-    return rb_ary_join(args, separator);
+    return rb_file_join(args, separator);
 }
 
 static VALUE
@@ -1458,26 +1962,26 @@ rb_file_s_truncate(klass, path, len)
     VALUE klass, path, len;
 {
     rb_secure(2);
-    Check_SafeStr(path);
+    SafeStringValue(path);
 
 #ifdef HAVE_TRUNCATE
-    if (truncate(RSTRING(path)->ptr, NUM2INT(len)) < 0)
+    if (truncate(StringValueCStr(path), NUM2OFFT(len)) < 0)
 	rb_sys_fail(RSTRING(path)->ptr);
 #else
 # ifdef HAVE_CHSIZE
     {
 	int tmpfd;
 
-#  if defined(NT)
-	if ((tmpfd = open(RSTRING(path)->ptr, O_RDWR)) < 0) {
+#  ifdef _WIN32
+	if ((tmpfd = open(StringValueCStr(path), O_RDWR)) < 0) {
 	    rb_sys_fail(RSTRING(path)->ptr);
 	}
 #  else
-	if ((tmpfd = open(RSTRING(path)->ptr, 0)) < 0) {
+	if ((tmpfd = open(StringValueCStr(path), 0)) < 0) {
 	    rb_sys_fail(RSTRING(path)->ptr);
 	}
 #  endif
-	if (chsize(tmpfd, NUM2INT(len)) < 0) {
+	if (chsize(tmpfd, NUM2OFFT(len)) < 0) {
 	    close(tmpfd);
 	    rb_sys_fail(RSTRING(path)->ptr);
 	}
@@ -1502,11 +2006,11 @@ rb_file_truncate(obj, len)
 	rb_raise(rb_eIOError, "not opened for writing");
     }
 #ifdef HAVE_TRUNCATE
-    if (ftruncate(fileno(fptr->f), NUM2INT(len)) < 0)
+    if (ftruncate(fileno(fptr->f), NUM2OFFT(len)) < 0)
 	rb_sys_fail(fptr->path);
 #else
 # ifdef HAVE_CHSIZE
-    if (chsize(fileno(fptr->f), NUM2INT(len)) < 0)
+    if (chsize(fileno(fptr->f), NUM2OFFT(len)) < 0)
 	rb_sys_fail(fptr->path);
 # else
     rb_notimplement();
@@ -1528,7 +2032,7 @@ rb_file_truncate(obj, len)
 #  define LOCK_UN 8
 # endif
 
-#if defined(EWOULDBLOCK) && 0
+#if 0
 static int
 rb_thread_flock(fd, op, fptr)
     int fd, op;
@@ -1572,6 +2076,7 @@ rb_file_flock(obj, operation)
     if (fptr->mode & FMODE_WRITABLE) {
 	fflush(GetWriteFile(fptr));
     }
+  retry:
     TRAP_BEG;
     ret = flock(fileno(fptr->f), NUM2INT(operation));
     TRAP_END;
@@ -1583,6 +2088,11 @@ rb_file_flock(obj, operation)
           case EWOULDBLOCK:
 #endif
               return Qfalse;
+	  case EINTR:
+#if defined(ERESTART)
+	  case ERESTART:
+#endif
+	    goto retry;
         }
 	rb_sys_fail(fptr->path);
     }
@@ -1599,16 +2109,14 @@ test_check(n, argc, argv)
     int i;
 
     n+=1;
-    if (n != argc) rb_raise(rb_eArgError, "wrong # of arguments(%d for %d)", argc, n);
+    if (n != argc) rb_raise(rb_eArgError, "wrong number of arguments(%d for %d)", argc, n);
     for (i=1; i<n; i++) {
 	switch (TYPE(argv[i])) {
 	  case T_STRING:
-	    Check_SafeStr(argv[i]);
+	  default:
+	    SafeStringValue(argv[i]);
 	    break;
 	  case T_FILE:
-	    break;
-	  default:
-	    Check_Type(argv[i], T_STRING);
 	    break;
 	}
     }
@@ -1623,7 +2131,7 @@ rb_f_test(argc, argv)
 {
     int cmd;
 
-    if (argc == 0) rb_raise(rb_eArgError, "wrong # of arguments");
+    if (argc == 0) rb_raise(rb_eArgError, "wrong number of arguments");
 #if 0 /* 1.7 behavior? */
     if (argc == 1) {
 	return RTEST(argv[0]) ? Qtrue : Qfalse;
@@ -1733,15 +2241,15 @@ rb_f_test(argc, argv)
 	    if (st1.st_dev == st2.st_dev && st1.st_ino == st2.st_ino)
 		return Qtrue;
             return Qfalse;
-                        
+
 	  case '=':
 	    if (st1.st_mtime == st2.st_mtime) return Qtrue;
 	    return Qfalse;
-                        
+
 	  case '>':
 	    if (st1.st_mtime > st2.st_mtime) return Qtrue;
 	    return Qfalse;
-            
+
 	  case '<':
 	    if (st1.st_mtime < st2.st_mtime) return Qtrue;
 	    return Qfalse;
@@ -1752,28 +2260,59 @@ rb_f_test(argc, argv)
     return Qnil;		/* not reached */
 }
 
+static VALUE rb_stat_s_alloc _((VALUE));
 static VALUE
-rb_stat_s_new(klass, fname)
-    VALUE klass, fname;
+rb_stat_s_alloc(klass)
+    VALUE klass;
 {
-    VALUE s;
-    struct stat st;
-
-    Check_SafeStr(fname);
-    if (rb_sys_stat(RSTRING(fname)->ptr, &st) == -1) {
-	rb_sys_fail(RSTRING(fname)->ptr);
-    }
-    s = stat_new_0(klass, &st);
-    rb_obj_call_init(s, 1, &fname);
-    return s;
+    return stat_new_0(klass, 0);
 }
 
 static VALUE
-rb_stat_init(klass, fname)
-    VALUE klass, fname;
+rb_stat_init(obj, fname)
+    VALUE obj, fname;
 {
-    /* do nothing */
+    struct stat st, *nst;
+
+    SafeStringValue(fname);
+
+    if (stat(StringValueCStr(fname), &st) == -1) {
+	rb_sys_fail(RSTRING(fname)->ptr);
+    }
+    if (DATA_PTR(obj)) {
+	free(DATA_PTR(obj));
+	DATA_PTR(obj) = NULL;
+    }
+    nst = ALLOC(struct stat);
+    *nst = st;
+    DATA_PTR(obj) = nst;
+
     return Qnil;
+}
+
+static VALUE
+rb_stat_init_copy(copy, orig)
+    VALUE copy, orig;
+{
+    struct stat *nst;
+
+    if (copy == orig) return orig;
+    rb_check_frozen(copy);
+    /* need better argument type check */
+    if (!rb_obj_is_instance_of(orig, rb_obj_class(copy))) {
+	rb_raise(rb_eTypeError, "wrong argument class");
+    }
+    if (DATA_PTR(copy)) {
+	free(DATA_PTR(copy));
+	DATA_PTR(copy) = 0;
+    }
+    if (DATA_PTR(orig)) {
+	nst = ALLOC(struct stat);
+	*nst = *(struct stat*)DATA_PTR(orig);
+	DATA_PTR(copy) = nst;
+    }
+
+    return copy;
 }
 
 static VALUE
@@ -1863,7 +2402,7 @@ static VALUE
 rb_stat_grpowned(obj)
     VALUE obj;
 {
-#ifndef NT
+#ifndef _WIN32
     if (get_stat(obj)->st_gid == getegid()) return Qtrue;
 #endif
     return Qfalse;
@@ -2009,10 +2548,10 @@ static VALUE
 rb_stat_s(obj)
     VALUE obj;
 {
-    int size = get_stat(obj)->st_size;
+    off_t size = get_stat(obj)->st_size;
 
     if (size == 0) return Qnil;
-    return INT2FIX(size);
+    return OFFT2NUM(size);
 }
 
 static VALUE
@@ -2059,44 +2598,54 @@ static int
 is_absolute_path(path)
     const char *path;
 {
+#ifdef DOSISH_DRIVE_LETTER
+    if (has_drive_letter(path) && isdirsep(path[2])) return 1;
+#endif
+#ifdef DOSISH_UNC
+    if (isdirsep(path[0]) && isdirsep(path[1])) return 1;
+#endif
+#ifndef DOSISH
     if (path[0] == '/') return 1;
-# if defined DOSISH || defined __CYGWIN__
-    if (path[0] == '\\') return 1;
-    if (strlen(path) > 2 && path[1] == ':') return 1;
-# endif
+#endif
     return 0;
 }
 
 #ifndef DOSISH
 static int
 path_check_1(path)
-    char *path;
+     VALUE path;
 {
     struct stat st;
-    char *p = 0;
-    char *s;
+    char *p0 = StringValueCStr(path);
+    char *p = 0, *s;
 
-    if (!is_absolute_path(path)) {
-	char buf[MAXPATHLEN+1];
+    if (!is_absolute_path(p0)) {
+	char *buf = my_getcwd();
+	VALUE newpath;
 
-#ifdef HAVE_GETCWD
-	if (getcwd(buf, MAXPATHLEN) == 0) return 0;
-#else
-	if (getwd(buf) == 0) return 0;
-#endif
-	strncat(buf, "/", MAXPATHLEN);
-	strncat(buf, path, MAXPATHLEN);
-	buf[MAXPATHLEN] = '\0';
-	return path_check_1(buf);
+	newpath = rb_str_new2(buf);
+	free(buf);
+
+	rb_str_cat2(newpath, "/");
+	rb_str_cat2(newpath, p0);
+	return path_check_1(newpath);
     }
     for (;;) {
-	if (stat(path, &st) == 0 && (st.st_mode & 002)) {
-           if (p) *p = '/';
-	   return 0;
+#ifndef S_IWOTH
+# define S_IWOTH 002
+#endif
+	if (stat(p0, &st) == 0 && S_ISDIR(st.st_mode) && (st.st_mode & S_IWOTH)
+#ifdef S_ISVTX
+	    && (!p || !(st.st_mode & S_ISVTX))
+#endif
+	    ) {
+	    rb_warn("Insecure world writable dir %s, mode 0%o", p0, st.st_mode);
+	    if (p) *p = '/';
+	    return 0;
 	}
-	s = strrchr(path, '/');
+	s = strrdirsep(p0);
 	if (p) *p = '/';
-	if (!s || s == path) return 1;
+	if (!s || s == p0) return 1;
 	p = s;
 	*p = '\0';
     }
@@ -2108,27 +2657,24 @@ rb_path_check(path)
     char *path;
 {
 #ifndef DOSISH
-    char *p, *pend;
+    char *p0, *p, *pend;
     const char sep = PATH_SEP_CHAR;
 
     if (!path) return 1;
 
-    p = path;
-    pend = strchr(path, sep);
-    
-    for (;;) {
-	int safe;
+    pend = path + strlen(path);
+    p0 = path;
+    p = strchr(path, sep);
+    if (!p) p = pend;
 
-	if (pend) *pend = '\0';
-	safe = path_check_1(p);
-	if (!safe) {
-	    if (pend) *pend = sep;
-	    return 0;
+    for (;;) {
+	if (!path_check_1(rb_str_new(p0, p - p0))) {
+	    return 0;		/* not safe */
 	}
-	if (!pend) break;
-	*pend = sep;
-	p = pend + 1;
-	pend = strchr(p, sep);
+	p0 = p + 1;
+	if (p0 > pend) break;
+	p = strchr(p0, sep);
+	if (!p) p = pend;
     }
 #endif
     return 1;
@@ -2162,20 +2708,19 @@ extern VALUE rb_load_path;
 int
 rb_find_file_ext(filep, ext)
     VALUE *filep;
-    const char *const *ext;
+    const char * const *ext;
 {
-    char *path, *e, *found;
+    char *path, *found;
     char *f = RSTRING(*filep)->ptr;
     VALUE fname;
-    int i, j;
+    long i, j;
 
     if (f[0] == '~') {
-	fname = *filep;
-	fname = rb_file_s_expand_path(1, &fname);
+	fname = rb_file_expand_path(*filep, Qnil);
 	if (rb_safe_level() >= 2 && OBJ_TAINTED(fname)) {
 	    rb_raise(rb_eSecurityError, "loading from unsafe file %s", f);
 	}
-	f = STR2CSTR(fname);
+	f = StringValueCStr(fname);
 	*filep = fname;
     }
 
@@ -2183,7 +2728,7 @@ rb_find_file_ext(filep, ext)
 	for (i=0; ext[i]; i++) {
 	    fname = rb_str_dup(*filep);
 	    rb_str_cat2(fname, ext[i]);
-	    if (file_load_ok(RSTRING(fname)->ptr)) {
+	    if (file_load_ok(StringValueCStr(fname))) {
 		*filep = fname;
 		return i+1;
 	    }
@@ -2197,13 +2742,13 @@ rb_find_file_ext(filep, ext)
     for (i=0;i<RARRAY(rb_load_path)->len;i++) {
 	VALUE str = RARRAY(rb_load_path)->ptr[i];
 
-	Check_SafeStr(str);
-	if (RSTRING(str)->len == 0) return 0;
+	SafeStringValue(str);
+	if (RSTRING(str)->len == 0) continue;
 	path = RSTRING(str)->ptr;
 	for (j=0; ext[j]; j++) {
 	    fname = rb_str_dup(*filep);
 	    rb_str_cat2(fname, ext[j]);
-	    found = dln_find_file(RSTRING(fname)->ptr, path);
+	    found = dln_find_file(StringValueCStr(fname), path);
 	    if (found && file_load_ok(found)) {
 		*filep = fname;
 		return j+1;
@@ -2217,22 +2762,21 @@ VALUE
 rb_find_file(path)
     VALUE path;
 {
-    VALUE tmp, fname;
-    char *f = RSTRING(path)->ptr;
+    VALUE tmp;
+    char *f = StringValueCStr(path);
     char *lpath;
-    struct stat st;
 
     if (f[0] == '~') {
-	path = rb_file_s_expand_path(1, &path);
-	if (rb_safe_level() >= 2 && OBJ_TAINTED(path)) {
-	    rb_raise(rb_eSecurityError, "loading from unsafe file %s", f);
+	path = rb_file_expand_path(path, Qnil);
+	if (rb_safe_level() >= 1 && OBJ_TAINTED(path)) {
+	    rb_raise(rb_eSecurityError, "loading from unsafe path %s", f);
 	}
-	f = STR2CSTR(path);
+	f = StringValueCStr(path);
     }
 
 #if defined(__MACOS__) || defined(riscos)
     if (is_macos_native_path(f)) {
-	if (rb_safe_level() >= 2 && !rb_path_check(f)) {
+	if (rb_safe_level() >= 1 && !rb_path_check(f)) {
 	    rb_raise(rb_eSecurityError, "loading from unsafe file %s", f);
 	}
 	if (file_load_ok(f)) return path;
@@ -2240,7 +2784,7 @@ rb_find_file(path)
 #endif
 
     if (is_absolute_path(f)) {
-	if (rb_safe_level() >= 2 && !rb_path_check(f)) {
+	if (rb_safe_level() >= 1 && !rb_path_check(f)) {
 	    rb_raise(rb_eSecurityError, "loading from unsafe file %s", f);
 	}
 	if (file_load_ok(f)) return path;
@@ -2251,13 +2795,13 @@ rb_find_file(path)
     }
 
     if (rb_load_path) {
-	int i;
+	long i;
 
 	Check_Type(rb_load_path, T_ARRAY);
 	tmp = rb_ary_new();
 	for (i=0;i<RARRAY(rb_load_path)->len;i++) {
 	    VALUE str = RARRAY(rb_load_path)->ptr[i];
-	    Check_SafeStr(str);
+	    SafeStringValue(str);
 	    if (RSTRING(str)->len > 0) {
 		rb_ary_push(tmp, str);
 	    }
@@ -2267,8 +2811,8 @@ rb_find_file(path)
 	    lpath = 0;
 	}
 	else {
-	    lpath = STR2CSTR(tmp);
-	    if (rb_safe_level() >= 2 && !rb_path_check(lpath)) {
+	    lpath = RSTRING(tmp)->ptr;
+	    if (rb_safe_level() >= 1 && !rb_path_check(lpath)) {
 		rb_raise(rb_eSecurityError, "loading from unsafe path %s", lpath);
 	    }
 	}
@@ -2281,6 +2825,9 @@ rb_find_file(path)
 	return 0;		/* no path, no load */
     }
     f = dln_find_file(f, lpath);
+    if (rb_safe_level() >= 1 && !rb_path_check(f)) {
+	rb_raise(rb_eSecurityError, "loading from unsafe file %s", f);
+    }
     if (file_load_ok(f)) {
 	return rb_str_new2(f);
     }
@@ -2341,6 +2888,8 @@ Init_File()
     rb_define_singleton_method(rb_cFile, "utime", rb_file_s_utime, -1);
     rb_define_singleton_method(rb_cFile, "chmod", rb_file_s_chmod, -1);
     rb_define_singleton_method(rb_cFile, "chown", rb_file_s_chown, -1);
+    rb_define_singleton_method(rb_cFile, "lchmod", rb_file_s_lchmod, -1);
+    rb_define_singleton_method(rb_cFile, "lchown", rb_file_s_lchown, -1);
 
     rb_define_singleton_method(rb_cFile, "link", rb_file_s_link, 2);
     rb_define_singleton_method(rb_cFile, "symlink", rb_file_s_symlink, 2);
@@ -2354,6 +2903,7 @@ Init_File()
     rb_define_singleton_method(rb_cFile, "expand_path", rb_file_s_expand_path, -1);
     rb_define_singleton_method(rb_cFile, "basename", rb_file_s_basename, -1);
     rb_define_singleton_method(rb_cFile, "dirname", rb_file_s_dirname, 1);
+    rb_define_singleton_method(rb_cFile, "extname", rb_file_s_extname, 1);
 
     separator = rb_obj_freeze(rb_str_new2("/"));
     rb_define_const(rb_cFile, "Separator", separator);
@@ -2361,7 +2911,7 @@ Init_File()
     rb_define_singleton_method(rb_cFile, "split",  rb_file_s_split, 1);
     rb_define_singleton_method(rb_cFile, "join",   rb_file_s_join, -2);
 
-#if defined DOSISH && !defined __CYGWIN__
+#ifdef DOSISH
     rb_define_const(rb_cFile, "ALT_SEPARATOR", rb_obj_freeze(rb_str_new2("\\")));
 #else
     rb_define_const(rb_cFile, "ALT_SEPARATOR", Qnil);
@@ -2382,19 +2932,19 @@ Init_File()
     rb_define_method(rb_cFile, "flock", rb_file_flock, 1);
 
     rb_mFConst = rb_define_module_under(rb_cFile, "Constants");
-    rb_include_module(rb_cFile, rb_mFConst);
+    rb_include_module(rb_cIO, rb_mFConst);
     rb_file_const("LOCK_SH", INT2FIX(LOCK_SH));
     rb_file_const("LOCK_EX", INT2FIX(LOCK_EX));
     rb_file_const("LOCK_UN", INT2FIX(LOCK_UN));
     rb_file_const("LOCK_NB", INT2FIX(LOCK_NB));
 
     rb_define_method(rb_cFile, "path",  rb_file_path, 0);
-
     rb_define_global_function("test", rb_f_test, -1);
 
     rb_cStat = rb_define_class_under(rb_cFile, "Stat", rb_cObject);
-    rb_define_singleton_method(rb_cStat, "new",  rb_stat_s_new, 1);
+    rb_define_alloc_func(rb_cStat,  rb_stat_s_alloc);
     rb_define_method(rb_cStat, "initialize", rb_stat_init, 1);
+    rb_define_method(rb_cStat, "initialize_copy", rb_stat_init_copy, 1);
 
     rb_include_module(rb_cStat, rb_mComparable);
 
@@ -2407,6 +2957,8 @@ Init_File()
     rb_define_method(rb_cStat, "uid", rb_stat_uid, 0);
     rb_define_method(rb_cStat, "gid", rb_stat_gid, 0);
     rb_define_method(rb_cStat, "rdev", rb_stat_rdev, 0);
+    rb_define_method(rb_cStat, "rdev_major", rb_stat_rdev_major, 0);
+    rb_define_method(rb_cStat, "rdev_minor", rb_stat_rdev_minor, 0);
     rb_define_method(rb_cStat, "size", rb_stat_size, 0);
     rb_define_method(rb_cStat, "blksize", rb_stat_blksize, 0);
     rb_define_method(rb_cStat, "blocks", rb_stat_blocks, 0);

@@ -3,10 +3,10 @@
   compar.c -
 
   $Author: melville $
-  $Date: 2003/05/14 13:58:42 $
+  $Date: 2003/10/15 10:11:45 $
   created at: Thu Aug 26 14:39:48 JST 1993
 
-  Copyright (C) 1993-2000 Yukihiro Matsumoto
+  Copyright (C) 1993-2003 Yukihiro Matsumoto
 
 **********************************************************************/
 
@@ -16,34 +16,55 @@ VALUE rb_mComparable;
 
 static ID cmp;
 
-static VALUE
-cmp_eq(a)
-    VALUE *a;
+int
+rb_cmpint(val, a, b)
+    VALUE val, a, b;
 {
-    VALUE c = rb_funcall(a[0], cmp, 1, a[1]);
-
-    if (NIL_P(c)) return Qfalse;
-    if (rb_cmpint(c) == 0) return Qtrue;
-    return Qfalse;
+    if (NIL_P(val)) {
+	rb_cmperr(a, b);
+    }
+    if (FIXNUM_P(val)) return FIX2INT(val);
+    if (TYPE(val) == T_BIGNUM) {
+	if (RBIGNUM(val)->sign) return 1;
+	return -1;
+    }
+    if (RTEST(rb_funcall(val, '>', 1, INT2FIX(0)))) return 1;
+    if (RTEST(rb_funcall(val, '<', 1, INT2FIX(0)))) return -1;
+    return 0;
 }
 
-static VALUE
-cmp_failed()
+void
+rb_cmperr(x, y)
+    VALUE x, y;
 {
-    return Qfalse;
+    const char *classname;
+
+    if (SPECIAL_CONST_P(y)) {
+	y = rb_inspect(y);
+	classname = StringValuePtr(y);
+    }
+    else {
+	classname = rb_obj_classname(y);
+    }
+    rb_raise(rb_eArgError, "comparison of %s with %s failed",
+	     rb_obj_classname(x), classname);
 }
+
+#define cmperr() (rb_cmperr(x, y), Qnil)
 
 static VALUE
 cmp_equal(x, y)
     VALUE x, y;
 {
-    VALUE a[2];
+    int c;
 
     if (x == y) return Qtrue;
 
-    a[0] = x; a[1] = y;
-    return rb_rescue2(cmp_eq, (VALUE)a, cmp_failed, 0,
-		      rb_eStandardError, rb_eNameError, 0);
+    c  = rb_funcall(x, cmp, 1, y);
+    if (NIL_P(c)) return Qnil;
+    if (c == INT2FIX(0)) return Qtrue;
+    if (rb_cmpint(c, x, y) == 0) return Qtrue;
+    return Qfalse;
 }
 
 static VALUE
@@ -52,8 +73,8 @@ cmp_gt(x, y)
 {
     VALUE c = rb_funcall(x, cmp, 1, y);
 
-    if (NIL_P(c)) return Qfalse;
-    if (rb_cmpint(c) > 0) return Qtrue;
+    if (NIL_P(c)) return cmperr();
+    if (rb_cmpint(c, x, y) > 0) return Qtrue;
     return Qfalse;
 }
 
@@ -63,8 +84,8 @@ cmp_ge(x, y)
 {
     VALUE c = rb_funcall(x, cmp, 1, y);
 
-    if (NIL_P(c)) return Qfalse;
-    if (rb_cmpint(c) >= 0) return Qtrue;
+    if (NIL_P(c)) return cmperr();
+    if (rb_cmpint(c, x, y) >= 0) return Qtrue;
     return Qfalse;
 }
 
@@ -74,8 +95,8 @@ cmp_lt(x, y)
 {
     VALUE c = rb_funcall(x, cmp, 1, y);
 
-    if (NIL_P(c)) return Qfalse;
-    if (rb_cmpint(c) < 0) return Qtrue;
+    if (NIL_P(c)) return cmperr();
+    if (rb_cmpint(c, x, y) < 0) return Qtrue;
     return Qfalse;
 }
 
@@ -85,8 +106,8 @@ cmp_le(x, y)
 {
     VALUE c = rb_funcall(x, cmp, 1, y);
 
-    if (NIL_P(c)) return Qfalse;
-    if (rb_cmpint(c) <= 0) return Qtrue;
+    if (NIL_P(c)) return cmperr();
+    if (rb_cmpint(c, x, y) <= 0) return Qtrue;
     return Qfalse;
 }
 
@@ -94,8 +115,8 @@ static VALUE
 cmp_between(x, min, max)
     VALUE x, min, max;
 {
-    if (cmp_lt(x, min)) return Qfalse;
-    if (cmp_gt(x, max)) return Qfalse;
+    if (RTEST(cmp_lt(x, min))) return Qfalse;
+    if (RTEST(cmp_gt(x, max))) return Qfalse;
     return Qtrue;
 }
 

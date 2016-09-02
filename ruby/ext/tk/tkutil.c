@@ -2,8 +2,8 @@
 
   tk.c -
 
-  $Author: jkh $
-  $Date: 2002/05/27 17:59:47 $
+  $Author: melville $
+  $Date: 2003/10/15 10:11:48 $
   created at: Fri Nov  3 00:47:54 JST 1995
 
 ************************************************/
@@ -18,7 +18,7 @@ tk_eval_cmd(argc, argv)
     VALUE cmd, rest;
 
     rb_scan_args(argc, argv, "1*", &cmd, &rest);
-    return rb_eval_cmd(cmd, rest);
+    return rb_eval_cmd(cmd, rest, 0);
 }
 
 static VALUE

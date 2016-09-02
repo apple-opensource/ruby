@@ -1,9 +1,9 @@
 #! /usr/bin/env ruby
 
-# cal.rb: Written by Tadayoshi Funaba 1998-2000
-# $Id: cal.rb,v 1.1.1.1 2002/05/27 17:59:50 jkh Exp $
+# cal.rb: Written by Tadayoshi Funaba 1998-2002
+# $Id: cal.rb,v 1.1.1.2 2003/10/15 10:11:49 melville Exp $
 
-require 'date2'
+require 'date'
 require 'getopts'
 
 $tab =
@@ -32,12 +32,12 @@ $tab =
 $cc = 'gb'
 
 def usage
-  $stderr.puts 'usage: cal [-c iso3166] [-jmty] [[month] year]'
+  warn 'usage: cal [-c iso3166] [-jmty] [[month] year]'
   exit 1
 end
 
 def pict(y, m, sg)
-  d = (1..31).detect{|d| Date.exist?(y, m, d, sg)}
+  d = (1..31).detect{|d| Date.valid_date?(y, m, d, sg)}
   fi = Date.new(y, m, d, sg)
   fi -= (fi.jd - $k + 1) % 7
 
@@ -84,7 +84,7 @@ end
 
 usage unless getopts('jmty', "c:#{$cc}")
 
-y, m = ARGV.indexes(1, 0).compact.collect{|x| x.to_i}
+y, m = ARGV.values_at(1, 0).compact.collect{|x| x.to_i}
 $OPT_y ||= (y and not m)
 
 to = Date.today
@@ -93,7 +93,7 @@ m ||= to.mon
 
 usage unless m >= 1 and m <= 12
 usage unless y >= -4712
-usage unless sg = $tab[$OPT_c]
+usage if (sg = $tab[$OPT_c]).nil?
 
 $dw = if $OPT_j then 3 else 2 end
 $mw = ($dw + 1) * 7 - 1
@@ -103,9 +103,9 @@ $tw = ($mw + 2) * $mn - 2
 $k  = if $OPT_m then 1 else 0 end
 $da = if $OPT_j then :yday else :mday end
 
-print (if not $OPT_y
-	 unlines(pict(y, m, sg))
-       else
-	 y.to_s.center($tw) + "\n\n" +
-	   unlines(block((1..12).collect{|m| pict(y, m, sg)}, $mn)) + "\n"
-       end)
+print(if not $OPT_y
+	unlines(pict(y, m, sg))
+      else
+	y.to_s.center($tw) + "\n\n" +
+	  unlines(block((1..12).collect{|m| pict(y, m, sg)}, $mn)) + "\n"
+      end)

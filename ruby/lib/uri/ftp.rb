@@ -1,5 +1,5 @@
 #
-# $Id: ftp.rb,v 1.1.1.1 2002/05/27 17:59:49 jkh Exp $
+# $Id: ftp.rb,v 1.1.1.2 2003/10/15 10:11:49 melville Exp $
 #
 # Copyright (c) 2001 akira yamada <akira@ruby-lang.org>
 # You can redistribute it and/or modify it under the same term as Ruby.
@@ -116,6 +116,7 @@ module URI
     def typecode=(typecode)
       check_typecode(typecode)
       set_typecode(typecode)
+      typecode
     end
 
 =begin

@@ -2,8 +2,8 @@
 
   etc.c -
 
-  $Author: jkh $
-  $Date: 2002/05/27 17:59:46 $
+  $Author: melville $
+  $Date: 2003/10/15 10:11:47 $
   created at: Tue Mar 22 18:39:19 JST 1994
 
 ************************************************/
@@ -25,16 +25,19 @@
 
 static VALUE sPasswd, sGroup;
 
+#ifndef _WIN32
+char *getenv();
+#endif
+char *getlogin();
+
 static VALUE
 etc_getlogin(obj)
     VALUE obj;
 {
-    char *getenv();
     char *login;
 
+    rb_secure(4);
 #ifdef HAVE_GETLOGIN
-    char *getlogin();
-
     login = getlogin();
     if (!login) login = getenv("USER");
 #else
@@ -57,27 +60,27 @@ setup_passwd(pwd)
 			 rb_tainted_str_new2(pwd->pw_passwd),
 			 INT2FIX(pwd->pw_uid),
 			 INT2FIX(pwd->pw_gid),
-#ifdef PW_GECOS
+#ifdef HAVE_ST_PW_GECOS
 			 rb_tainted_str_new2(pwd->pw_gecos),
 #endif
 			 rb_tainted_str_new2(pwd->pw_dir),
 			 rb_tainted_str_new2(pwd->pw_shell),
-#ifdef PW_CHANGE
+#ifdef HAVE_ST_PW_CHANGE
 			 INT2FIX(pwd->pw_change),
 #endif
-#ifdef PW_QUOTA
+#ifdef HAVE_ST_PW_QUOTA
 			 INT2FIX(pwd->pw_quota),
 #endif
-#ifdef PW_AGE
+#ifdef HAVE_ST_PW_AGE
 			 INT2FIX(pwd->pw_age),
 #endif
-#ifdef PW_CLASS
+#ifdef HAVE_ST_PW_CLASS
 			 rb_tainted_str_new2(pwd->pw_class),
 #endif
-#ifdef PW_COMMENT
+#ifdef HAVE_ST_PW_COMMENT
 			 rb_tainted_str_new2(pwd->pw_comment),
 #endif
-#ifdef PW_EXPIRE
+#ifdef HAVE_ST_PW_EXPIRE
 			 INT2FIX(pwd->pw_expire),
 #endif
 			 0		/*dummy*/
@@ -91,11 +94,12 @@ etc_getpwuid(argc, argv, obj)
     VALUE *argv;
     VALUE obj;
 {
-#ifdef HAVE_GETPWENT
+#if defined(HAVE_GETPWENT)
     VALUE id;
     int uid;
     struct passwd *pwd;
 
+    rb_secure(4);
     if (rb_scan_args(argc, argv, "01", &id) == 1) {
 	uid = NUM2INT(id);
     }
@@ -117,7 +121,7 @@ etc_getpwnam(obj, nam)
 #ifdef HAVE_GETPWENT
     struct passwd *pwd;
 
-    Check_Type(nam, T_STRING);
+    SafeStringValue(nam);
     pwd = getpwnam(RSTRING(nam)->ptr);
     if (pwd == 0) rb_raise(rb_eArgError, "can't find user for %s", RSTRING(nam)->ptr);
     return setup_passwd(pwd);
@@ -126,6 +130,29 @@ etc_getpwnam(obj, nam)
 #endif
 }
 
+#ifdef HAVE_GETPWENT
+static int passwd_blocking = 0;
+static VALUE
+passwd_ensure()
+{
+    passwd_blocking = Qfalse;
+    return Qnil;
+}
+
+static VALUE
+passwd_iterate()
+{
+    struct passwd *pw;
+
+    setpwent();
+    while (pw = getpwent()) {
+	rb_yield(setup_passwd(pw));
+    }
+    endpwent();
+    return Qnil;
+}
+#endif
+
 static VALUE
 etc_passwd(obj)
     VALUE obj;
@@ -133,13 +160,13 @@ etc_passwd(obj)
 #ifdef HAVE_GETPWENT
     struct passwd *pw;
 
+    rb_secure(4);
     if (rb_block_given_p()) {
-	setpwent();
-	while (pw = getpwent()) {
-	    rb_yield(setup_passwd(pw));
+	if (passwd_blocking) {
+	    rb_raise(rb_eRuntimeError, "parallel passwd iteration");
 	}
-	endpwent();
-	return obj;
+	passwd_blocking = Qtrue;
+	rb_ensure(passwd_iterate, 0, passwd_ensure, 0);
     }
     if (pw = getpwent()) {
 	return setup_passwd(pw);
@@ -178,6 +205,7 @@ etc_getgrgid(obj, id)
     int gid;
     struct group *grp;
 
+    rb_secure(4);
     gid = NUM2INT(id);
     grp = getgrgid(gid);
     if (grp == 0) rb_raise(rb_eArgError, "can't find group for %d", gid);
@@ -194,7 +222,8 @@ etc_getgrnam(obj, nam)
 #ifdef HAVE_GETGRENT
     struct group *grp;
 
-    Check_Type(nam, T_STRING);
+    rb_secure(4);
+    SafeStringValue(nam);
     grp = getgrnam(RSTRING(nam)->ptr);
     if (grp == 0) rb_raise(rb_eArgError, "can't find group for %s", RSTRING(nam)->ptr);
     return setup_group(grp);
@@ -203,6 +232,29 @@ etc_getgrnam(obj, nam)
 #endif
 }
 
+#ifdef HAVE_GETGRENT
+static int group_blocking = 0;
+static VALUE
+group_ensure()
+{
+    group_blocking = Qfalse;
+    return Qnil;
+}
+
+static VALUE
+group_iterate()
+{
+    struct group *pw;
+
+    setpwent();
+    while (pw = getgrent()) {
+	rb_yield(setup_group(pw));
+    }
+    endpwent();
+    return Qnil;
+}
+#endif
+
 static VALUE
 etc_group(obj)
     VALUE obj;
@@ -210,13 +262,13 @@ etc_group(obj)
 #ifdef HAVE_GETGRENT
     struct group *grp;
 
+    rb_secure(4);
     if (rb_block_given_p()) {
-	setgrent();
-	while (grp = getgrent()) {
-	    rb_yield(setup_group(grp));
+	if (group_blocking) {
+	    rb_raise(rb_eRuntimeError, "parallel group iteration");
 	}
-	endgrent();
-	return obj;
+	group_blocking = Qtrue;
+	rb_ensure(group_iterate, 0, group_ensure, 0);
     }
     if (grp = getgrent()) {
 	return setup_group(grp);
@@ -244,33 +296,33 @@ Init_etc()
 
     sPasswd =  rb_struct_define("Passwd",
 				"name", "passwd", "uid", "gid",
-#ifdef PW_GECOS
+#ifdef HAVE_ST_PW_GECOS
 				"gecos",
 #endif
 				"dir", "shell",
-#ifdef PW_CHANGE
+#ifdef HAVE_ST_PW_CHANGE
 				"change",
 #endif
-#ifdef PW_QUOTA
+#ifdef HAVE_ST_PW_QUOTA
 				"quota",
 #endif
-#ifdef PW_AGE
+#ifdef HAVE_ST_PW_AGE
 				"age",
 #endif
-#ifdef PW_CLASS
-				"class",
+#ifdef HAVE_ST_PW_CLASS
+				"uclass",
 #endif
-#ifdef PW_COMMENT
+#ifdef HAVE_ST_PW_COMMENT
 				"comment",
 #endif
-#ifdef PW_EXPIRE
+#ifdef HAVE_ST_PW_EXPIRE
 				"expire",
 #endif
-				0);
+				NULL);
     rb_global_variable(&sPasswd);
 
 #ifdef HAVE_GETGRENT
-    sGroup = rb_struct_define("Group", "name", "passwd", "gid", "mem", 0);
+    sGroup = rb_struct_define("Group", "name", "passwd", "gid", "mem", NULL);
     rb_global_variable(&sGroup);
 #endif
 }

@@ -2,11 +2,11 @@
 
   prec.c -
 
-  $Author: jkh $
-  $Date: 2002/05/27 17:59:44 $
+  $Author: melville $
+  $Date: 2003/10/15 10:11:46 $
   created at: Tue Jan 26 02:40:41 2000
 
-  Copyright (C) 1993-2000 Yukihiro Matsumoto
+  Copyright (C) 1993-2003 Yukihiro Matsumoto
 
 **********************************************************************/
 
@@ -46,11 +46,12 @@ prec_induced_from(module, x)
     VALUE module, x;
 {
     rb_raise(rb_eTypeError, "undefined conversion from %s into %s",
-            rb_class2name(CLASS_OF(x)), rb_class2name(module));
+            rb_obj_classname(x), rb_class2name(module));
+    return Qnil;		/* not reached */
 }
 
 static VALUE
-prec_append_features(module, include)
+prec_included(module, include)
     VALUE module, include;
 {
     switch (TYPE(include)) {
@@ -61,7 +62,6 @@ prec_append_features(module, include)
        Check_Type(include, T_CLASS);
        break;
     }
-    rb_include_module(include, module);
     rb_define_singleton_method(include, "induced_from", prec_induced_from, 1);
     return module;
 }
@@ -71,7 +71,7 @@ void
 Init_Precision()
 {
     rb_mPrecision = rb_define_module("Precision");
-    rb_define_singleton_method(rb_mPrecision, "append_features", prec_append_features, 1);
+    rb_define_singleton_method(rb_mPrecision, "included", prec_included, 1);
     rb_define_method(rb_mPrecision, "prec", prec_prec, 1);
     rb_define_method(rb_mPrecision, "prec_i", prec_prec_i, 0);
     rb_define_method(rb_mPrecision, "prec_f", prec_prec_f, 0);

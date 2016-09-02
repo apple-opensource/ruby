@@ -47,13 +47,13 @@ static VALUE
 rb_nkf_kconv(obj, opt, src)
      VALUE obj, opt, src;
 {
-  int i;
   char *opt_ptr, *opt_end;
   volatile VALUE v;
 
   reinit();
-  opt_ptr = str2cstr(opt, &i);
-  opt_end = opt_ptr + i;
+  StringValue(opt);
+  opt_ptr = RSTRING(opt)->ptr;
+  opt_end = opt_ptr + RSTRING(opt)->len;
   for (; opt_ptr < opt_end; opt_ptr++) {
     if (*opt_ptr != '-') {
       continue;
@@ -64,7 +64,9 @@ rb_nkf_kconv(obj, opt, src)
   incsize = INCSIZE;
 
   input_ctr = 0; 
-  input     = str2cstr(src, &i_len);
+  StringValue(src);
+  input = RSTRING(src)->ptr;
+  i_len = RSTRING(src)->len;
   dst = rb_str_new(0, i_len*3 + 10);
   v = dst;
 
@@ -80,8 +82,7 @@ rb_nkf_kconv(obj, opt, src)
   kanji_convert(NULL);
   RSTRING(dst)->ptr[output_ctr] = '\0';
   RSTRING(dst)->len = output_ctr;
-  if(OBJ_TAINTED(src))
-    OBJ_TAINT(dst);
+  OBJ_INFECT(dst, src);
 
   return dst;
 }
@@ -98,13 +99,12 @@ rb_nkf_guess(obj, src)
 {
   unsigned char *p;
   unsigned char *pend;
-  int plen;
   int sequence_counter = 0;
 
-  Check_Type(src, T_STRING);
-
-  p = str2cstr(src, &plen);
-  pend = p + plen;
+  StringValue(src);
+  p = RSTRING(src)->ptr;
+  pend = p + RSTRING(src)->len;
+  if (p == pend) return INT2FIX(_UNKNOWN);
 
 #define INCR do {\
     p++;\

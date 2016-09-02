@@ -7,8 +7,12 @@ require 'tk'
 class TkVirtualEvent<TkObject
   extend Tk
 
-  TkVirtualEventID = [0]
-  TkVirtualEventTBL = {}
+  TkCommandNames = ['event'.freeze].freeze
+
+  TkVirtualEventID = ["<VirtEvent".freeze, "00000", ">".freeze].freeze
+  TkVirtualEventTBL = TkCore::INTERP.create_table
+
+  TkCore::INTERP.init_ip_env{ TkVirtualEventTBL.clear }
 
   class PreDefVirtEvent<self
     def initialize(event)
@@ -37,8 +41,8 @@ class TkVirtualEvent<TkObject
   end
 
   def initialize(*sequences)
-    @path = @id = format("<VirtEvent%.4d>", TkVirtualEventID[0])
-    TkVirtualEventID[0] += 1
+    @path = @id = TkVirtualEventID.join
+    TkVirtualEventID[1].succ!
     add(*sequences)
   end
 
@@ -54,11 +58,11 @@ class TkVirtualEvent<TkObject
   def delete(*sequences)
     if sequences == []
       tk_call('event', 'delete', "<#{@id}>")
-      TkVirtualEventTBL[@id] = nil
+      TkVirtualEventTBL.delete(@id)
     else
       tk_call('event', 'delete', "<#{@id}>", 
 	      *(sequences.collect{|seq| "<#{tk_event_sequence(seq)}>"}) )
-      TkVirtualEventTBL[@id] = nil if info == []
+      TkVirtualEventTBL.delete(@id) if info == []
     end
     self
   end

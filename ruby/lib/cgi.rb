@@ -18,14 +18,16 @@ Wakou Aoyama <wakou@ruby-lang.org>
 
   require "cgi"
   cgi = CGI.new
-  values = cgi['field_name']   # <== array of 'field_name'
-    # if not 'field_name' included, then return [].
+  value = cgi['field_name']   # <== value string for 'field_name'
+    # if not 'field_name' included, then return "".
   fields = cgi.keys            # <== array of field names
 
   # returns true if form has 'field_name'
   cgi.has_key?('field_name')
   cgi.has_key?('field_name')
   cgi.include?('field_name')
+
+CAUTION! cgi['field_name'] retuen Array with old cgi.rb(included ruby 1.6)
 
 
 === GET FORM VALUES AS HASH
@@ -64,13 +66,13 @@ cgi.params is a hash.
 
   require "cgi"
   cgi = CGI.new
-  values = cgi['field_name']   # <== array of 'field_name'
-  values[0].read               # <== body of values[0]
-  values[0].local_path         # <== path to local file of values[0]
-  values[0].original_filename  # <== original filename of values[0]
-  values[0].content_type       # <== content_type of values[0]
+  value = cgi['field_name']   # <== value string for 'field_name'
+  value.read                  # <== body of value
+  value.local_path            # <== path to local file of value
+  value.original_filename     # <== original filename of value
+  value.content_type          # <== content_type of value
 
-and values[0] has StringIO or Tempfile class methods.
+and value has StringIO or Tempfile class methods.
 
 
 === GET COOKIE VALUES
@@ -182,7 +184,7 @@ class CGI
   CR  = "\015"
   LF  = "\012"
   EOL = CR + LF
-  REVISION = '$Id: cgi.rb,v 1.1.1.2 2003/05/14 13:58:48 melville Exp $'
+  REVISION = '$Id: cgi.rb,v 1.1.1.3 2003/10/15 10:11:48 melville Exp $'
 
   NEEDS_BINMODE = true if /WIN/ni.match(RUBY_PLATFORM)
   PATH_SEPARATOR = {'UNIX'=>'/', 'WINDOWS'=>'\\', 'MACINTOSH'=>':'}
@@ -492,10 +494,10 @@ status:
     if defined?(MOD_RUBY)
       table = Apache::request.headers_out
       buf.scan(/([^:]+): (.+)#{EOL}/n){ |name, value|
-        $stderr.printf("name:%s value:%s\n", name, value) if $DEBUG
+        warn sprintf("name:%s value:%s\n", name, value) if $DEBUG
         case name
         when 'Set-Cookie'
-          table.add($1, $2)
+          table.add(name, value)
         when /^status$/ni
           Apache::request.status_line = value
           Apache::request.status = value.to_i
@@ -698,7 +700,7 @@ convert string charset, and set language to "ja".
     cookies = Hash.new([])
     return cookies unless raw_cookie
 
-    raw_cookie.split('; ').each do |pairs|
+    raw_cookie.split(/; /).each do |pairs|
       name, values = pairs.split('=',2)
       name = CGI::unescape(name)
       values ||= ""
@@ -798,7 +800,7 @@ convert string charset, and set language to "ja".
           body = Tempfile.new("CGI")
         else
           begin
-            require "stringio" if not defined? StringIO
+            require "stringio"
             body = StringIO.new
           rescue LoadError
             require "tempfile"
@@ -915,6 +917,7 @@ convert string charset, and set language to "ja".
       if ("POST" == env_table['REQUEST_METHOD']) and
          %r|\Amultipart/form-data.*boundary=\"?([^\";,]+)\"?|n.match(env_table['CONTENT_TYPE'])
         boundary = $1.dup
+        @multipart = true
         @params = read_multipart(boundary, Integer(env_table['CONTENT_LENGTH']))
       else
         @params = CGI::parse(
@@ -939,8 +942,42 @@ convert string charset, and set language to "ja".
     end
     private :initialize_query
 
-    def [](*args)
-      @params[*args]
+    class Value < String
+      def initialize(str, params)
+        @params = params
+        super(str)
+      end
+      def [](idx)
+        warn "#{caller(1)[0]}:CAUTION! cgi['key'] == cgi.params['key'][0]; if want Array, use cgi.params['key']"
+        self
+      end
+      def first
+        warn "#{caller(1)[0]}:CAUTION! cgi['key'] == cgi.params['key'][0]; if want Array, use cgi.params['key']"
+        self
+      end
+      alias last first
+      def to_a
+        @params
+      end
+      def to_ary                # to be rhs of multiple assignment
+        @params
+      end
+    end
+
+    def [](key)
+      params = @params[key]
+      value = params[0]
+      if @multipart
+        if value
+          return value
+        elsif defined? StringIO
+          StringIO.new("")
+        else
+          Tempfile.new("CGI")
+        end
+      else
+        Value.new(value || "", params)
+      end
     end
 
     def keys(*args)
@@ -1906,6 +1943,7 @@ The hash keys are case sensitive. Ask the samples.
     end
 
     extend QueryExtension
+    @multipart = false
     if "POST" != env_table['REQUEST_METHOD']
       initialize_query()  # set @params, @cookies
     else

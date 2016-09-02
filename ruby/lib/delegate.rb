@@ -19,32 +19,36 @@
 class Delegator
 
   def initialize(obj)
-    preserved = ::Kernel.instance_methods
+    preserved = ::Kernel.public_instance_methods(false)
     preserved -= ["to_s","to_a","inspect","==","=~","==="]
-    for t in self.type.ancestors
-      preserved |= t.instance_methods
-      preserved |= t.private_instance_methods
-      preserved |= t.protected_instance_methods
+    for t in self.class.ancestors
+      preserved |= t.public_instance_methods(false)
+      preserved |= t.private_instance_methods(false)
+      preserved |= t.protected_instance_methods(false)
       break if t == Delegator
     end
     for method in obj.methods
       next if preserved.include? method
-      eval <<-EOS
-	def self.#{method}(*args, &block)
-	  begin
-	    __getobj__.__send__(:#{method}, *args, &block)
-	  rescue Exception
-	    $@.delete_if{|s| /:in `__getobj__'$/ =~ s} #`
-	    $@.delete_if{|s| /^\\(eval\\):/ =~ s}
-	    raise
+      begin
+	eval <<-EOS
+	  def self.#{method}(*args, &block)
+	    begin
+	      __getobj__.__send__(:#{method}, *args, &block)
+	    rescue Exception
+	      $@.delete_if{|s| /:in `__getobj__'$/ =~ s} #`
+	      $@.delete_if{|s| /^\\(eval\\):/ =~ s}
+	      raise
+	    end
 	  end
-	end
-      EOS
+	EOS
+      rescue SyntaxError
+        raise NameError, "invalid identifier %s" % method, caller(4)
+      end
     end
   end
 
   def __getobj__
-    raise NotImplementError, "need to define `__getobj__'"
+    raise NotImplementedError, "need to define `__getobj__'"
   end
 
 end
@@ -72,8 +76,8 @@ SimpleDelegater = SimpleDelegator
 #
 def DelegateClass(superclass)
   klass = Class.new
-  methods = superclass.instance_methods(true)
-  methods -= ::Kernel.instance_methods
+  methods = superclass.public_instance_methods(true)
+  methods -= ::Kernel.public_instance_methods(false)
   methods |= ["to_s","to_a","inspect","==","=~","==="]
   klass.module_eval <<-EOS
   def initialize(obj)
@@ -81,8 +85,9 @@ def DelegateClass(superclass)
   end
   EOS
   for method in methods
-    klass.module_eval <<-EOS
-	def #{method}(*args, &block)
+    begin
+      klass.module_eval <<-EOS
+        def #{method}(*args, &block)
 	  begin
 	    @obj.__send__(:#{method}, *args, &block)
 	  rescue
@@ -90,10 +95,13 @@ def DelegateClass(superclass)
 	    raise
 	  end
 	end
-	EOS
-      end
-    return klass;
+      EOS
+    rescue SyntaxError
+      raise NameError, "invalid identifier %s" % method, caller(3)
+    end
   end
+  return klass;
+end
 
 if __FILE__ == $0
   class ExtArray<DelegateClass(Array)
@@ -103,7 +111,7 @@ if __FILE__ == $0
   end
 
   ary = ExtArray.new
-  p ary.type
+  p ary.class
   ary.push 25
   p ary
 

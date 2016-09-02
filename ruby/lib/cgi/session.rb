@@ -3,7 +3,7 @@
 # Copyright (C) 2000  Information-technology Promotion Agency, Japan
 
 require 'cgi'
-require 'final'
+require 'tmpdir'
 
 class CGI
   class Session
@@ -12,7 +12,7 @@ class CGI
 
     def Session::callback(dbman)
       lambda{
-	dbman.close
+	dbman[0].close unless dbman.empty?
       }
     end
 
@@ -28,15 +28,17 @@ class CGI
 
     def initialize(request, option={})
       session_key = option['session_key'] || '_session_id'
-      id, = option['session_id']
+      id = option['session_id']
       unless id
 	if option['new_session']
 	  id = Session::create_new_id
 	end
       end
       unless id
-	id, = request[session_key]
-        id = id.read if id.respond_to?(:read)
+	if request.key?(session_key)
+	  id = request[session_key] 
+	  id = id.read if id.respond_to?(:read)
+	end
 	unless id
 	  id, = request.cookies[session_key]
 	end
@@ -55,6 +57,9 @@ class CGI
 	@output_cookies =  [
           Cookie::new("name" => session_key,
 		      "value" => id,
+		      "expires" => option['session_expires'],
+		      "domain" => option['session_domain'],
+		      "secure" => option['session_secure'],
 		      "path" => if option['session_path'] then
 				  option['session_path']
 		                elsif ENV["SCRIPT_NAME"] then
@@ -64,7 +69,8 @@ class CGI
 				end)
         ]
       end
-      ObjectSpace::define_finalizer(self, Session::callback(@dbman))
+      @dbprot = [@dbman]
+      ObjectSpace::define_finalizer(self, Session::callback(@dbprot))
     end
 
     def [](key)
@@ -81,7 +87,7 @@ class CGI
       unless @data
 	@data = @dbman.restore
       end
-      @data[key] = String(val)
+      @data[key] = val
     end
 
     def update
@@ -90,10 +96,12 @@ class CGI
 
     def close
       @dbman.close
+      @dbprot.clear
     end
 
     def delete
       @dbman.delete
+      @dbprot.clear
     end
 
     class FileStore
@@ -102,7 +110,7 @@ class CGI
       end
 
       def initialize(session, option={})
-	dir = option['tmpdir'] || ENV['TMP'] || '/tmp'
+	dir = option['tmpdir'] || Dir::tmpdir
 	prefix = option['prefix'] || ''
 	id = session.session_id
 	unless check_id(id)
@@ -138,7 +146,7 @@ class CGI
 	return unless @hash
 	@f.rewind
 	for k,v in @hash
-	  @f.printf "%s=%s\n", CGI::escape(k), CGI::escape(v)
+	  @f.printf "%s=%s\n", CGI::escape(k), CGI::escape(String(v))
 	end
 	@f.truncate @f.tell
       end

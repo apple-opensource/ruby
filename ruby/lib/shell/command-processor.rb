@@ -1,8 +1,8 @@
 #
 #   shell/command-controller.rb - 
 #   	$Release Version: 0.6.0 $
-#   	$Revision: 1.1.1.1 $
-#   	$Date: 2002/05/27 17:59:49 $
+#   	$Revision: 1.1.1.2 $
+#   	$Date: 2003/10/15 10:11:49 $
 #   	by Keiju ISHITSUKA(Nippon Rational Inc.)
 #
 # --
@@ -31,7 +31,7 @@ class Shell
       install_builtin_commands
 
       # define CommandProccessor#methods to Shell#methods and Filter#methods
-      for m in CommandProcessor.instance_methods - NoDelegateMethods
+      for m in CommandProcessor.instance_methods(false) - NoDelegateMethods
 	add_delegate_command_to_shell(m)
       end
       
@@ -49,7 +49,7 @@ class Shell
       rescue LoadError, Errno::ENOENT
       rescue
 	print "load error: #{rc}\n"
-	print $!.type, ": ", $!, "\n"
+	print $!.class, ": ", $!, "\n"
 	for err in $@[0, $@.size - 2]
 	  print "\t", err, "\n"
 	end
@@ -277,7 +277,7 @@ class Shell
       when IO
 	AppendIO.new(@shell, to, filter)
       else
-	Shell.Fail CanNotMethodApply, "append", to.type
+	Shell.Fail CantApplyMethod, "append", to.class
       end
     end
 
@@ -558,7 +558,7 @@ class Shell
 
       # method related FileTest
       def_builtin_commands(FileTest, 
-		   FileTest.singleton_methods.collect{|m| [m, ["FILENAME"]]})
+		   FileTest.singleton_methods(false).collect{|m| [m, ["FILENAME"]]})
 
       # method related ftools
       normal_delegation_ftools_methods = [
