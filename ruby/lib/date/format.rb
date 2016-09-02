@@ -1,5 +1,7 @@
-# format.rb: Written by Tadayoshi Funaba 1999-2003
-# $Id: format.rb,v 1.1.1.1 2003/10/15 10:11:49 melville Exp $
+# format.rb: Written by Tadayoshi Funaba 1999-2004
+# $Id: format.rb,v 2.14 2004-11-06 10:58:40+09 tadf Exp $
+
+require 'rational'
 
 class Date
 
@@ -182,6 +184,12 @@ class Date
 	return unless str.sub!(/\A%/o, '')
       when '%+'
 	return unless __strptime(str, '%a %b %e %H:%M:%S %Z %Y', elem)
+=begin
+      when '%.'
+	return unless str.sub!(/\A(\d+)/o, '')
+	val = $1.to_i.to_r / (10**$1.size)
+	elem[:sec_fraction] = val
+=end
       when '%1'
 	return unless str.sub!(/\A(\d+)/o, '')
 	val = $1.to_i
@@ -227,7 +235,7 @@ class Date
   def self._parse(str, comp=false)
     str = str.dup
 
-    str.gsub!(/[^-+.\/:0-9a-z]+/ino, ' ')
+    str.gsub!(/[^-+,.\/:0-9a-z]+/ino, ' ')
 
     # day
     if str.sub!(/(#{PARSE_DAYPAT})\S*/ino, ' ')
@@ -236,7 +244,10 @@ class Date
 
     # time
     if str.sub!(
-		/(\d+):(\d+)(?::(\d+))?
+		/(\d+):(\d+)
+		 (?:
+		   :(\d+)(?:[,.](\d*))?
+		 )?
 		 (?:
 		   \s*
 		   ([ap])(?:m\b|\.m\.)
@@ -254,15 +265,20 @@ class Date
       hour = $1.to_i
       min = $2.to_i
       sec = $3.to_i if $3
-
       if $4
+	sec_fraction = $4.to_i.to_r / (10**$4.size)
+      end
+
+      if $5
 	hour %= 12
-	if $4.downcase == 'p'
+	if $5.downcase == 'p'
 	  hour += 12
 	end
       end
 
-      zone = $5
+      if $6
+	zone = $6
+      end
     end
 
     # eu
@@ -356,7 +372,7 @@ class Date
 	end
       end
 
-      if $1.size > 2
+      if $3 && $1.size > 2
 	comp = false
 	year, mon, mday = mon, mday, year
       end
@@ -368,7 +384,7 @@ class Date
 		      \s*
 		      T?
 		      \s*
-		      (\d{2,6})
+		      (\d{2,6})(?:[,.](\d*))?
 		    )?
 		    (?:
 		      \s*
@@ -406,7 +422,12 @@ class Date
 	  sec  = $3[ 4, 2].to_i if $3.size >= 6
 	end
       end
-      zone = $4
+      if $4
+	sec_fraction = $4.to_i.to_r / (10**$4.size)
+      end
+      if $5
+	zone = $5
+      end
     end
 
     if str.sub!(/\b(bc\b|bce\b|b\.c\.|b\.c\.e\.)/ino, ' ')
@@ -432,6 +453,7 @@ class Date
     elem[:hour] = hour if hour
     elem[:min] = min if min
     elem[:sec] = sec if sec
+    elem[:sec_fraction] = sec_fraction if sec_fraction
     elem[:zone] = zone if zone
     offset = zone_to_diff(zone) if zone
     elem[:offset] = offset if offset
@@ -501,10 +523,20 @@ class Date
       when '%x'; o << strftime('%m/%d/%y')
       when '%Y'; o << '%.4d' %  year
       when '%y'; o << '%02d' % (year % 100)
-      when '%Z'; o << zone
-      when '%z'; o << zone					# ID
+      when '%Z'; o << (if offset.zero? then 'Z' else strftime('%z') end)
+      when '%z'							# ID
+	o << if offset < 0 then '-' else '+' end
+	of = offset.abs
+	hh, fr = of.divmod(1.to_r/24)
+	mm = fr / (1.to_r/1440)
+	o << '%02d' % hh
+	o << '%02d' % mm
       when '%%'; o << '%'
       when '%+'; o << strftime('%a %b %e %H:%M:%S %Z %Y')	# TZ
+=begin
+      when '%.'
+	o << '%06d' % (sec_fraction / (1.to_r/86400/(10**6)))
+=end
       when '%1'; o <<   '%d' % jd
       when '%2'; o << strftime('%Y-%j')
       when '%3'; o << strftime('%Y-%m-%d')

@@ -2,8 +2,8 @@
 
   rubysig.h -
 
-  $Author: melville $
-  $Date: 2003/10/15 10:11:46 $
+  $Author: nobu $
+  $Date: 2004/12/06 08:19:20 $
   created at: Wed Aug 16 01:15:38 JST 1995
 
   Copyright (C) 1993-2003 Yukihiro Matsumoto
@@ -12,6 +12,7 @@
 
 #ifndef SIG_H
 #define SIG_H
+#include <errno.h>
 
 #ifdef _WIN32
 typedef LONG rb_atomic_t;
@@ -23,9 +24,13 @@ typedef LONG rb_atomic_t;
 
 /* Windows doesn't allow interrupt while system calls */
 # define TRAP_BEG do {\
+    int saved_errno = 0;\
     rb_atomic_t trap_immediate = ATOMIC_SET(rb_trap_immediate, 1)
 # define TRAP_END\
-	ATOMIC_SET(rb_trap_immediate, trap_immediate);\
+    ATOMIC_SET(rb_trap_immediate, trap_immediate);\
+    saved_errno = errno;\
+    CHECK_INTS;\
+    errno = saved_errno;\
 } while (0)
 # define RUBY_CRITICAL(statements) do {\
     rb_w32_enter_critical();\
@@ -41,9 +46,13 @@ typedef int rb_atomic_t;
 # define ATOMIC_DEC(var) (--(var))
 
 # define TRAP_BEG do {\
+    int saved_errno = 0;\
     int trap_immediate = rb_trap_immediate;\
     rb_trap_immediate = 1
 # define TRAP_END rb_trap_immediate = trap_immediate;\
+    saved_errno = errno;\
+    CHECK_INTS;\
+    errno = saved_errno;\
 } while (0)
 
 # define RUBY_CRITICAL(statements) do {\
@@ -70,7 +79,7 @@ void rb_trap_restore_mask _((void));
 
 RUBY_EXTERN int rb_thread_critical;
 void rb_thread_schedule _((void));
-#if defined(HAVE_SETITIMER) && !defined(__BOW__)
+#if defined(HAVE_SETITIMER)
 RUBY_EXTERN int rb_thread_pending;
 # define CHECK_INTS do {\
     if (!rb_prohibit_interrupt) {\

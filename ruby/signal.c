@@ -2,8 +2,8 @@
 
   signal.c -
 
-  $Author: melville $
-  $Date: 2003/10/15 10:11:46 $
+  $Author: nobu $
+  $Date: 2004/06/29 01:31:37 $
   created at: Tue Dec 20 10:13:44 JST 1994
 
   Copyright (C) 1993-2003 Yukihiro Matsumoto
@@ -191,6 +191,37 @@ signo2signm(no)
     return 0;
 }
 
+const char *
+ruby_signal_name(no)
+    int no;
+{
+    return signo2signm(no);
+}
+
+/*
+ *  call-seq:
+ *     Process.kill(signal, pid, ...)    => fixnum
+ *  
+ *  Sends the given signal to the specified process id(s), or to the
+ *  current process if _pid_ is zero. _signal_ may be an
+ *  integer signal number or a POSIX signal name (either with or without
+ *  a +SIG+ prefix). If _signal_ is negative (or starts
+ *  with a minus sign), kills process groups instead of
+ *  processes. Not all signals are available on all platforms.
+ *     
+ *     pid = fork do
+ *        Signal.trap("HUP") { puts "Ouch!"; exit }
+ *        # ... do some work ...
+ *     end
+ *     # ...
+ *     Process.kill("HUP", pid)
+ *     Process.wait
+ *     
+ *  <em>produces:</em>
+ *     
+ *     Ouch!
+ */
+
 VALUE
 rb_f_kill(argc, argv)
     int argc;
@@ -267,7 +298,10 @@ rb_f_kill(argc, argv)
     return INT2FIX(i-1);
 }
 
-static VALUE trap_list[NSIG];
+static struct {
+    VALUE cmd;
+    int safe;
+} trap_list[NSIG];
 static rb_atomic_t trap_pending_list[NSIG];
 rb_atomic_t rb_trap_pending;
 rb_atomic_t rb_trap_immediate;
@@ -280,8 +314,8 @@ rb_gc_mark_trap_list()
     int i;
 
     for (i=0; i<NSIG; i++) {
-	if (trap_list[i])
-	    rb_gc_mark(trap_list[i]);
+	if (trap_list[i].cmd)
+	    rb_gc_mark(trap_list[i].cmd);
     }
 #endif /* MACOS_UNUSE_SIGNAL */
 }
@@ -335,7 +369,7 @@ static void
 signal_exec(sig)
     int sig;
 {
-    if (trap_list[sig] == 0) {
+    if (trap_list[sig].cmd == 0) {
 	switch (sig) {
 	  case SIGINT:
 	    rb_thread_interrupt();
@@ -360,7 +394,7 @@ signal_exec(sig)
 	}
     }
     else {
-	rb_thread_trap_eval(trap_list[sig], sig);
+	rb_thread_trap_eval(trap_list[sig].cmd, sig, trap_list[sig].safe);
     }
 }
 
@@ -427,11 +461,11 @@ void
 rb_trap_exit()
 {
 #ifndef MACOS_UNUSE_SIGNAL
-    if (trap_list[0]) {
-	VALUE trap_exit = trap_list[0];
+    if (trap_list[0].cmd) {
+	VALUE trap_exit = trap_list[0].cmd;
 
-	trap_list[0] = 0;
-	rb_eval_cmd(trap_exit, rb_ary_new3(1, INT2FIX(0)), 0);
+	trap_list[0].cmd = 0;
+	rb_eval_cmd(trap_exit, rb_ary_new3(1, INT2FIX(0)), trap_list[0].safe);
     }
 #endif
 }
@@ -524,7 +558,7 @@ trap(arg)
 
     switch (TYPE(arg->sig)) {
       case T_FIXNUM:
-	sig = NUM2INT(arg->sig);
+	sig = FIX2INT(arg->sig);
 	break;
 
       case T_SYMBOL:
@@ -546,7 +580,7 @@ trap(arg)
     if (sig < 0 || sig > NSIG) {
 	rb_raise(rb_eArgError, "invalid signal number (%d)", sig);
     }
-#if defined(HAVE_SETITIMER) && !defined(__BOW__)
+#if defined(HAVE_SETITIMER)
     if (sig == SIGVTALRM) {
 	rb_raise(rb_eArgError, "SIGVTALRM reserved for Thread; cannot set handler");
     }
@@ -589,14 +623,15 @@ trap(arg)
 	}
     }
     oldfunc = ruby_signal(sig, func);
-    oldcmd = trap_list[sig];
+    oldcmd = trap_list[sig].cmd;
     if (!oldcmd) {
 	if (oldfunc == SIG_IGN) oldcmd = rb_str_new2("IGNORE");
 	else if (oldfunc == sighandler) oldcmd = rb_str_new2("DEFAULT");
 	else oldcmd = Qnil;
     }
 
-    trap_list[sig] = command;
+    trap_list[sig].cmd = command;
+    trap_list[sig].safe = ruby_safe_level;
     /* enable at least specified signal. */
 #ifndef _WIN32
 #ifdef HAVE_SIGPROCMASK
@@ -636,6 +671,34 @@ rb_trap_restore_mask()
 #endif
 }
 
+/*
+ * call-seq:
+ *   Signal.trap( signal, proc ) => obj
+ *   Signal.trap( signal ) {| | block } => obj
+ *
+ * Specifies the handling of signals. The first parameter is a signal
+ * name (a string such as ``SIGALRM'', ``SIGUSR1'', and so on) or a
+ * signal number. The characters ``SIG'' may be omitted from the
+ * signal name. The command or block specifies code to be run when the
+ * signal is raised. If the command is the string ``IGNORE'' or
+ * ``SIG_IGN'', the signal will be ignored. If the command is
+ * ``DEFAULT'' or ``SIG_DFL'', the operating system's default handler
+ * will be invoked. If the command is ``EXIT'', the script will be
+ * terminated by the signal. Otherwise, the given command or block
+ * will be run.
+ * The special signal name ``EXIT'' or signal number zero will be
+ * invoked just prior to program termination.
+ * trap returns the previous handler for the given signal.
+ *
+ *     Signal.trap(0, proc { puts "Terminating: #{$$}" })
+ *     Signal.trap("CLD")  { puts "Child died" }
+ *     fork && Process.wait
+ *
+ * produces:
+ *     Terminating: 27461
+ *     Child died
+ *     Terminating: 27460
+ */
 static VALUE
 sig_trap(argc, argv)
     int argc;
@@ -674,6 +737,15 @@ sig_trap(argc, argv)
 #endif
 }
 
+/*
+ * call-seq:
+ *   Signal.list => a_hash
+ *
+ * Returns a list of signal names mapped to the corresponding
+ * underlying signal numbers.
+ *
+ * Signal.list   #=> {"ABRT"=>6, "ALRM"=>14, "BUS"=>7, "CHLD"=>17, "CLD"=>17, "CONT"=>18, "FPE"=>8, "HUP"=>1, "ILL"=>4, "INT"=>2, "IO"=>29, "IOT"=>6, "KILL"=>9, "PIPE"=>13, "POLL"=>29, "PROF"=>27, "PWR"=>30, "QUIT"=>3, "SEGV"=>11, "STOP"=>19, "SYS"=>31, "TERM"=>15, "TRAP"=>5, "TSTP"=>20, "TTIN"=>21, "TTOU"=>22, "URG"=>23, "USR1"=>10, "USR2"=>12, "VTALRM"=>26, "WINCH"=>28, "XCPU"=>24, "XFSZ"=>25}
+ */
 static VALUE
 sig_list()
 {
@@ -699,6 +771,85 @@ install_sighandler(signum, handler)
     }
 }
 
+static void
+init_sigchld(sig)
+    int sig;
+{
+    sighandler_t oldfunc;
+#ifndef _WIN32
+# ifdef HAVE_SIGPROCMASK
+    sigset_t mask;
+# else
+    int mask;
+# endif
+#endif
+
+#ifndef _WIN32
+    /* disable interrupt */
+# ifdef HAVE_SIGPROCMASK
+    sigfillset(&mask);
+    sigprocmask(SIG_BLOCK, &mask, &mask);
+# else
+    mask = sigblock(~0);
+# endif
+#endif
+
+    oldfunc = ruby_signal(sig, SIG_DFL);
+    if (oldfunc != SIG_DFL && oldfunc != SIG_IGN) {
+	ruby_signal(sig, oldfunc);
+    } else {
+	trap_list[sig].cmd = 0;
+    }
+
+#ifndef _WIN32
+#ifdef HAVE_SIGPROCMASK
+    sigdelset(&mask, sig);
+    sigprocmask(SIG_SETMASK, &mask, NULL);
+#else
+    mask &= ~sigmask(sig);
+    sigsetmask(mask);
+#endif
+    trap_last_mask = mask;
+#endif
+}
+
+/*
+ * Many operating systems allow signals to be sent to running
+ * processes. Some signals have a defined effect on the process, while
+ * others may be trapped at the code level and acted upon. For
+ * example, your process may trap the USR1 signal and use it to toggle
+ * debugging, and may use TERM to initiate a controlled shutdown.
+ *
+ *     pid = fork do
+ *       Signal.trap("USR1") do
+ *         $debug = !$debug
+ *         puts "Debug now: #$debug"
+ *       end
+ *       Signal.trap("TERM") do
+ *         puts "Terminating..."
+ *         shutdown()
+ *       end
+ *       # . . . do some work . . .
+ *     end
+ *
+ *     Process.detach(pid)
+ *
+ *     # Controlling program:
+ *     Process.kill("USR1", pid)
+ *     # ...
+ *     Process.kill("USR1", pid)
+ *     # ...
+ *     Process.kill("TERM", pid)
+ *
+ * produces:
+ *     Debug now: true
+ *     Debug now: false
+ *    Terminating...
+ *
+ * The list of available signal names and their interpretation is
+ * system dependent. Signal delivery semantics may also vary between
+ * systems; in particular signal delivery may not always be reliable.
+ */
 void
 Init_signal()
 {
@@ -735,5 +886,13 @@ Init_signal()
 #ifdef SIGPIPE
     install_sighandler(SIGPIPE, sigpipe);
 #endif
+
+#ifdef SIGCLD
+    init_sigchld(SIGCLD);
+#endif
+#ifdef SIGCHLD
+    init_sigchld(SIGCHLD);
+#endif
+
 #endif /* MACOS_UNUSE_SIGNAL */
 }

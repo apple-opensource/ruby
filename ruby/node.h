@@ -2,8 +2,8 @@
 
   node.h -
 
-  $Author: melville $
-  $Date: 2003/10/15 10:11:46 $
+  $Author: nobu $
+  $Date: 2004/10/02 11:34:29 $
   created at: Fri May 28 15:14:02 JST 1993
 
   Copyright (C) 1993-2003 Yukihiro Matsumoto
@@ -87,9 +87,8 @@ enum node_type {
     NODE_ARGS,
     NODE_ARGSCAT,
     NODE_ARGSPUSH,
-    NODE_RESTARY,
-    NODE_RESTARY2,
     NODE_SPLAT,
+    NODE_TO_ARY,
     NODE_SVALUE,
     NODE_BLOCK_ARG,
     NODE_BLOCK_PASS,
@@ -285,7 +284,7 @@ typedef struct RNode {
 #define NEW_OP_ASGN_AND(i,val) NEW_NODE(NODE_OP_ASGN_AND,i,val,0)
 #define NEW_GVAR(v) NEW_NODE(NODE_GVAR,v,0,rb_global_entry(v))
 #define NEW_LVAR(v) NEW_NODE(NODE_LVAR,v,0,local_cnt(v))
-#define NEW_DVAR(v) NEW_NODE(NODE_DVAR,v,0,0);
+#define NEW_DVAR(v) NEW_NODE(NODE_DVAR,v,0,0)
 #define NEW_IVAR(v) NEW_NODE(NODE_IVAR,v,0,0)
 #define NEW_CONST(v) NEW_NODE(NODE_CONST,v,0,0)
 #define NEW_CVAR(v) NEW_NODE(NODE_CVAR,v,0,0)
@@ -296,7 +295,7 @@ typedef struct RNode {
 #define NEW_MATCH3(r,n2) NEW_NODE(NODE_MATCH3,r,n2,0)
 #define NEW_LIT(l) NEW_NODE(NODE_LIT,l,0,0)
 #define NEW_STR(s) NEW_NODE(NODE_STR,s,0,0)
-#define NEW_DSTR(s) NEW_NODE(NODE_DSTR,s,0,0)
+#define NEW_DSTR(s) NEW_NODE(NODE_DSTR,s,1,0)
 #define NEW_XSTR(s) NEW_NODE(NODE_XSTR,s,0,0)
 #define NEW_DXSTR(s) NEW_NODE(NODE_DXSTR,s,0,0)
 #define NEW_DSYM(s) NEW_NODE(NODE_DSYM,s,0,0)
@@ -309,9 +308,8 @@ typedef struct RNode {
 #define NEW_ARGS(f,o,r) NEW_NODE(NODE_ARGS,o,r,f)
 #define NEW_ARGSCAT(a,b) NEW_NODE(NODE_ARGSCAT,a,b,0)
 #define NEW_ARGSPUSH(a,b) NEW_NODE(NODE_ARGSPUSH,a,b,0)
-#define NEW_RESTARY(a) NEW_NODE(NODE_RESTARY,a,0,0)
-#define NEW_RESTARY2(a) NEW_NODE(NODE_RESTARY2,a,0,0)
 #define NEW_SPLAT(a) NEW_NODE(NODE_SPLAT,a,0,0)
+#define NEW_TO_ARY(a) NEW_NODE(NODE_TO_ARY,a,0,0)
 #define NEW_SVALUE(a) NEW_NODE(NODE_SVALUE,a,0,0)
 #define NEW_BLOCK_ARG(v) NEW_NODE(NODE_BLOCK_ARG,v,0,local_cnt(v))
 #define NEW_BLOCK_PASS(b) NEW_NODE(NODE_BLOCK_PASS,0,b,0)
@@ -353,6 +351,8 @@ NODE *rb_compile_file _((const char*, VALUE, int));
 
 void rb_add_method _((VALUE, ID, NODE *, int));
 NODE *rb_node_newnode _((enum node_type,VALUE,VALUE,VALUE));
+
+NODE* rb_method_node _((VALUE klass, ID id));
 
 struct global_entry *rb_global_entry _((ID));
 VALUE rb_gvar_get _((struct global_entry *));

@@ -10,7 +10,6 @@
 #     to_d      ... to BigDecimal
 #
 #   BigDecimal#
-#     to_digits ... to xxxxx.yyyy form digit string(not 0.zzzE?? form).
 #     to_r      ... to Rational
 #
 #   Rational#
@@ -20,30 +19,26 @@
 #
 class Float < Numeric
   def to_d
-    BigFloat::new(selt.to_s)
+    BigDecimal(self.to_s)
   end
 end
 
 class String
   def to_d
-    BigDecimal::new(self)
+    BigDecimal(self)
   end
 end
 
 class BigDecimal < Numeric
   # to "nnnnnn.mmm" form digit string
+  # Use BigDecimal#to_s("F") instead.
   def to_digits
-     if self.nan? || self.infinite?
+     if self.nan? || self.infinite? || self.zero?
         self.to_s
      else
-       s,i,y,z = self.fix.split
+       i       = self.to_i.to_s
        s,f,y,z = self.frac.split
-       if s > 0
-         s = ""
-       else
-         s = "-"
-       end
-       s + i + "." + f
+       i + "." + ("0"*(-z)) + f
      end
   end
 

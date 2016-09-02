@@ -1,5 +1,5 @@
 /*
- * $Id: ossl.h,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+ * $Id: ossl.h,v 1.14 2003/12/11 12:29:08 gotoyuzo Exp $
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2001-2002  Michal Rokos <m.rokos@sh.cvut.cz>
  * All rights reserved.
@@ -16,31 +16,44 @@ extern "C" {
 #endif
 
 /*
- * Check the Ruby version and OpenSSL
+ * Check the OpenSSL version
  * The only supported are:
- * 	Ruby >= 1.7.2
  * 	OpenSSL >= 0.9.7
  */
-#include <version.h>
 #include <openssl/opensslv.h>
 
-#if defined(NT) || defined(_WIN32)
+#ifdef HAVE_ASSERT_H
+#  include <assert.h>
+#else
+#  define assert(condition)
+#endif
+
+#if defined(_WIN32)
 #  define OpenFile WINAPI_OpenFile
+#  define OSSL_NO_CONF_API 1
 #endif
 #include <errno.h>
 #include <openssl/err.h>
 #include <openssl/asn1_mac.h>
 #include <openssl/x509v3.h>
 #include <openssl/ssl.h>
+#include <openssl/pkcs12.h>
+#include <openssl/pkcs7.h>
 #include <openssl/hmac.h>
 #include <openssl/rand.h>
+#include <openssl/conf.h>
+#include <openssl/conf_api.h>
 #undef X509_NAME
 #undef PKCS7_SIGNER_INFO
+#if defined(HAVE_OPENSSL_ENGINE_H) && !defined(OPENSSL_NO_ENGINE)
+#  define OSSL_ENGINE_ENABLED
+#  include <openssl/engine.h>
+#endif
 #if defined(HAVE_OPENSSL_OCSP_H)
 #  define OSSL_OCSP_ENABLED
 #  include <openssl/ocsp.h>
 #endif
-#if defined(NT) || defined(_WIN32)
+#if defined(_WIN32)
 #  undef OpenFile
 #endif
 
@@ -87,18 +100,6 @@ extern VALUE eOSSLError;
 } while (0)
 
 /*
- * ASN1_DATE conversions
- */
-VALUE asn1time_to_time(ASN1_TIME *);
-time_t time_to_time_t(VALUE);
-
-/*
- * ASN1_INTEGER conversions
- */
-VALUE asn1integer_to_num(ASN1_INTEGER *);
-ASN1_INTEGER *num_to_asn1integer(VALUE, ASN1_INTEGER *);
-
-/*
  * String to HEXString conversion
  */
 int string2hex(char *, int, char **, int *);
@@ -106,12 +107,20 @@ int string2hex(char *, int, char **, int *);
 /*
  * Data Conversion
  */
-BIO *ossl_obj2bio(VALUE);
-BIO *ossl_protect_obj2bio(VALUE,int*);
-VALUE ossl_membio2str(BIO*);
-VALUE ossl_protect_membio2str(BIO*,int*);
+STACK_OF(X509) *ossl_x509_ary2sk0(VALUE);
 STACK_OF(X509) *ossl_x509_ary2sk(VALUE);
 STACK_OF(X509) *ossl_protect_x509_ary2sk(VALUE,int*);
+VALUE ossl_x509_sk2ary(STACK_OF(X509) *certs);
+VALUE ossl_x509crl_sk2ary(STACK_OF(X509_CRL) *crl);
+VALUE ossl_buf2str(char *buf, int len);
+#define ossl_str_adjust(str, p) \
+do{\
+    int len = RSTRING(str)->len;\
+    int newlen = (p) - (unsigned char*)RSTRING(str)->ptr;\
+    assert(newlen <= len);\
+    RSTRING(str)->len = newlen;\
+    RSTRING(str)->ptr[newlen] = 0;\
+}while(0)
 
 /*
  * our default PEM callback
@@ -137,6 +146,13 @@ struct ossl_verify_cb_args {
 
 VALUE ossl_call_verify_cb_proc(struct ossl_verify_cb_args *);
 int ossl_verify_cb(int, X509_STORE_CTX *);
+
+/*
+ * String to DER String
+ */
+extern ID ossl_s_to_der;
+VALUE ossl_to_der(VALUE);
+VALUE ossl_to_der_if_possible(VALUE);
 
 /*
  * Debug
@@ -173,19 +189,23 @@ void ossl_debug(const char *, ...);
  */
 #include "openssl_missing.h"
 #include "ruby_missing.h"
+#include "ossl_asn1.h"
+#include "ossl_bio.h"
 #include "ossl_bn.h"
 #include "ossl_cipher.h"
 #include "ossl_config.h"
 #include "ossl_digest.h"
 #include "ossl_hmac.h"
 #include "ossl_ns_spki.h"
+#include "ossl_ocsp.h"
+#include "ossl_pkcs12.h"
 #include "ossl_pkcs7.h"
 #include "ossl_pkey.h"
 #include "ossl_rand.h"
 #include "ossl_ssl.h"
 #include "ossl_version.h"
 #include "ossl_x509.h"
-#include "ossl_ocsp.h"
+#include "ossl_engine.h"
 
 void Init_openssl(void);
 

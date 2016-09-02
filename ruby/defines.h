@@ -2,8 +2,8 @@
 
   defines.h -
 
-  $Author: melville $
-  $Date: 2003/10/15 10:11:46 $
+  $Author: akiyoshi $
+  $Date: 2004/12/09 07:08:31 $
   created at: Wed May 18 00:21:44 JST 1994
 
 ************************************************/
@@ -82,6 +82,10 @@ void xfree _((void*));
 # define BDIGIT_DBL_SIGNED long
 #endif
 
+#ifdef __CYGWIN__
+#undef _WIN32
+#endif
+
 #if defined(MSDOS) || defined(_WIN32) || defined(__human68k__) || defined(__EMX__)
 #define DOSISH 1
 #ifndef _WIN32_WCE
@@ -98,26 +102,94 @@ void xfree _((void*));
 #endif
 #endif
 
-#ifdef NeXT
-#define DYNAMIC_ENDIAN		/* determine endian at runtime */
-#ifndef __APPLE__
-#define S_IXUSR _S_IXUSR        /* execute/search permission, owner */
+#ifdef __NeXT__
+/* NextStep, OpenStep, Rhapsody */
+#ifndef S_IRUSR
+#define S_IRUSR 0000400        /* read permission, owner */
 #endif
-#define S_IXGRP 0000010         /* execute/search permission, group */
-#define S_IXOTH 0000001         /* execute/search permission, other */
-
-#define HAVE_SYS_WAIT_H         /* configure fails to find this */
+#ifndef S_IRGRP
+#define S_IRGRP 0000040        /* read permission, group */
+#endif
+#ifndef S_IROTH
+#define S_IROTH 0000004        /* read permission, other */
+#endif
+#ifndef S_IWUSR
+#define S_IWUSR 0000200        /* write permission, owner */
+#endif
+#ifndef S_IWGRP
+#define S_IWGRP 0000020        /* write permission, group */
+#endif
+#ifndef S_IWOTH
+#define S_IWOTH 0000002        /* write permission, other */
+#endif
+#ifndef S_IXUSR
+#define S_IXUSR 0000100        /* execute/search permission, owner */
+#endif
+#ifndef S_IXGRP
+#define S_IXGRP 0000010        /* execute/search permission, group */
+#endif
+#ifndef S_IXOTH
+#define S_IXOTH 0000001        /* execute/search permission, other */
+#endif
+#ifndef S_IRWXU
+#define S_IRWXU 0000700        /* read, write, execute permissions, owner */
+#endif
+#ifndef S_IRWXG
+#define S_IRWXG 0000070        /* read, write, execute permissions, group */
+#endif
+#ifndef S_IRWXO
+#define S_IRWXO 0000007        /* read, write, execute permissions, other */
+#endif
+#ifndef S_ISBLK
+#define S_ISBLK(mode)  (((mode) & (0170000)) == (0060000))
+#endif
+#ifndef S_ISCHR
+#define S_ISCHR(mode)  (((mode) & (0170000)) == (0020000))
+#endif
+#ifndef S_ISDIR
+#define S_ISDIR(mode)  (((mode) & (0170000)) == (0040000))
+#endif
+#ifndef S_ISFIFO
+#define S_ISFIFO(mode) (((mode) & (0170000)) == (0010000))
+#endif
+#ifndef S_ISREG
+#define S_ISREG(mode)  (((mode) & (0170000)) == (0100000))
+#endif
+/* Do not trust WORDS_BIGENDIAN from configure since -arch compiler flag may
+   result in a different endian.  Instead trust __BIG_ENDIAN__ and
+   __LITTLE_ENDIAN__ which are set correctly by -arch. */
+#undef WORDS_BIGENDIAN
+#ifdef __BIG_ENDIAN__
+#define WORDS_BIGENDIAN
+#endif
+#ifndef __APPLE__
+/* NextStep, OpenStep (but not Rhapsody) */
+#ifndef GETPGRP_VOID
+#define GETPGRP_VOID 1
+#endif
+#ifndef WNOHANG
+#define WNOHANG 01
+#endif
+#ifndef WUNTRACED
+#define WUNTRACED 02
+#endif
+#ifndef X_OK
+#define X_OK 1
+#endif
+typedef int pid_t;
+#endif /* __APPLE__ */
 #endif /* NeXT */
 
-#ifdef __CYGWIN__
-#undef _WIN32
-#endif
 #ifdef _WIN32
 #include "win32/win32.h"
 #endif
 
 #if defined(__VMS)
-#include "vms/vms.h"
+#include "vms.h"
+#endif
+
+#if defined(__BEOS__)
+#include <net/socket.h> /* intern.h needs fd_set definition */
 #endif
 
 #undef RUBY_EXTERN
@@ -139,18 +211,23 @@ void xfree _((void*));
 static inline void
 flush_register_windows(void)
 {
-# if defined(__sparc_v9__) || defined(__arch64__)
-    asm volatile ("flushw" : :);
+    asm
+#ifdef __GNUC__
+	volatile
+#endif
+# if defined(__sparc_v9__) || defined(__sparcv9) || defined(__arch64__)
+	("flushw")
 # elif defined(linux) || defined(__linux__)
-    asm volatile ("ta  0x83");
+	("ta  0x83")
 # else /* Solaris, OpenBSD, NetBSD, etc. */
-    asm volatile ("ta  0x03");
+	("ta  0x03")
 # endif /* trap always to flush register windows if we are on a Sparc system */
+	;
 }
 #  define FLUSH_REGISTER_WINDOWS flush_register_windows()
 #else
 #  define FLUSH_REGISTER_WINDOWS ((void)0)
-#endif 
+#endif
 
 #if defined(DOSISH)
 #define PATH_SEP ";"
@@ -167,17 +244,8 @@ flush_register_windows(void)
 #define PATH_ENV "PATH"
 #endif
 
-#if defined(DOSISH) || !defined(__human68k__)
+#if defined(DOSISH) && !defined(__human68k__) && !defined(__EMX__)
 #define ENV_IGNORECASE
-#endif
-
-#if defined(__human68k__)
-#undef HAVE_RANDOM
-#undef HAVE_SETITIMER
-#endif
-
-#if defined(DJGPP) || defined(__BOW__)
-#undef HAVE_SETITIMER
 #endif
 
 #ifndef RUBY_PLATFORM

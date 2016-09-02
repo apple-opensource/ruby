@@ -1,5 +1,3 @@
-# :nodoc:
-#
 # Author:: Nathaniel Talbott.
 # Copyright:: Copyright (c) 2000-2002 Nathaniel Talbott. All rights reserved.
 # License:: Ruby license.
@@ -7,6 +5,11 @@
 module Test
   module Unit
     module UI
+
+      SILENT = 0
+      PROGRESS_ONLY = 1
+      NORMAL = 2
+      VERBOSE = 3
 
       # Provides some utilities common to most, if not all,
       # TestRunners.
@@ -18,6 +21,11 @@ module Test
       # runners.
 
       module TestRunnerUtilities
+
+        # Creates a new TestRunner and runs the suite.
+        def run(suite, output_level=NORMAL)
+          return new(suite, output_level).start
+        end
 
         # Takes care of the ARGV parsing and suite
         # determination necessary for running one of the

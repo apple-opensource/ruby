@@ -2,8 +2,8 @@
 
   eval.c -
 
-  $Author: melville $
-  $Date: 2003/10/15 12:08:36 $
+  $Author: matz $
+  $Date: 2004/12/18 02:07:29 $
   created at: Thu Jun 10 14:22:17 JST 1993
 
   Copyright (C) 1993-2003 Yukihiro Matsumoto
@@ -18,8 +18,24 @@
 #include "util.h"
 #include "rubysig.h"
 
+#ifdef HAVE_STDLIB_H
+#include <stdlib.h>
+#endif
+#ifndef EXIT_SUCCESS
+#define EXIT_SUCCESS 0
+#endif
+#ifndef EXIT_FAILURE
+#define EXIT_FAILURE 1
+#endif
+
 #include <stdio.h>
+#if defined(HAVE_GETCONTEXT) && defined(HAVE_SETCONTEXT)
+#include <ucontext.h>
+#define USE_CONTEXT
+#else
 #include <setjmp.h>
+#endif
+
 #include "st.h"
 #include "dln.h"
 
@@ -72,10 +88,37 @@ char *strrchr _((const char*,const char));
 #include "macruby_private.h"
 #endif
 
+#ifdef __VMS
+#include "vmsruby_private.h"
+#endif
+
+#ifdef USE_CONTEXT
+typedef struct {
+    ucontext_t context;
+    volatile int status;
+} rb_jmpbuf_t[1];
+
+#undef longjmp
+#undef setjmp
+NORETURN(static void rb_jump_context(rb_jmpbuf_t, int));
+static inline void
+rb_jump_context(env, val)
+    rb_jmpbuf_t env;
+    int val;
+{
+    env->status = val;
+    setcontext(&env->context);
+    abort();			/* ensure noreturn */
+}
+#define longjmp(env, val) rb_jump_context(env, val)
+#define setjmp(j) ((j)->status = 0, getcontext(&(j)->context), (j)->status)
+#else
+typedef jmp_buf rb_jmpbuf_t;
 #ifndef setjmp
 #ifdef HAVE__SETJMP
 #define setjmp(env) _setjmp(env)
 #define longjmp(env,val) _longjmp(env,val)
+#endif
 #endif
 #endif
 
@@ -105,6 +148,8 @@ static VALUE method_call _((int, VALUE*, VALUE));
 static VALUE rb_cUnboundMethod;
 static VALUE umethod_bind _((VALUE, VALUE));
 static VALUE rb_mod_define_method _((int, VALUE*, VALUE));
+NORETURN(static void rb_raise_jump _((VALUE)));
+static VALUE rb_make_exception _((int argc, VALUE *argv));
 
 static int scope_vmode;
 #define SCOPE_PUBLIC    0
@@ -121,7 +166,7 @@ int ruby_safe_level = 0;
    0 - strings from streams/environment/ARGV are tainted (default)
    1 - no dangerous operation by tainted value
    2 - process/file operations prohibited
-   3 - all genetated objects are tainted
+   3 - all generated objects are tainted
    4 - no global (non-tainted) variable modification/no direct output
 */
 
@@ -133,8 +178,13 @@ rb_secure(level)
     int level;
 {
     if (level <= ruby_safe_level) {
-	rb_raise(rb_eSecurityError, "Insecure operation `%s' at level %d",
-		 rb_id2name(ruby_frame->last_func), ruby_safe_level);
+	if (ruby_frame->last_func) {
+	    rb_raise(rb_eSecurityError, "Insecure operation `%s' at level %d",
+		     rb_id2name(ruby_frame->last_func), ruby_safe_level);
+	}
+	else {
+	    rb_raise(rb_eSecurityError, "Insecure operation at level %d", ruby_safe_level);
+	}
     }
 }
 
@@ -179,7 +229,7 @@ print_undef(klass, id)
     ID id;
 {
     rb_name_error(id, "undefined method `%s' for %s `%s'",
-		  rb_id2name(id), 
+		  rb_id2name(id),
 		  (TYPE(klass) == T_MODULE) ? "module" : "class",
 		  rb_class2name(klass));
 }
@@ -217,6 +267,7 @@ rb_clear_cache()
 
 static void
 rb_clear_cache_for_undef(klass, id)
+    VALUE klass;
     ID id;
 {
     struct cache_entry *ent, *end;
@@ -265,7 +316,7 @@ rb_clear_cache_by_class(klass)
 
 static ID init, eqq, each, aref, aset, match, missing;
 static ID added, singleton_added;
-static ID __id__, __send__;
+static ID __id__, __send__, respond_to;
 
 void
 rb_add_method(klass, mid, node, noex)
@@ -359,13 +410,12 @@ rb_get_method_body(klassp, idp, noexp)
 	ent->mid = ent->mid0 = id;
 	ent->noex   = 0;
 	ent->method = 0;
-	
+
 	return 0;
     }
 
     if (ruby_running) {
 	/* store in cache */
-	if (BUILTIN_TYPE(origin) == T_ICLASS) origin = RBASIC(origin)->klass;
 	ent = cache + EXPR1(klass, id);
 	ent->klass  = klass;
 	ent->noex   = body->nd_noex;
@@ -399,6 +449,16 @@ rb_get_method_body(klassp, idp, noexp)
     }
 
     return body;
+}
+
+NODE*
+rb_method_node(klass, id)
+    VALUE klass;
+    ID id;
+{
+    int noex;
+
+    return rb_get_method_body(&klass, &id, &noex);
 }
 
 static void
@@ -440,6 +500,14 @@ rb_remove_method(klass, name)
     remove_method(klass, rb_intern(name));
 }
 
+/*
+ *  call-seq:
+ *     remove_method(symbol)   => self
+ *  
+ *  Removes the method identified by _symbol_ from the current
+ *  class. For an example, see <code>Module.undef_method</code>.
+ */
+
 static VALUE
 rb_mod_remove_method(argc, argv, mod)
     int argc;
@@ -454,6 +522,9 @@ rb_mod_remove_method(argc, argv, mod)
     return mod;
 }
 
+#undef rb_disable_super
+#undef rb_enable_super
+
 void
 rb_disable_super(klass, name)
     VALUE klass;
@@ -467,7 +538,7 @@ rb_enable_super(klass, name)
     VALUE klass;
     const char *name;
 {
-    rb_warning("rb_enable_super() is obsolete");
+    rb_warn("rb_enable_super() is obsolete");
 }
 
 static void
@@ -585,16 +656,18 @@ struct SCOPE *ruby_scope;
 static struct FRAME *top_frame;
 static struct SCOPE *top_scope;
 
+static unsigned long frame_unique = 0;
+
 #define PUSH_FRAME() do {		\
     struct FRAME _frame;		\
     _frame.prev = ruby_frame;		\
     _frame.tmp  = 0;			\
     _frame.node = ruby_current_node;	\
     _frame.iter = ruby_iter->iter;	\
-    _frame.cbase = ruby_frame->cbase;	\
     _frame.argc = 0;			\
     _frame.argv = 0;			\
     _frame.flags = FRAME_ALLOCA;	\
+    _frame.uniq = frame_unique++;	\
     ruby_frame = &_frame
 
 #define POP_FRAME()  			\
@@ -602,23 +675,18 @@ static struct SCOPE *top_scope;
     ruby_frame = _frame.prev;		\
 } while (0)
 
-struct BLOCKTAG {
-    struct RBasic super;
-    long dst;
-    long flags;
-};
-
 struct BLOCK {
     NODE *var;
     NODE *body;
     VALUE self;
     struct FRAME frame;
     struct SCOPE *scope;
-    struct BLOCKTAG *tag;
     VALUE klass;
+    NODE *cref;
     int iter;
     int vmode;
     int flags;
+    int uniq;
     struct RVarmap *dyna_vars;
     VALUE orig_thread;
     VALUE wrapper;
@@ -628,30 +696,19 @@ struct BLOCK {
 };
 
 #define BLOCK_D_SCOPE 1
-#define BLOCK_DYNAMIC 2
-#define BLOCK_ORPHAN  4
-#define BLOCK_LAMBDA  8
+#define BLOCK_LAMBDA  2
 
 static struct BLOCK *ruby_block;
-
-static struct BLOCKTAG*
-new_blktag()
-{
-    NEWOBJ(blktag, struct BLOCKTAG);
-    OBJSETUP(blktag, 0, T_BLKTAG);
-    blktag->dst = 0;
-    blktag->flags = 0;
-    return blktag;
-}
+static unsigned long block_unique = 0;
 
 #define PUSH_BLOCK(v,b) do {		\
     struct BLOCK _block;		\
-    _block.tag = new_blktag();		\
-    _block.var = v;			\
-    _block.body = b;			\
+    _block.var = (v);			\
+    _block.body = (b);			\
     _block.self = self;			\
     _block.frame = *ruby_frame;		\
     _block.klass = ruby_class;		\
+    _block.cref = ruby_cref;		\
     _block.frame.node = ruby_current_node;\
     _block.scope = ruby_scope;		\
     _block.prev = ruby_block;		\
@@ -662,14 +719,14 @@ new_blktag()
     _block.dyna_vars = ruby_dyna_vars;	\
     _block.wrapper = ruby_wrapper;	\
     _block.block_obj = 0;		\
+    _block.uniq = (b)?block_unique++:0; \
+    if (b) {				\
+	prot_tag->blkid = _block.uniq;  \
+    }                                   \
     ruby_block = &_block
 
-#define POP_BLOCK() 			\
-   if (_block.tag->flags & (BLOCK_DYNAMIC)) \
-       _block.tag->flags |= BLOCK_ORPHAN; \
-   else	if (!(_block.scope->flags & SCOPE_DONT_RECYCLE)) \
-       rb_gc_force_recycle((VALUE)_block.tag); \
-   ruby_block = _block.prev; 		\
+#define POP_BLOCK() \
+   ruby_block = _block.prev; \
 } while (0)
 
 struct RVarmap *ruby_dyna_vars;
@@ -679,9 +736,9 @@ struct RVarmap *ruby_dyna_vars;
     ruby_dyna_vars = 0
 
 #define POP_VARS() \
-   if (_old && (ruby_scope->flags & SCOPE_DONT_RECYCLE)) {\
-       if (RBASIC(_old)->flags) /* unless it's already recycled */ \
-           FL_SET(_old, DVAR_DONT_RECYCLE); \
+    if (_old && (ruby_scope->flags & SCOPE_DONT_RECYCLE)) {\
+	if (RBASIC(_old)->flags) /* unless it's already recycled */ \
+	    FL_SET(_old, DVAR_DONT_RECYCLE); \
     }\
     ruby_dyna_vars = _old; \
 } while (0)
@@ -838,14 +895,15 @@ static struct iter *ruby_iter;
 } while (0)
 
 struct tag {
-    jmp_buf buf;
+    rb_jmpbuf_t buf;
     struct FRAME *frame;
     struct iter *iter;
-    ID tag;
+    VALUE tag;
     VALUE retval;
     struct SCOPE *scope;
-    int dst;
+    VALUE dst;
     struct tag *prev;
+    int blkid;
 };
 static struct tag *prot_tag;
 
@@ -858,11 +916,15 @@ static struct tag *prot_tag;
     _tag.scope = ruby_scope;		\
     _tag.tag = ptag;			\
     _tag.dst = 0;			\
+    _tag.blkid = 0;			\
     prot_tag = &_tag
 
-#define PROT_NONE   0
-#define PROT_FUNC   -1
-#define PROT_THREAD -2
+#define PROT_NONE   Qfalse	/* 0 */
+#define PROT_THREAD Qtrue	/* 2 */
+#define PROT_FUNC   INT2FIX(0)	/* 1 */
+#define PROT_LOOP   INT2FIX(1)	/* 3 */
+#define PROT_LAMBDA INT2FIX(2)	/* 5 */
+#define PROT_YIELD  INT2FIX(3)	/* 7 */
 
 #define EXEC_TAG()    (FLUSH_REGISTER_WINDOWS, setjmp(prot_tag->buf))
 
@@ -873,14 +935,10 @@ static struct tag *prot_tag;
 } while (0)
 
 #define POP_TAG()			\
-    if (_tag.prev)			\
-        _tag.prev->retval = _tag.retval;\
     prot_tag = _tag.prev;		\
 } while (0)
 
-#define POP_TMPTAG()			\
-    prot_tag = _tag.prev;		\
-} while (0)
+#define TAG_DST() (_tag.dst == (VALUE)ruby_frame->uniq)
 
 #define TAG_RETURN	0x1
 #define TAG_BREAK	0x2
@@ -895,8 +953,9 @@ static struct tag *prot_tag;
 VALUE ruby_class;
 static VALUE ruby_wrapper;	/* security wrapper */
 
-#define PUSH_CLASS() do {		\
-    VALUE _class = ruby_class
+#define PUSH_CLASS(c) do {		\
+    VALUE _class = ruby_class;		\
+    ruby_class = (c)
 
 #define POP_CLASS() ruby_class = _class; \
 } while (0)
@@ -925,15 +984,15 @@ static void scope_dup _((struct SCOPE *));
 
 #define POP_SCOPE() 			\
     if (ruby_scope->flags & SCOPE_DONT_RECYCLE) {\
-       if (_old) scope_dup(_old);	\
+	if (_old) scope_dup(_old);	\
     }					\
     if (!(ruby_scope->flags & SCOPE_MALLOC)) {\
 	ruby_scope->local_vars = 0;	\
 	ruby_scope->local_tbl  = 0;	\
 	if (!(ruby_scope->flags & SCOPE_DONT_RECYCLE) && \
-            ruby_scope != top_scope) {	\
+	    ruby_scope != top_scope) {	\
 	    rb_gc_force_recycle((VALUE)ruby_scope);\
-        }				\
+	}				\
     }					\
     ruby_scope->flags |= SCOPE_NOSTACK;	\
     ruby_scope = _old;			\
@@ -946,8 +1005,9 @@ static NODE *compile _((VALUE, char*, int));
 
 static VALUE rb_yield_0 _((VALUE, VALUE, VALUE, int, int));
 
-#define YIELD_PROC_CALL  1
-#define YIELD_PUBLIC_DEF 2
+#define YIELD_LAMBDA_CALL 1
+#define YIELD_PROC_CALL   2
+#define YIELD_PUBLIC_DEF  4
 #define YIELD_FUNC_AVALUE 1
 #define YIELD_FUNC_SVALUE 2
 
@@ -972,7 +1032,7 @@ void
 ruby_set_current_source()
 {
     if (ruby_current_node) {
-        ruby_sourcefile = ruby_current_node->nd_file;
+	ruby_sourcefile = ruby_current_node->nd_file;
 	ruby_sourceline = nd_line(ruby_current_node);
     }
 }
@@ -1021,7 +1081,9 @@ get_backtrace(info)
     VALUE info;
 {
     if (NIL_P(info)) return Qnil;
-    return rb_funcall(info, rb_intern("backtrace"), 0);
+    info = rb_funcall(info, rb_intern("backtrace"), 0);
+    if (NIL_P(info)) return Qnil;
+    return rb_check_array_type(info);
 }
 
 static void
@@ -1070,7 +1132,8 @@ error_print()
 
     eclass = CLASS_OF(ruby_errinfo);
     if (EXEC_TAG() == 0) {
-	e = rb_obj_as_string(ruby_errinfo);
+  	e = rb_funcall(ruby_errinfo, rb_intern("message"), 0, 0);
+ 	StringValue(e);
 	einfo = RSTRING(e)->ptr;
 	elen = RSTRING(e)->len;
     }
@@ -1085,10 +1148,11 @@ error_print()
     else {
 	VALUE epath;
 
-	epath = rb_class_path(eclass);
+	epath = rb_class_name(eclass);
 	if (elen == 0) {
 	    warn_print(": ");
 	    warn_print2(RSTRING(epath)->ptr, RSTRING(epath)->len);
+	    warn_print("\n");
 	}
 	else {
 	    char *tail  = 0;
@@ -1144,9 +1208,17 @@ extern char **environ;
 char **rb_origenviron;
 
 void rb_call_inits _((void));
-void Init_stack _((void*));
+void Init_stack _((VALUE*));
 void Init_heap _((void));
 void Init_ext _((void));
+
+#ifdef HAVE_NATIVETHREAD
+static rb_nativethread_t ruby_thid;
+int 
+is_ruby_native_thread() {
+    return NATIVETHREAD_EQUAL(ruby_thid, NATIVETHREAD_CURRENT());
+}
+#endif
 
 void
 ruby_init()
@@ -1159,14 +1231,15 @@ ruby_init()
     if (initialized)
 	return;
     initialized = 1;
+#ifdef HAVE_NATIVETHREAD
+    ruby_thid = NATIVETHREAD_CURRENT();
+#endif
 
     ruby_frame = top_frame = &frame;
     ruby_iter = &iter;
 
 #ifdef __MACOS__
     rb_origenviron = 0;
-#elif defined(__APPLE__)
-    rb_origenviron = *_NSGetEnviron();
 #else
     rb_origenviron = environ;
 #endif
@@ -1187,10 +1260,11 @@ ruby_init()
 	ruby_frame->self = ruby_top_self;
 	top_cref = rb_node_newnode(NODE_CREF,rb_cObject,0,0);
 	ruby_cref = top_cref;
-	ruby_frame->cbase = (VALUE)ruby_cref;
 	rb_define_global_const("TOPLEVEL_BINDING", rb_f_binding(ruby_top_self));
 #ifdef __MACOS__
 	_macruby_init();
+#elif defined(__VMS)
+    _vmsruby_init();
 #endif
 	ruby_prog_init();
 	ALLOW_INTS;
@@ -1198,10 +1272,11 @@ ruby_init()
     POP_TAG();
     if (state) {
 	error_print();
-	exit(1);
+	exit(EXIT_FAILURE);
     }
     POP_SCOPE();
     ruby_scope = top_scope;
+    top_scope->flags &= ~SCOPE_NOSTACK;
     ruby_running = 1;
 }
 
@@ -1236,37 +1311,33 @@ static int
 error_handle(ex)
     int ex;
 {
-    if (thread_set_raised()) return 1;
+    int status = EXIT_FAILURE;
 
+    if (thread_set_raised()) return EXIT_FAILURE;
     switch (ex & TAG_MASK) {
       case 0:
-	ex = 0;
+	status = EXIT_SUCCESS;
 	break;
 
       case TAG_RETURN:
 	error_pos();
 	warn_print(": unexpected return\n");
-	ex = 1;
 	break;
       case TAG_NEXT:
 	error_pos();
 	warn_print(": unexpected next\n");
-	ex = 1;
 	break;
       case TAG_BREAK:
 	error_pos();
 	warn_print(": unexpected break\n");
-	ex = 1;
 	break;
       case TAG_REDO:
 	error_pos();
 	warn_print(": unexpected redo\n");
-	ex = 1;
 	break;
       case TAG_RETRY:
 	error_pos();
 	warn_print(": retry outside of rescue clause\n");
-	ex = 1;
 	break;
       case TAG_THROW:
 	if (prot_tag && prot_tag->frame && prot_tag->frame->node) {
@@ -1278,17 +1349,15 @@ error_handle(ex)
 	    error_pos();
 	    warn_printf(": unexpected throw\n");
 	}
-	ex = 1;
 	break;
       case TAG_RAISE:
       case TAG_FATAL:
 	if (rb_obj_is_kind_of(ruby_errinfo, rb_eSystemExit)) {
 	    VALUE st = rb_iv_get(ruby_errinfo, "status");
-	    ex = NUM2INT(st);
+	    status = NUM2INT(st);
 	}
 	else {
 	    error_print();
-	    ex = 1;
 	}
 	break;
       default:
@@ -1296,7 +1365,7 @@ error_handle(ex)
 	break;
     }
     thread_reset_raised();
-    return ex;
+    return status;
 }
 
 void
@@ -1306,37 +1375,47 @@ ruby_options(argc, argv)
 {
     int state;
 
+#ifdef _WIN32
+    argc = rb_w32_cmdvector(GetCommandLine(), &argv);
+#endif
+
     Init_stack((void*)&state);
     PUSH_TAG(PROT_NONE);
     if ((state = EXEC_TAG()) == 0) {
 	ruby_process_options(argc, argv);
     }
-    if (state) {
+    else {
 	trace_func = 0;
 	tracing = 0;
 	exit(error_handle(state));
     }
     POP_TAG();
+
+#ifdef _WIN32_WCE
+    // free commandline buffer
+    wce_FreeCommandLine();
+#endif
 }
 
 void rb_exec_end_proc _((void));
 
 static void
-ruby_finalize_0(exp)
-    int *exp;
+ruby_finalize_0()
 {
-    ruby_errinfo = 0;
     PUSH_TAG(PROT_NONE);
     if (EXEC_TAG() == 0) {
 	rb_trap_exit();
     }
     POP_TAG();
     rb_exec_end_proc();
+}
+
+static void
+ruby_finalize_1()
+{
+    signal(SIGINT, SIG_DFL);
+    ruby_errinfo = 0;
     rb_gc_call_finalizer_at_exit();
-    if (exp && ruby_errinfo && rb_obj_is_kind_of(ruby_errinfo, rb_eSystemExit)) {
-	VALUE st = rb_iv_get(ruby_errinfo, "status");
-	*exp = NUM2INT(st);
-    }
     trace_func = 0;
     tracing = 0;
 }
@@ -1344,7 +1423,8 @@ ruby_finalize_0(exp)
 void
 ruby_finalize()
 {
-    ruby_finalize_0(0);
+    ruby_finalize_0();
+    ruby_finalize_1();
 }
 
 int
@@ -1352,8 +1432,12 @@ ruby_cleanup(ex)
     int ex;
 {
     int state;
+    volatile VALUE err = ruby_errinfo;
 
     ruby_safe_level = 0;
+    Init_stack((void*)&state);
+    ruby_finalize_0();
+    if (ruby_errinfo) err = ruby_errinfo;
     PUSH_TAG(PROT_NONE);
     PUSH_ITER(ITER_NOT);
     if ((state = EXEC_TAG()) == 0) {
@@ -1362,22 +1446,25 @@ ruby_cleanup(ex)
     }
     else if (ex == 0) {
 	ex = state;
-    }   
+    }
     POP_ITER();
-
+    ruby_errinfo = err;
     ex = error_handle(ex);
+    ruby_finalize_1();
     POP_TAG();
-    ruby_finalize_0(&ex);
+
+    if (err && rb_obj_is_kind_of(err, rb_eSystemExit)) {
+	VALUE st = rb_iv_get(err, "status");
+	return NUM2INT(st);
+    }
     return ex;
 }
 
-int
-ruby_exec()
+static int
+ruby_exec_internal()
 {
     int state;
-    volatile NODE *tmp;
 
-    Init_stack((void*)&tmp);
     PUSH_TAG(PROT_NONE);
     PUSH_ITER(ITER_NOT);
     /* default visibility is private at toplevel */
@@ -1397,13 +1484,22 @@ ruby_stop(ex)
     exit(ruby_cleanup(ex));
 }
 
+int
+ruby_exec()
+{
+    volatile NODE *tmp;
+
+    Init_stack((void*)&tmp);
+    return ruby_exec_internal();
+}
+
 void
 ruby_run()
 {
     int state;
     static int ex;
 
-    if (ruby_nerrs > 0) exit(ruby_nerrs);
+    if (ruby_nerrs > 0) exit(EXIT_FAILURE);
     state = ruby_exec();
     if (state && !ex) ex = state;
     ruby_stop(ex);
@@ -1448,22 +1544,7 @@ rb_eval_string_protect(str, state)
     const char *str;
     int *state;
 {
-    VALUE result;		/* OK */
-    int status;
-
-    PUSH_TAG(PROT_NONE);
-    if ((status = EXEC_TAG()) == 0) {
-	result = rb_eval_string(str);
-    }
-    POP_TAG();
-    if (state) {
-	*state = status;
-    }
-    if (status != 0) {
-	return Qnil;
-    }
-
-    return result;
+    return rb_protect((VALUE (*)_((VALUE)))rb_eval_string, (VALUE)str, state);
 }
 
 VALUE
@@ -1476,8 +1557,7 @@ rb_eval_string_wrap(str, state)
     VALUE wrapper = ruby_wrapper;
     VALUE val;
 
-    PUSH_CLASS();
-    ruby_class = ruby_wrapper = rb_module_new();
+    PUSH_CLASS(ruby_wrapper = rb_module_new());
     ruby_top_self = rb_obj_clone(ruby_top_self);
     rb_extend_object(ruby_top_self, ruby_wrapper);
     PUSH_FRAME();
@@ -1485,7 +1565,7 @@ rb_eval_string_wrap(str, state)
     ruby_frame->orig_func = 0;
     ruby_frame->last_class = 0;
     ruby_frame->self = self;
-    ruby_frame->cbase = (VALUE)rb_node_newnode(NODE_CREF,ruby_wrapper,0,0);
+    PUSH_CREF(ruby_wrapper);
     PUSH_SCOPE();
 
     val = rb_eval_string_protect(str, &status);
@@ -1504,16 +1584,17 @@ rb_eval_string_wrap(str, state)
     return val;
 }
 
+NORETURN(static void localjump_error(const char*, VALUE, int));
 static void
-localjump_error(mesg, status, reason)
+localjump_error(mesg, value, reason)
     const char *mesg;
-    VALUE status;
+    VALUE value;
     int reason;
 {
     VALUE exc = rb_exc_new2(rb_eLocalJumpError, mesg);
-    VALUE id;
+    ID id;
 
-    rb_iv_set(exc, "@exit_value", status);
+    rb_iv_set(exc, "@exit_value", value);
     switch (reason) {
       case TAG_BREAK:
 	id = rb_intern("break"); break;
@@ -1532,12 +1613,26 @@ localjump_error(mesg, status, reason)
     rb_exc_raise(exc);
 }
 
+/*
+ * call_seq:
+ *   local_jump_error.exit_value  => obj
+ *
+ * Returns the exit value associated with this +LocalJumpError+.
+ */
 static VALUE
 localjump_xvalue(exc)
     VALUE exc;
 {
     return rb_iv_get(exc, "@exit_value");
 }
+
+/*
+ * call-seq:
+ *    local_jump_error.reason   => symbol
+ *
+ * The reason this block was terminated:
+ * :break, :redo, :retry, :next, :return, or :noreason.
+ */
 
 static VALUE
 localjump_reason(exc)
@@ -1546,25 +1641,25 @@ localjump_reason(exc)
     return rb_iv_get(exc, "@reason");
 }
 
+NORETURN(static void jump_tag_but_local_jump _((int,VALUE)));
 static void
-jump_tag_but_local_jump(state)
+jump_tag_but_local_jump(state, val)
     int state;
-{
     VALUE val;
+{
 
-    if (prot_tag) val = prot_tag->retval;
-    else          val = Qnil;
+    if (val == Qundef) val = prot_tag->retval;
     switch (state) {
       case 0:
 	break;
       case TAG_RETURN:
 	localjump_error("unexpected return", val, state);
 	break;
-      case TAG_NEXT:
-	localjump_error("unexpected next", val, state);
-	break;
       case TAG_BREAK:
 	localjump_error("unexpected break", val, state);
+	break;
+      case TAG_NEXT:
+	localjump_error("unexpected next", val, state);
 	break;
       case TAG_REDO:
 	localjump_error("unexpected redo", Qnil, state);
@@ -1573,25 +1668,35 @@ jump_tag_but_local_jump(state)
 	localjump_error("retry outside of rescue clause", Qnil, state);
 	break;
       default:
-	JUMP_TAG(state);
 	break;
     }
+    JUMP_TAG(state);
 }
 
 VALUE
-rb_eval_cmd(cmd, arg, tcheck)
+rb_eval_cmd(cmd, arg, level)
     VALUE cmd, arg;
-    int tcheck;
+    int level;
 {
     int state;
-    VALUE val;			/* OK */
+    VALUE val = Qnil;		/* OK */
     struct SCOPE *saved_scope;
     volatile int safe = ruby_safe_level;
 
+    if (OBJ_TAINTED(cmd)) {
+	level = 4;
+    }
     if (TYPE(cmd) != T_STRING) {
 	PUSH_ITER(ITER_NOT);
-	val = rb_funcall2(cmd, rb_intern("call"), RARRAY(arg)->len, RARRAY(arg)->ptr);
+	PUSH_TAG(PROT_NONE);
+	ruby_safe_level = level;
+	if ((state = EXEC_TAG()) == 0) {
+	    val = rb_funcall2(cmd, rb_intern("call"), RARRAY(arg)->len, RARRAY(arg)->ptr);
+	}
+	ruby_safe_level = safe;
+	POP_TAG();
 	POP_ITER();
+	if (state) JUMP_TAG(state);
 	return val;
     }
 
@@ -1602,66 +1707,26 @@ rb_eval_cmd(cmd, arg, tcheck)
     ruby_frame->orig_func = 0;
     ruby_frame->last_class = 0;
     ruby_frame->self = ruby_top_self;
-    ruby_frame->cbase = (VALUE)rb_node_newnode(NODE_CREF,0,0,0);
-    RNODE(ruby_frame->cbase)->nd_clss = ruby_wrapper ? ruby_wrapper : rb_cObject;
+    PUSH_CREF(ruby_wrapper ? ruby_wrapper : rb_cObject);
 
-    if (tcheck && OBJ_TAINTED(cmd)) {
-	ruby_safe_level = 4;
-    }
+    ruby_safe_level = level;
 
     PUSH_TAG(PROT_NONE);
     if ((state = EXEC_TAG()) == 0) {
 	val = eval(ruby_top_self, cmd, Qnil, 0, 0);
     }
     if (ruby_scope->flags & SCOPE_DONT_RECYCLE)
-       scope_dup(saved_scope);
+	scope_dup(saved_scope);
     ruby_scope = saved_scope;
     ruby_safe_level = safe;
     POP_TAG();
     POP_FRAME();
 
-    jump_tag_but_local_jump(state);
+    jump_tag_but_local_jump(state, val);
     return val;
 }
 
-static VALUE
-superclass(self, node)
-    VALUE self;
-    NODE *node;
-{
-    VALUE val;			/* OK */
-    int state;
-
-    PUSH_TAG(PROT_NONE);
-    if ((state = EXEC_TAG()) == 0) {
-	val = rb_eval(self, node);
-    }
-    POP_TAG();
-    if (state) {
-	switch (nd_type(node)) {
-	  case NODE_COLON2:
-	    rb_raise(rb_eTypeError, "undefined superclass `%s'",
-		     rb_id2name(node->nd_mid));
-	  case NODE_CONST:
-	    rb_raise(rb_eTypeError, "undefined superclass `%s'",
-		     rb_id2name(node->nd_vid));
-	  default:
-	    break;
-	}
-	JUMP_TAG(state);
-    }
-    if (TYPE(val) != T_CLASS) {
-	rb_raise(rb_eTypeError, "superclass must be a Class (%s given)",
-		 rb_obj_classname(val));
-    }
-    if (FL_TEST(val, FL_SINGLETON)) {
-	rb_raise(rb_eTypeError, "can't make subclass of virtual class");
-    }
-
-    return val;
-}
-
-#define ruby_cbase (RNODE(ruby_frame->cbase)->nd_clss)
+#define ruby_cbase (ruby_cref->nd_clss)
 
 static VALUE
 ev_const_defined(cref, id, self)
@@ -1715,21 +1780,39 @@ ev_const_get(cref, id, self)
 static VALUE
 cvar_cbase()
 {
-    NODE *cref = RNODE(ruby_frame->cbase);
+    NODE *cref = ruby_cref;
 
-    while (cref && cref->nd_next && FL_TEST(cref->nd_clss, FL_SINGLETON)) {
+    while (cref && cref->nd_next && (NIL_P(cref->nd_clss) || FL_TEST(cref->nd_clss, FL_SINGLETON))) {
 	cref = cref->nd_next;
 	if (!cref->nd_next) {
 	    rb_warn("class variable access from toplevel singleton method");
 	}
     }
+    if (NIL_P(cref->nd_clss)) {
+	rb_raise(rb_eTypeError, "no class variables available");
+    }
     return cref->nd_clss;
 }
+
+/*
+ *  call-seq:
+ *     Module.nesting    => array
+ *  
+ *  Returns the list of +Modules+ nested at the point of call.
+ *     
+ *     module M1
+ *       module M2
+ *         $a = Module.nesting
+ *       end
+ *     end
+ *     $a           #=> [M1::M2, M1]
+ *     $a[0].name   #=> "M1::M2"
+ */
 
 static VALUE
 rb_mod_nesting()
 {
-    NODE *cbase = RNODE(ruby_frame->cbase);
+    NODE *cbase = ruby_cref;
     VALUE ary = rb_ary_new();
 
     while (cbase && cbase->nd_next) {
@@ -1742,10 +1825,24 @@ rb_mod_nesting()
     return ary;
 }
 
+/*
+ *  call-seq:
+ *     Module.constants   => array
+ *  
+ *  Returns an array of the names of all constants defined in the
+ *  system. This list includes the names of all modules and classes.
+ *     
+ *     p Module.constants.sort[1..5]
+ *     
+ *  <em>produces:</em>
+ *     
+ *     ["ARGV", "ArgumentError", "Array", "Bignum", "Binding"]
+ */
+
 static VALUE
 rb_mod_s_constants()
 {
-    NODE *cbase = RNODE(ruby_frame->cbase);
+    NODE *cbase = ruby_cref;
     void *data = 0;
 
     while (cbase) {
@@ -1791,7 +1888,7 @@ rb_undef(klass, id)
     VALUE origin;
     NODE *body;
 
-    if (ruby_class == rb_cObject && klass == ruby_class) {
+    if (ruby_cbase == rb_cObject && klass == rb_cObject) {
 	rb_secure(4);
     }
     if (ruby_safe_level >= 4 && !OBJ_TAINTED(klass)) {
@@ -1832,6 +1929,49 @@ rb_undef(klass, id)
     }
 }
 
+/*
+ *  call-seq:
+ *     undef_method(symbol)    => self
+ *  
+ *  Prevents the current class from responding to calls to the named
+ *  method. Contrast this with <code>remove_method</code>, which deletes
+ *  the method from the particular class; Ruby will still search
+ *  superclasses and mixed-in modules for a possible receiver.
+ *     
+ *     class Parent
+ *       def hello
+ *         puts "In parent"
+ *       end
+ *     end
+ *     class Child < Parent
+ *       def hello
+ *         puts "In child"
+ *       end
+ *     end
+ *     
+ *     
+ *     c = Child.new
+ *     c.hello
+ *     
+ *     
+ *     class Child
+ *       remove_method :hello  # remove from child, still in parent
+ *     end
+ *     c.hello
+ *     
+ *     
+ *     class Child
+ *       undef_method :hello   # prevent any calls to 'hello'
+ *     end
+ *     c.hello
+ *     
+ *  <em>produces:</em>
+ *     
+ *     In child
+ *     In parent
+ *     prog.rb:23: undefined method `hello' for #<Child:0x401b3bb4> (NoMethodError)
+ */
+
 static VALUE
 rb_mod_undef_method(argc, argv, mod)
     int argc;
@@ -1852,7 +1992,7 @@ rb_alias(klass, name, def)
     ID name, def;
 {
     VALUE origin;
-    NODE *orig, *body;
+    NODE *orig, *body, *node;
     VALUE singleton = 0;
 
     rb_frozen_class_p(klass);
@@ -1881,6 +2021,11 @@ rb_alias(klass, name, def)
     }
 
     rb_clear_cache_by_id(name);
+    if (RTEST(ruby_verbose) && st_lookup(RCLASS(klass)->m_tbl, name, (st_data_t *)&node)) {
+	if (node->nd_cnt == 0 && node->nd_body) {
+	    rb_warning("discarding old %s", rb_id2name(name));
+	}
+    }
     st_insert(RCLASS(klass)->m_tbl, name,
       (st_data_t)NEW_METHOD(NEW_FBODY(body, def, origin), orig->nd_noex));
     if (singleton) {
@@ -1890,6 +2035,28 @@ rb_alias(klass, name, def)
 	rb_funcall(klass, added, 1, ID2SYM(name));
     }
 }
+
+/*
+ *  call-seq:
+ *     alias_method(new_name, old_name)   => self
+ *  
+ *  Makes <i>new_name</i> a new copy of the method <i>old_name</i>. This can
+ *  be used to retain access to methods that are overridden.
+ *     
+ *     module Mod
+ *       alias_method :orig_exit, :exit
+ *       def exit(code=0)
+ *         puts "Exiting with code #{code}"
+ *         orig_exit(code)
+ *       end
+ *     end
+ *     include Mod
+ *     exit(99)
+ *     
+ *  <em>produces:</em>
+ *     
+ *     Exiting with code 99
+ */
 
 static VALUE
 rb_mod_alias_method(mod, newname, oldname)
@@ -1935,25 +2102,25 @@ copy_node_scope(node, rval)
     }\
     else if (nd_type(n) == NODE_ARRAY) {\
 	argc=alen;\
-        if (argc > 0) {\
-            int i;\
+	if (argc > 0) {\
+	    int i;\
 	    n = anode;\
 	    argv = TMP_ALLOC(argc);\
 	    for (i=0;i<argc;i++) {\
 		argv[i] = rb_eval(self,n->nd_head);\
 		n=n->nd_next;\
 	    }\
-        }\
-        else {\
+	}\
+	else {\
 	    argc = 0;\
 	    argv = 0;\
-        }\
+	}\
     }\
     else {\
-        VALUE args = rb_eval(self,n);\
+	VALUE args = rb_eval(self,n);\
 	if (TYPE(args) != T_ARRAY)\
 	    args = rb_ary_to_ary(args);\
-        argc = RARRAY(args)->len;\
+	argc = RARRAY(args)->len;\
 	argv = ALLOCA_N(VALUE, argc);\
 	MEMCPY(argv, RARRAY(args)->ptr, VALUE, argc);\
     }\
@@ -1963,10 +2130,12 @@ copy_node_scope(node, rval)
 
 #define BEGIN_CALLARGS do {\
     struct BLOCK *tmp_block = ruby_block;\
-    if (ruby_iter->iter == ITER_PRE) {\
+    int tmp_iter = ruby_iter->iter;\
+    if (tmp_iter == ITER_PRE) {\
 	ruby_block = ruby_block->outer;\
+	tmp_iter = ITER_NOT;\
     }\
-    PUSH_ITER(ITER_NOT)
+    PUSH_ITER(tmp_iter)
 
 #define END_CALLARGS \
     ruby_block = tmp_block;\
@@ -1990,20 +2159,20 @@ arg_defined(self, node, buf, type)
     if (!node) return type;	/* no args */
     if (nd_type(node) == NODE_ARRAY) {
 	argc=node->nd_alen;
-        if (argc > 0) {
+	if (argc > 0) {
 	    for (i=0;i<argc;i++) {
 		if (!is_defined(self, node->nd_head, buf))
 		    return 0;
 		node = node->nd_next;
 	    }
-        }
+	}
     }
     else if (!is_defined(self, node, buf)) {
 	return 0;
     }
     return type;
 }
-    
+
 static char*
 is_defined(self, node, buf)
     VALUE self;
@@ -2020,8 +2189,8 @@ is_defined(self, node, buf)
       case NODE_ZSUPER:
 	if (ruby_frame->orig_func == 0) return 0;
 	else if (ruby_frame->last_class == 0) return 0;
-	else if (rb_method_boundp(RCLASS(ruby_frame->last_class)->super,
-				  ruby_frame->orig_func, 0)) {
+	val = ruby_frame->last_class;
+	if (rb_method_boundp(RCLASS(val)->super, ruby_frame->orig_func, 0)) {
 	    if (nd_type(node) == NODE_SUPER) {
 		return arg_defined(self, node->nd_args, buf, "super");
 	    }
@@ -2125,7 +2294,7 @@ is_defined(self, node, buf)
 	break;
 
       case NODE_CONST:
-	if (ev_const_defined(RNODE(ruby_frame->cbase), node->nd_vid, self)) {
+	if (ev_const_defined(ruby_cref, node->nd_vid, self)) {
 	    return "constant";
 	}
 	break;
@@ -2158,6 +2327,12 @@ is_defined(self, node, buf)
 		    return "method";
 		}
 	    }
+	}
+	break;
+
+      case NODE_COLON3:
+	if (rb_const_defined_from(rb_cObject, node->nd_mid)) {
+	    return "constant";
 	}
 	break;
 
@@ -2207,6 +2382,50 @@ rb_obj_is_proc(proc)
     }
     return Qfalse;
 }
+
+/*
+ *  call-seq:
+ *     set_trace_func(proc)    => proc
+ *     set_trace_func(nil)     => nil
+ *  
+ *  Establishes _proc_ as the handler for tracing, or disables
+ *  tracing if the parameter is +nil+. _proc_ takes up
+ *  to six parameters: an event name, a filename, a line number, an
+ *  object id, a binding, and the name of a class. _proc_ is
+ *  invoked whenever an event occurs. Events are: <code>c-call</code>
+ *  (call a C-language routine), <code>c-return</code> (return from a
+ *  C-language routine), <code>call</code> (call a Ruby method),
+ *  <code>class</code> (start a class or module definition),
+ *  <code>end</code> (finish a class or module definition),
+ *  <code>line</code> (execute code on a new line), <code>raise</code>
+ *  (raise an exception), and <code>return</code> (return from a Ruby
+ *  method). Tracing is disabled within the context of _proc_.
+ *
+ *      class Test
+ *	def test
+ *	  a = 1
+ *	  b = 2
+ *	end
+ *      end
+ *
+ *      set_trace_func proc { |event, file, line, id, binding, classname|
+ *	   printf "%8s %s:%-2d %10s %8s\n", event, file, line, id, classname
+ *      }
+ *      t = Test.new
+ *      t.test
+ *
+ *	  line prog.rb:11               false
+ *      c-call prog.rb:11        new    Class
+ *      c-call prog.rb:11 initialize   Object
+ *    c-return prog.rb:11 initialize   Object
+ *    c-return prog.rb:11        new    Class
+ *	  line prog.rb:12               false
+ *  	  call prog.rb:2        test     Test
+ *	  line prog.rb:3        test     Test
+ *	  line prog.rb:4        test     Test
+ *      return prog.rb:4        test     Test
+ */
+
 
 static VALUE
 set_trace_func(obj, trace)
@@ -2277,7 +2496,7 @@ call_trace_func(event, node, self, id, klass)
 		    Qundef, 0);
     }
     if (raised) thread_set_raised();
-    POP_TMPTAG();		/* do not propagate retval */
+    POP_TAG();
     POP_FRAME();
 
     tracing = 0;
@@ -2346,7 +2565,7 @@ svalue_to_mrhs(v, lhs)
 	return rb_ary_new3(1, v);
     }
     /* no lhs means splat lhs only */
-    if (!lhs && RARRAY(tmp)->len <= 1) {
+    if (!lhs) {
 	return rb_ary_new3(1, v);
     }
     return tmp;
@@ -2397,8 +2616,8 @@ static VALUE
 splat_value(v)
     VALUE v;
 {
-	if (NIL_P(v)) return rb_ary_new3(1, Qnil);
-	return rb_Array(v);
+    if (NIL_P(v)) return rb_ary_new3(1, Qnil);
+    return rb_Array(v);
 }
 
 static VALUE
@@ -2432,12 +2651,14 @@ class_prefix(self, cpath)
     }
 }
 
-static void return_check _((void));
 #define return_value(v) do {\
   if ((prot_tag->retval = (v)) == Qundef) {\
     prot_tag->retval = Qnil;\
   }\
 } while (0)
+
+NORETURN(static void return_jump _((VALUE)));
+NORETURN(static void break_jump _((VALUE)));
 
 static VALUE
 rb_eval(self, n)
@@ -2486,13 +2707,16 @@ rb_eval(self, n)
 
 	/* nodes for speed-up(literal match) */
       case NODE_MATCH2:
-	result = rb_reg_match(rb_eval(self,node->nd_recv),
-			      rb_eval(self,node->nd_value));
+	{
+	    VALUE l = rb_eval(self,node->nd_recv);
+	    VALUE r = rb_eval(self,node->nd_value);
+	    result = rb_reg_match(l, r);
+	}
 	break;
 
 	/* nodes for speed-up(literal match) */
       case NODE_MATCH3:
-        {
+	{
 	    VALUE r = rb_eval(self,node->nd_recv);
 	    VALUE l = rb_eval(self,node->nd_value);
 	    if (TYPE(l) == T_STRING) {
@@ -2506,7 +2730,7 @@ rb_eval(self, n)
 
 	/* node for speed-up(top-level loop for -n/-p) */
       case NODE_OPT_N:
-	PUSH_TAG(PROT_NONE);
+	PUSH_TAG(PROT_LOOP);
 	switch (state = EXEC_TAG()) {
 	  case 0:
 	  opt_n_next:
@@ -2567,9 +2791,9 @@ rb_eval(self, n)
 		if (trace_func) {
 		    call_trace_func("line", tag, self,
 				    ruby_frame->last_func,
-				    ruby_frame->last_class);	
+				    ruby_frame->last_class);
 		}
-		if (nd_type(tag->nd_head) == NODE_WHEN) {
+		if (tag->nd_head && nd_type(tag->nd_head) == NODE_WHEN) {
 		    VALUE v = rb_eval(self, tag->nd_head->nd_head);
 		    long i;
 
@@ -2610,9 +2834,9 @@ rb_eval(self, n)
 		    if (trace_func) {
 			call_trace_func("line", tag, self,
 					ruby_frame->last_func,
-					ruby_frame->last_class);	
+					ruby_frame->last_class);
 		    }
-		    if (nd_type(tag->nd_head) == NODE_WHEN) {
+		    if (tag->nd_head && nd_type(tag->nd_head) == NODE_WHEN) {
 			VALUE v = rb_eval(self, tag->nd_head->nd_head);
 			long i;
 
@@ -2638,7 +2862,7 @@ rb_eval(self, n)
 	RETURN(Qnil);
 
       case NODE_WHILE:
-	PUSH_TAG(PROT_NONE);
+	PUSH_TAG(PROT_LOOP);
 	result = Qnil;
 	switch (state = EXEC_TAG()) {
 	  case 0:
@@ -2659,8 +2883,11 @@ rb_eval(self, n)
 	    state = 0;
 	    goto while_next;
 	  case TAG_BREAK:
-	    state = 0;
-	    result = prot_tag->retval;
+	    if (TAG_DST()) {
+		state = 0;
+		result = prot_tag->retval;
+	    }
+	    /* fall through */
 	  default:
 	    break;
 	}
@@ -2670,7 +2897,7 @@ rb_eval(self, n)
 	RETURN(result);
 
       case NODE_UNTIL:
-	PUSH_TAG(PROT_NONE);
+	PUSH_TAG(PROT_LOOP);
 	result = Qnil;
 	switch (state = EXEC_TAG()) {
 	  case 0:
@@ -2691,8 +2918,11 @@ rb_eval(self, n)
 	    state = 0;
 	    goto until_next;
 	  case TAG_BREAK:
-	    state = 0;
-	    result = prot_tag->retval;
+	    if (TAG_DST()) {
+		state = 0;
+		result = prot_tag->retval;
+	    }
+	    /* fall through */
 	  default:
 	    break;
 	}
@@ -2708,12 +2938,12 @@ rb_eval(self, n)
       case NODE_ITER:
       case NODE_FOR:
 	{
-	  iter_retry:
-	    PUSH_TAG(PROT_FUNC);
+	    PUSH_TAG(PROT_LOOP);
 	    PUSH_BLOCK(node->nd_var, node->nd_body);
 
 	    state = EXEC_TAG();
 	    if (state == 0) {
+	      iter_retry:
 		PUSH_ITER(ITER_PRE);
 		if (nd_type(node) == NODE_ITER) {
 		    result = rb_eval(self, node->nd_iter);
@@ -2731,27 +2961,19 @@ rb_eval(self, n)
 		}
 		POP_ITER();
 	    }
-	    else if (_block.tag->dst == state) {
-		state &= TAG_MASK;
-		if (state == TAG_RETURN || state == TAG_BREAK) {
-		    result = prot_tag->retval;
-		}
+	    else if (state == TAG_BREAK && TAG_DST()) {
+		result = prot_tag->retval;
+		state = 0;
+	    }
+	    else if (state == TAG_RETRY) {
+		state = 0;
+		goto iter_retry;
 	    }
 	    POP_BLOCK();
 	    POP_TAG();
 	    switch (state) {
 	      case 0:
 		break;
-
-	      case TAG_RETRY:
-		goto iter_retry;
-
-	      case TAG_BREAK:
-		break;
-
-	      case TAG_RETURN:
-		return_value(result);
-		/* fall through */
 	      default:
 		JUMP_TAG(state);
 	    }
@@ -2759,8 +2981,7 @@ rb_eval(self, n)
 	break;
 
       case NODE_BREAK:
-	return_value(rb_eval(self, node->nd_stts));
-	JUMP_TAG(TAG_BREAK);
+	break_jump(rb_eval(self, node->nd_stts));
 	break;
 
       case NODE_NEXT:
@@ -2779,23 +3000,23 @@ rb_eval(self, n)
 	JUMP_TAG(TAG_RETRY);
 	break;
 
-      case NODE_RESTARY:
-      case NODE_RESTARY2:
+      case NODE_SPLAT:
 	result = splat_value(rb_eval(self, node->nd_head));
 	break;
 
-      case NODE_SPLAT:
-	result = avalue_splat(splat_value(rb_eval(self, node->nd_head)));
+      case NODE_TO_ARY:
+	result = rb_ary_to_ary(rb_eval(self, node->nd_head));
 	break;
 
       case NODE_SVALUE:
-	result = rb_eval(self, node->nd_head);
+	result = avalue_splat(rb_eval(self, node->nd_head));
 	if (result == Qundef) result = Qnil;
 	break;
 
       case NODE_YIELD:
 	if (node->nd_head) {
 	    result = rb_eval(self, node->nd_head);
+	    ruby_current_node = node;
 	}
 	else {
 	    result = Qundef;	/* no arg */
@@ -2805,48 +3026,58 @@ rb_eval(self, n)
 	break;
 
       case NODE_RESCUE:
-      retry_entry:
-        {
+	{
 	    volatile VALUE e_info = ruby_errinfo;
+	    volatile int rescuing = 0;
 
 	    PUSH_TAG(PROT_NONE);
 	    if ((state = EXEC_TAG()) == 0) {
+	      retry_entry:
 		result = rb_eval(self, node->nd_head);
 	    }
-	    POP_TAG();
-	    if (state == TAG_RAISE) {
-		NODE * volatile resq = node->nd_resq;
+	    else if (rescuing) {
+		if (rescuing < 0) {
+		    /* in rescue argument, just reraise */
+		}
+		else if (state == TAG_RETRY) {
+		    rescuing = state = 0;
+		    ruby_errinfo = e_info;
+		    goto retry_entry;
+		}
+		else if (state != TAG_RAISE) {
+		    result = prot_tag->retval;
+		}
+	    }
+	    else if (state == TAG_RAISE) {
+		NODE *resq = node->nd_resq;
 
+		rescuing = -1;
 		while (resq) {
 		    ruby_current_node = resq;
 		    if (handle_rescue(self, resq)) {
 			state = 0;
-			PUSH_TAG(PROT_NONE);
-			if ((state = EXEC_TAG()) == 0) {
-			    result = rb_eval(self, resq->nd_body);
-			}
-			POP_TAG();
-			if (state == TAG_RETRY) {
-			    state = 0;
-			    ruby_errinfo = Qnil;
-			    goto retry_entry;
-			}
-			if (state != TAG_RAISE) {
-			    ruby_errinfo = e_info;
-			}
+			rescuing = 1;
+			result = rb_eval(self, resq->nd_body);
 			break;
 		    }
 		    resq = resq->nd_head; /* next rescue */
 		}
 	    }
-	    else if (node->nd_else) { /* else clause given */
-		if (!state) {	/* no exception raised */
-		    result = rb_eval(self, node->nd_else);
-		}
+	    else {
+		result = prot_tag->retval;
 	    }
-	    if (state) JUMP_TAG(state);
+	    POP_TAG();
+	    if (state != TAG_RAISE) ruby_errinfo = e_info;
+	    if (state) {
+		if (state == TAG_NEXT) prot_tag->retval = result;
+		JUMP_TAG(state);
+	    }
+	    /* no exception raised */
+	    if (!rescuing && (node = node->nd_else)) { /* else clause given */
+		goto again;
+	    }
 	}
-        break;
+	break;
 
       case NODE_ENSURE:
 	PUSH_TAG(PROT_NONE);
@@ -2939,19 +3170,21 @@ rb_eval(self, n)
 	break;
 
       case NODE_RETURN:
-	return_value(rb_eval(self, node->nd_stts));
-	return_check();
-	JUMP_TAG(TAG_RETURN);
+	return_jump(rb_eval(self, node->nd_stts));
 	break;
 
       case NODE_ARGSCAT:
-	result = rb_ary_concat(rb_eval(self, node->nd_head),
-			       splat_value(rb_eval(self, node->nd_body)));
+	{
+	    VALUE args = rb_eval(self, node->nd_head);
+	    result = rb_ary_concat(args, splat_value(rb_eval(self, node->nd_body)));
+	}
 	break;
 
       case NODE_ARGSPUSH:
-	result = rb_ary_push(rb_ary_dup(rb_eval(self, node->nd_head)),
-			     rb_eval(self, node->nd_body));
+	{
+	    VALUE args = rb_ary_dup(rb_eval(self, node->nd_head));
+	    result = rb_ary_push(args, rb_eval(self, node->nd_body));
+	}
 	break;
 
       case NODE_ATTRASGN:
@@ -2973,6 +3206,7 @@ rb_eval(self, n)
 	    SETUP_ARGS(node->nd_args);
 	    END_CALLARGS;
 
+	    ruby_current_node = node;
 	    SET_CURRENT_SOURCE();
 	    rb_call(CLASS_OF(recv),recv,node->nd_mid,argc,argv,scope);
 	    result = argv[argc-1];
@@ -2990,6 +3224,7 @@ rb_eval(self, n)
 	    SETUP_ARGS(node->nd_args);
 	    END_CALLARGS;
 
+	    ruby_current_node = node;
 	    SET_CURRENT_SOURCE();
 	    result = rb_call(CLASS_OF(recv),recv,node->nd_mid,argc,argv,0);
 	}
@@ -3004,6 +3239,7 @@ rb_eval(self, n)
 	    SETUP_ARGS(node->nd_args);
 	    END_CALLARGS;
 
+	    ruby_current_node = node;
 	    SET_CURRENT_SOURCE();
 	    result = rb_call(CLASS_OF(self),self,node->nd_mid,argc,argv,1);
 	}
@@ -3020,7 +3256,7 @@ rb_eval(self, n)
 	    int argc; VALUE *argv; /* used in SETUP_ARGS */
 	    TMP_PROTECT;
 
-	    if (ruby_frame->last_class == 0) {	
+	    if (ruby_frame->last_class == 0) {
 		if (ruby_frame->orig_func) {
 		    rb_name_error(ruby_frame->last_func,
 				  "superclass method `%s' disabled",
@@ -3038,6 +3274,7 @@ rb_eval(self, n)
 		BEGIN_CALLARGS;
 		SETUP_ARGS(node->nd_args);
 		END_CALLARGS;
+		ruby_current_node = node;
 	    }
 
 	    SET_CURRENT_SOURCE();
@@ -3059,7 +3296,6 @@ rb_eval(self, n)
 	    if (node->nd_rval) {
 		saved_cref = ruby_cref;
 		ruby_cref = (NODE*)node->nd_rval;
-		ruby_frame->cbase = node->nd_rval;
 	    }
 	    if (node->nd_tbl) {
 		VALUE *vars = ALLOCA_N(VALUE, node->nd_tbl[0]+1);
@@ -3154,8 +3390,7 @@ rb_eval(self, n)
 	break;
 
       case NODE_MASGN:
-	result = svalue_to_mrhs(rb_eval(self, node->nd_value), node->nd_head);
-	result = massign(self, node, result, 0);
+	result = massign(self, node, rb_eval(self, node->nd_value), 0);
 	break;
 
       case NODE_LASGN:
@@ -3231,7 +3466,7 @@ rb_eval(self, n)
 	break;
 
       case NODE_CONST:
-	result = ev_const_get(RNODE(ruby_frame->cbase), node->nd_vid, self);
+	result = ev_const_get(ruby_cref, node->nd_vid, self);
 	break;
 
       case NODE_CVAR:
@@ -3274,7 +3509,7 @@ rb_eval(self, n)
 	break;
 
       case NODE_COLON3:
-	result = rb_const_get_at(rb_cObject, node->nd_mid);
+	result = rb_const_get_from(rb_cObject, node->nd_mid);
 	break;
 
       case NODE_NTH_REF:
@@ -3384,6 +3619,9 @@ rb_eval(self, n)
 		nd_set_type(node, NODE_LIT);
 		node->nd_lit = result;
 		break;
+	      case NODE_LIT:
+		/* other thread may replace NODE_DREGX_ONCE to NODE_LIT */
+		goto again;
 	      case NODE_DXSTR:
 		result = rb_funcall(self, '`', 1, str);
 		break;
@@ -3398,7 +3636,7 @@ rb_eval(self, n)
 	break;
 
       case NODE_XSTR:
-	result = rb_funcall(self, '`', 1, node->nd_lit);
+	result = rb_funcall(self, '`', 1, rb_str_new3(node->nd_lit));
 	break;
 
       case NODE_LIT:
@@ -3407,7 +3645,7 @@ rb_eval(self, n)
 
       case NODE_ATTRSET:
 	if (ruby_frame->argc != 1)
-	    rb_raise(rb_eArgError, "wrong number of arguments(%d for 1)",
+	    rb_raise(rb_eArgError, "wrong number of arguments (%d for 1)",
 		     ruby_frame->argc);
 	result = rb_ivar_set(self, node->nd_vid, ruby_frame->argv[0]);
 	break;
@@ -3486,8 +3724,7 @@ rb_eval(self, n)
 		}
 	    }
 	    defn = copy_node_scope(node->nd_defn, ruby_cref);
-	    defn->nd_rval = (VALUE)ruby_cref;
-	    rb_add_method(klass, node->nd_mid, defn, 
+	    rb_add_method(klass, node->nd_mid, defn,
 			  NOEX_PUBLIC|(body?body->nd_noex&NOEX_UNDEF:0));
 	    result = Qnil;
 	}
@@ -3518,19 +3755,22 @@ rb_eval(self, n)
 	{
 	    VALUE super, klass, tmp, cbase;
 	    ID cname;
+	    int gen = Qfalse;
+
+	    cbase = class_prefix(self, node->nd_cpath);
+	    cname = node->nd_cpath->nd_mid;
 
 	    if (NIL_P(ruby_cbase)) {
 		rb_raise(rb_eTypeError, "no outer class/module");
 	    }
 	    if (node->nd_super) {
-		super = superclass(self, node->nd_super);
+	       super = rb_eval(self, node->nd_super);
+	       rb_check_inheritable(super);
 	    }
 	    else {
 		super = 0;
 	    }
 
-	    cbase = class_prefix(self, node->nd_cpath);
-	    cname = node->nd_cpath->nd_mid;
 	    if (rb_const_defined_at(cbase, cname)) {
 		klass = rb_const_get_at(cbase, cname);
 		if (TYPE(klass) != T_CLASS) {
@@ -3540,7 +3780,8 @@ rb_eval(self, n)
 		if (super) {
 		    tmp = rb_class_real(RCLASS(klass)->super);
 		    if (tmp != super) {
-			goto override_class;
+			rb_raise(rb_eTypeError, "superclass mismatch for class %s",
+				 rb_id2name(cname));
 		    }
 		    super = 0;
 		}
@@ -3549,17 +3790,19 @@ rb_eval(self, n)
 		}
 	    }
 	    else {
-	      override_class:
 		if (!super) super = rb_cObject;
 		klass = rb_define_class_id(cname, super);
 		rb_set_class_path(klass, cbase, rb_id2name(cname));
 		rb_const_set(cbase, cname, klass);
+		gen = Qtrue;
 	    }
 	    if (ruby_wrapper) {
 		rb_extend_object(klass, ruby_wrapper);
 		rb_include_module(klass, ruby_wrapper);
 	    }
-	    if (super) rb_class_inherited(super, klass);
+	    if (super && gen) {
+		rb_class_inherited(super, klass);
+	    }
 	    result = module_setup(klass, node);
 	}
 	break;
@@ -3610,12 +3853,12 @@ rb_eval(self, n)
 	    if (ruby_safe_level >= 4 && !OBJ_TAINTED(result))
 		rb_raise(rb_eSecurityError, "Insecure: can't extend object");
 	    klass = rb_singleton_class(result);
-	    
+
 	    if (ruby_wrapper) {
 		rb_extend_object(klass, ruby_wrapper);
 		rb_include_module(klass, ruby_wrapper);
 	    }
-	    
+
 	    result = module_setup(klass, node);
 	}
 	break;
@@ -3634,7 +3877,7 @@ rb_eval(self, n)
 	if (trace_func) {
 	    call_trace_func("line", node, self,
 			    ruby_frame->last_func,
-			    ruby_frame->last_class);	
+			    ruby_frame->last_class);
 	}
 	node = node->nd_next;
 	goto again;
@@ -3660,15 +3903,14 @@ module_setup(module, n)
     NODE * volatile node = n->nd_body;
     int state;
     struct FRAME frame;
-    VALUE result;		/* OK */
+    VALUE result = Qnil;	/* OK */
     TMP_PROTECT;
 
     frame = *ruby_frame;
     frame.tmp = ruby_frame;
     ruby_frame = &frame;
 
-    PUSH_CLASS();
-    ruby_class = module;
+    PUSH_CLASS(module);
     PUSH_SCOPE();
     PUSH_VARS();
 
@@ -3685,7 +3927,6 @@ module_setup(module, n)
     }
 
     PUSH_CREF(module);
-    ruby_frame->cbase = (VALUE)ruby_cref;
     PUSH_TAG(PROT_NONE);
     if ((state = EXEC_TAG()) == 0) {
 	if (trace_func) {
@@ -3708,16 +3949,33 @@ module_setup(module, n)
     return result;
 }
 
+static NODE *basic_respond_to = 0;
+
 int
 rb_respond_to(obj, id)
     VALUE obj;
     ID id;
 {
-    if (rb_method_boundp(CLASS_OF(obj), id, 0)) {
+    VALUE klass = CLASS_OF(obj);
+    if (rb_method_node(klass, respond_to) == basic_respond_to &&
+	rb_method_boundp(klass, id, 0)) {
 	return Qtrue;
+    }
+    else{
+	return rb_funcall(obj, respond_to, 1, ID2SYM(id));
     }
     return Qfalse;
 }
+
+
+/*
+ *  call-seq:
+ *     obj.respond_to?(symbol, include_private=false) => true or false
+ *  
+ *  Returns +true+> if _obj_ responds to the given
+ *  method. Private methods are included in the search only if the
+ *  optional second parameter evaluates to +true+.
+ */
 
 static VALUE
 rb_obj_respond_to(argc, argv, obj)
@@ -3736,6 +3994,32 @@ rb_obj_respond_to(argc, argv, obj)
     return Qfalse;
 }
 
+/*
+ *  call-seq:
+ *     mod.method_defined?(symbol)    => true or false
+ *  
+ *  Returns +true+ if the named method is defined by
+ *  _mod_ (or its included modules and, if _mod_ is a class,
+ *  its ancestors). Public and protected methods are matched.
+ *     
+ *     module A
+ *       def method1()  end
+ *     end
+ *     class B
+ *       def method2()  end
+ *     end
+ *     class C < B
+ *       include A
+ *       def method3()  end
+ *     end
+ *     
+ *     A.method_defined? :method1    #=> true
+ *     C.method_defined? "method1"   #=> true
+ *     C.method_defined? "method2"   #=> true
+ *     C.method_defined? "method3"   #=> true
+ *     C.method_defined? "method4"   #=> false
+ */
+
 static VALUE
 rb_mod_method_defined(mod, mid)
     VALUE mod, mid;
@@ -3744,6 +4028,32 @@ rb_mod_method_defined(mod, mid)
 }
 
 #define VISI_CHECK(x,f) (((x)&NOEX_MASK) == (f))
+
+/*
+ *  call-seq:
+ *     mod.public_method_defined?(symbol)   => true or false
+ *  
+ *  Returns +true+ if the named public method is defined by
+ *  _mod_ (or its included modules and, if _mod_ is a class,
+ *  its ancestors).
+ *     
+ *     module A
+ *       def method1()  end
+ *     end
+ *     class B
+ *       protected
+ *       def method2()  end
+ *     end
+ *     class C < B
+ *       include A
+ *       def method3()  end
+ *     end
+ *     
+ *     A.method_defined? :method1           #=> true
+ *     C.public_method_defined? "method1"   #=> true
+ *     C.public_method_defined? "method2"   #=> false
+ *     C.method_defined? "method2"          #=> true
+ */
 
 static VALUE
 rb_mod_public_method_defined(mod, mid)
@@ -3759,6 +4069,32 @@ rb_mod_public_method_defined(mod, mid)
     return Qfalse;
 }
 
+/*
+ *  call-seq:
+ *     mod.private_method_defined?(symbol)    => true or false
+ *  
+ *  Returns +true+ if the named private method is defined by
+ *  _ mod_ (or its included modules and, if _mod_ is a class,
+ *  its ancestors).
+ *     
+ *     module A
+ *       def method1()  end
+ *     end
+ *     class B
+ *       private
+ *       def method2()  end
+ *     end
+ *     class C < B
+ *       include A
+ *       def method3()  end
+ *     end
+ *     
+ *     A.method_defined? :method1            #=> true
+ *     C.private_method_defined? "method1"   #=> false
+ *     C.private_method_defined? "method2"   #=> true
+ *     C.method_defined? "method2"           #=> false
+ */
+
 static VALUE
 rb_mod_private_method_defined(mod, mid)
     VALUE mod, mid;
@@ -3772,6 +4108,32 @@ rb_mod_private_method_defined(mod, mid)
     }
     return Qfalse;
 }
+
+/*
+ *  call-seq:
+ *     mod.protected_method_defined?(symbol)   => true or false
+ *  
+ *  Returns +true+ if the named protected method is defined
+ *  by _mod_ (or its included modules and, if _mod_ is a
+ *  class, its ancestors).
+ *     
+ *     module A
+ *       def method1()  end
+ *     end
+ *     class B
+ *       protected
+ *       def method2()  end
+ *     end
+ *     class C < B
+ *       include A
+ *       def method3()  end
+ *     end
+ *     
+ *     A.method_defined? :method1              #=> true
+ *     C.protected_method_defined? "method1"   #=> false
+ *     C.protected_method_defined? "method2"   #=> true
+ *     C.method_defined? "method2"             #=> true
+ */
 
 static VALUE
 rb_mod_protected_method_defined(mod, mid)
@@ -3787,10 +4149,9 @@ rb_mod_protected_method_defined(mod, mid)
     return Qfalse;
 }
 
-#define terminate_process(status, mesg, mlen) rb_exc_raise(system_exit(status, mesg, mlen))
-
+NORETURN(static VALUE terminate_process _((int, const char *, long)));
 static VALUE
-system_exit(status, mesg, mlen)
+terminate_process(status, mesg, mlen)
     int status;
     const char *mesg;
     long mlen;
@@ -3799,7 +4160,7 @@ system_exit(status, mesg, mlen)
     args[0] = INT2NUM(status);
     args[1] = rb_str_new(mesg, mlen);
 
-    return rb_class_new_instance(2, args, rb_eSystemExit);
+    rb_exc_raise(rb_class_new_instance(2, args, rb_eSystemExit));
 }
 
 void
@@ -3813,6 +4174,45 @@ rb_exit(status)
     exit(status);
 }
 
+
+/*
+ *  call-seq:
+ *     exit(integer=0)
+ *     Kernel::exit(integer=0)
+ *     Process::exit(integer=0)
+ *  
+ *  Initiates the termination of the Ruby script by raising the
+ *  <code>SystemExit</code> exception. This exception may be caught. The
+ *  optional parameter is used to return a status code to the invoking
+ *  environment.
+ *     
+ *     begin
+ *       exit
+ *       puts "never get here"
+ *     rescue SystemExit
+ *       puts "rescued a SystemExit exception"
+ *     end
+ *     puts "after begin block"
+ *     
+ *  <em>produces:</em>
+ *     
+ *     rescued a SystemExit exception
+ *     after begin block
+ *     
+ *  Just prior to termination, Ruby executes any <code>at_exit</code> functions
+ *  (see Kernel::at_exit) and runs any object finalizers (see
+ *  ObjectSpace::define_finalizer).
+ *     
+ *     at_exit { puts "at_exit function" }
+ *     ObjectSpace.define_finalizer("string",  proc { puts "in finalizer" })
+ *     exit
+ *     
+ *  <em>produces:</em>
+ *     
+ *     at_exit function
+ *     in finalizer
+ */
+
 VALUE
 rb_f_exit(argc, argv)
     int argc;
@@ -3823,14 +4223,36 @@ rb_f_exit(argc, argv)
 
     rb_secure(4);
     if (rb_scan_args(argc, argv, "01", &status) == 1) {
-	istatus = NUM2INT(status);
+	switch (status) {
+	  case Qtrue:
+	    istatus = EXIT_SUCCESS;
+	    break;
+	  case Qfalse:
+	    istatus = EXIT_FAILURE;
+	    break;
+	  default:
+	    istatus = NUM2INT(status);
+	    break;
+	}
     }
     else {
-	istatus = 0;
+	istatus = EXIT_SUCCESS;
     }
     rb_exit(istatus);
     return Qnil;		/* not reached */
 }
+
+
+/*
+ *  call-seq:
+ *     abort
+ *     Kernel::abort
+ *     Process::abort
+ *  
+ *  Terminate execution immediately, effectively by calling
+ *  <code>Kernel.exit(1)</code>. If _msg_ is given, it is written
+ *  to STDERR prior to terminating.
+ */
 
 VALUE
 rb_f_abort(argc, argv)
@@ -3842,7 +4264,7 @@ rb_f_abort(argc, argv)
 	if (!NIL_P(ruby_errinfo)) {
 	    error_print();
 	}
-	rb_exit(1);
+	rb_exit(EXIT_FAILURE);
     }
     else {
 	VALUE mesg;
@@ -3850,7 +4272,7 @@ rb_f_abort(argc, argv)
 	rb_scan_args(argc, argv, "1", &mesg);
 	StringValue(argv[0]);
 	rb_io_puts(argc, argv, rb_stderr);
-	terminate_process(1, RSTRING(argv[0])->ptr, RSTRING(argv[0])->len);
+	terminate_process(EXIT_FAILURE, RSTRING(argv[0])->ptr, RSTRING(argv[0])->len);
     }
     return Qnil;		/* not reached */
 }
@@ -3858,7 +4280,7 @@ rb_f_abort(argc, argv)
 void
 rb_iter_break()
 {
-    JUMP_TAG(TAG_BREAK);
+    break_jump(Qnil);
 }
 
 NORETURN(static void rb_longjmp _((int, VALUE)));
@@ -3906,7 +4328,10 @@ rb_longjmp(tag, mesg)
 			RSTRING(e)->ptr);
 	}
 	POP_TAG();
-	if (status) {
+	if (status == TAG_FATAL && ruby_errinfo == exception_error) {
+	    ruby_errinfo = mesg;
+	}
+	else if (status) {
 	    thread_reset_raised();
 	    JUMP_TAG(status);
 	}
@@ -3946,8 +4371,41 @@ rb_interrupt()
     rb_raise(rb_eInterrupt, "");
 }
 
+/*
+ *  call-seq:
+ *     raise
+ *     raise(string)
+ *     raise(exception [, string [, array]])
+ *     fail
+ *     fail(string)
+ *     fail(exception [, string [, array]])
+ *  
+ *  With no arguments, raises the exception in <code>$!</code> or raises
+ *  a <code>RuntimeError</code> if <code>$!</code> is +nil+.
+ *  With a single +String+ argument, raises a
+ *  +RuntimeError+ with the string as a message. Otherwise,
+ *  the first parameter should be the name of an +Exception+
+ *  class (or an object that returns an +Exception+ object when sent
+ *  an +exception+ message). The optional second parameter sets the
+ *  message associated with the exception, and the third parameter is an
+ *  array of callback information. Exceptions are caught by the
+ *  +rescue+ clause of <code>begin...end</code> blocks.
+ *     
+ *     raise "Failed to create socket"
+ *     raise ArgumentError, "No parameters", caller
+ */
+
 static VALUE
 rb_f_raise(argc, argv)
+    int argc;
+    VALUE *argv;
+{
+    rb_raise_jump(rb_make_exception(argc, argv));
+    return Qnil;		/* not reached */
+}
+
+static VALUE
+rb_make_exception(argc, argv)
     int argc;
     VALUE *argv;
 {
@@ -3986,9 +4444,17 @@ rb_f_raise(argc, argv)
     if (argc > 0) {
 	if (!rb_obj_is_kind_of(mesg, rb_eException))
 	    rb_raise(rb_eTypeError, "exception object expected");
-	set_backtrace(mesg, (argc>2)?argv[2]:Qnil);
+	if (argc>2)
+	    set_backtrace(mesg, argv[2]);
     }
 
+    return mesg;
+}
+
+static void
+rb_raise_jump(mesg)
+    VALUE mesg;
+{
     if (ruby_frame != top_frame) {
 	PUSH_FRAME();		/* fake frame */
 	*ruby_frame = *_frame.prev->prev;
@@ -3996,8 +4462,6 @@ rb_f_raise(argc, argv)
 	POP_FRAME();
     }
     rb_longjmp(TAG_RAISE, mesg);
-
-    return Qnil;		/* not reached */
 }
 
 void
@@ -4010,7 +4474,7 @@ rb_jump_tag(tag)
 int
 rb_block_given_p()
 {
-    if (ruby_frame->iter && ruby_block)
+    if (ruby_frame->iter == ITER_CUR && ruby_block)
 	return Qtrue;
     return Qfalse;
 }
@@ -4021,12 +4485,115 @@ rb_iterator_p()
     return rb_block_given_p();
 }
 
+/*
+ *  call-seq:
+ *     block_given?   => true or false
+ *     iterator?      => true or false
+ *  
+ *  Returns <code>true</code> if <code>yield</code> would execute a
+ *  block in the current context. The <code>iterator?</code> form
+ *  is mildly deprecated.
+ *     
+ *     def try
+ *       if block_given?
+ *         yield
+ *       else
+ *         "no block"
+ *       end
+ *     end
+ *     try                  #=> "no block"
+ *     try { "hello" }      #=> "hello"
+ *     try do "hello" end   #=> "hello"
+ */
+
+
 static VALUE
 rb_f_block_given_p()
 {
-    if (ruby_frame->prev && ruby_frame->prev->iter && ruby_block)
+    if (ruby_frame->prev && ruby_frame->prev->iter == ITER_CUR && ruby_block)
 	return Qtrue;
     return Qfalse;
+}
+
+static VALUE rb_eThreadError;
+
+NORETURN(static void proc_jump_error(int, VALUE));
+static void
+proc_jump_error(state, result)
+    int state;
+    VALUE result;
+{
+    char mesg[32];
+    char *statement;
+
+    switch (state) {
+      case TAG_BREAK:
+	statement = "break"; break;
+      case TAG_RETURN:
+	statement = "return"; break;
+      case TAG_RETRY:
+	statement = "retry"; break;
+      default:
+	statement = "local-jump"; break; /* should not happen */
+    }
+    snprintf(mesg, sizeof mesg, "%s from proc-closure", statement);
+    localjump_error(mesg, result, state);
+}
+
+static void
+return_jump(retval)
+    VALUE retval;
+{
+    struct tag *tt = prot_tag;
+    int yield = Qfalse;
+
+    if (retval == Qundef) retval = Qnil;
+    while (tt) {
+	if (tt->tag == PROT_YIELD) {
+	    yield = Qtrue;
+	    tt = tt->prev;
+	}
+	if (tt->tag == PROT_FUNC && tt->frame->uniq == ruby_frame->uniq) {
+	    tt->dst = (VALUE)ruby_frame->uniq;
+	    tt->retval = retval;
+	    JUMP_TAG(TAG_RETURN);
+	}
+	if (tt->tag == PROT_LAMBDA && !yield) {
+	    tt->dst = (VALUE)tt->frame->uniq;
+	    tt->retval = retval;
+	    JUMP_TAG(TAG_RETURN);
+	}
+	if (tt->tag == PROT_THREAD) {
+	    rb_raise(rb_eThreadError, "return can't jump across threads");
+	}
+	tt = tt->prev;
+    }
+    localjump_error("unexpected return", retval, TAG_RETURN);
+}
+
+static void
+break_jump(retval)
+    VALUE retval;
+{
+    struct tag *tt = prot_tag;
+
+    if (retval == Qundef) retval = Qnil;
+    while (tt) {
+	switch (tt->tag) {
+	  case PROT_THREAD:
+	  case PROT_YIELD:
+	  case PROT_LOOP:
+	  case PROT_LAMBDA:
+	    tt->dst = (VALUE)tt->frame->uniq;
+	    tt->retval = retval;
+	    JUMP_TAG(TAG_BREAK);
+	    break;
+	  default:
+	    break;
+	}
+	tt = tt->prev;
+    }
+    localjump_error("unexpected break", retval, TAG_BREAK);
 }
 
 static VALUE
@@ -4043,21 +4610,20 @@ rb_yield_0(val, self, klass, flags, avalue)
     int old_vmode;
     struct FRAME frame;
     NODE *cnode = ruby_current_node;
+    int lambda = flags & YIELD_LAMBDA_CALL;
     int state;
-    static unsigned serial = 1;
 
     if (!rb_block_given_p()) {
 	localjump_error("no block given", Qnil, 0);
     }
 
     PUSH_VARS();
-    PUSH_CLASS();
     block = ruby_block;
     frame = block->frame;
     frame.prev = ruby_frame;
     ruby_frame = &(frame);
     old_cref = (VALUE)ruby_cref;
-    ruby_cref = (NODE*)ruby_frame->cbase;
+    ruby_cref = block->cref;
     old_wrapper = ruby_wrapper;
     ruby_wrapper = block->wrapper;
     old_scope = ruby_scope;
@@ -4073,15 +4639,17 @@ rb_yield_0(val, self, klass, flags, avalue)
 	/* FOR does not introduce new scope */
 	ruby_dyna_vars = block->dyna_vars;
     }
-    ruby_class = klass ? klass : block->klass;
-    if (!klass) self = block->self;
+    PUSH_CLASS(klass ? klass : block->klass);
+    if (!klass) {
+	self = block->self;
+    }
     node = block->body;
 
     if (block->var) {
 	PUSH_TAG(PROT_NONE);
 	if ((state = EXEC_TAG()) == 0) {
 	    if (block->var == (NODE*)1) { /* no parameter || */
-		if ((flags & YIELD_PROC_CALL) && RARRAY(val)->len != 0) {
+		if (lambda && RARRAY(val)->len != 0) {
 		    rb_raise(rb_eArgError, "wrong number of arguments (%ld for 0)",
 			     RARRAY(val)->len);
 		}
@@ -4096,7 +4664,7 @@ rb_yield_0(val, self, klass, flags, avalue)
 		if (!avalue) {
 		    val = svalue_to_mrhs(val, block->var->nd_head);
 		}
-		massign(self, block->var, val, flags&YIELD_PROC_CALL);
+		massign(self, block->var, val, lambda);
 	    }
 	    else {
 		int len = 0;
@@ -4117,28 +4685,29 @@ rb_yield_0(val, self, klass, flags, avalue)
 		    val = Qnil;
 		  multi_values:
 		    {
-			NODE *curr = ruby_current_node;
 			ruby_current_node = block->var;
 			rb_warn("multiple values for a block parameter (%d for 1)\n\tfrom %s:%d",
-				len, curr->nd_file, nd_line(curr));
-			ruby_current_node = curr;
+				len, cnode->nd_file, nd_line(cnode));
+			ruby_current_node = cnode;
 		    }
 		}
-		assign(self, block->var, val, flags&YIELD_PROC_CALL);
+		assign(self, block->var, val, lambda);
 	    }
 	}
 	POP_TAG();
 	if (state) goto pop_state;
     }
+    if (!node) {
+	state = 0;
+	goto pop_state;
+    }
+    ruby_current_node = node;
 
     PUSH_ITER(block->iter);
-    PUSH_TAG(PROT_NONE);
+    PUSH_TAG(lambda ? PROT_NONE : PROT_YIELD);
     if ((state = EXEC_TAG()) == 0) {
       redo:
-	if (!node) {
-	    result = Qnil;
-	}
-	else if (nd_type(node) == NODE_CFUNC || nd_type(node) == NODE_IFUNC) {
+	if (nd_type(node) == NODE_CFUNC || nd_type(node) == NODE_IFUNC) {
 	    if (node->nd_state == YIELD_FUNC_AVALUE) {
 		if (!avalue) {
 		    val = svalue_to_avalue(val);
@@ -4168,10 +4737,12 @@ rb_yield_0(val, self, klass, flags, avalue)
 	    result = prot_tag->retval;
 	    break;
 	  case TAG_BREAK:
-	  case TAG_RETURN:
-	    state |= (serial++ << 8);
-	    state |= 0x10;
-	    block->tag->dst = state;
+	    if (TAG_DST()) {
+		result = prot_tag->retval;
+	    }
+	    else {
+		lambda = Qtrue;	/* just pass TAG_BREAK */
+	    }
 	    break;
 	  default:
 	    break;
@@ -4201,21 +4772,32 @@ rb_yield_0(val, self, klass, flags, avalue)
     ruby_cref = (NODE*)old_cref;
     ruby_wrapper = old_wrapper;
     if (ruby_scope->flags & SCOPE_DONT_RECYCLE)
-       scope_dup(old_scope);
+	scope_dup(old_scope);
     ruby_scope = old_scope;
     scope_vmode = old_vmode;
-    ruby_current_node = cnode;
-    if (state) {
-	if (!block->tag) {
-	    switch (state & TAG_MASK) {
-	      case TAG_BREAK:
-	      case TAG_RETURN:
-		jump_tag_but_local_jump(state & TAG_MASK);
-		break;
+    switch (state) {
+      case 0:
+	break;
+      case TAG_BREAK:
+	if (!lambda) {
+	    struct tag *tt = prot_tag;
+
+	    while (tt) {
+		if (tt->tag == PROT_LOOP && tt->blkid == ruby_block->uniq) {
+		    tt->dst = (VALUE)tt->frame->uniq;
+		    tt->retval = result;
+		    JUMP_TAG(TAG_BREAK);
+		}
+		tt = tt->prev;
 	    }
+	    proc_jump_error(TAG_BREAK, result);
 	}
+	/* fall through */
+      default:
 	JUMP_TAG(state);
+	break;
     }
+    ruby_current_node = cnode;
     return result;
 }
 
@@ -4223,14 +4805,14 @@ VALUE
 rb_yield(val)
     VALUE val;
 {
-    return rb_yield_0(val, 0, 0, Qfalse, Qfalse);
+    return rb_yield_0(val, 0, 0, 0, Qfalse);
 }
 
 VALUE
 #ifdef HAVE_STDARG_PROTOTYPES
 rb_yield_values(int n, ...)
 #else
-rb_yield_values(int n, va_alist)
+rb_yield_values(n, va_alist)
     int n;
     va_dcl
 #endif
@@ -4239,7 +4821,7 @@ rb_yield_values(int n, va_alist)
     VALUE ary;
 
     if (n == 0) {
-	return rb_yield_0(Qundef, 0, 0, Qfalse, Qfalse);
+	return rb_yield_0(Qundef, 0, 0, 0, Qfalse);
     }
     ary = rb_ary_new2(n);
     va_init_list(args, n);
@@ -4247,14 +4829,45 @@ rb_yield_values(int n, va_alist)
 	rb_ary_push(ary, va_arg(args, VALUE));
     }
     va_end(args);
-    return rb_yield_0(ary, 0, 0, Qfalse, Qtrue);
+    return rb_yield_0(ary, 0, 0, 0, Qtrue);
 }
+
+VALUE
+rb_yield_splat(values)
+    VALUE values;
+{
+    int avalue = Qfalse;
+
+    if (TYPE(values) == T_ARRAY) {
+	if (RARRAY(values)->len == 0) {
+	    values = Qundef;
+	}
+	else {
+	    avalue = Qtrue;
+	}
+    }
+    return rb_yield_0(values, 0, 0, 0, avalue);
+}
+
+/*
+ *  call-seq:
+ *     loop {|| block } 
+ *  
+ *  Repeatedly executes the block.
+ *     
+ *     loop do
+ *       print "Input: "
+ *       line = gets
+ *       break if !line or line =~ /^qQ/
+ *       # ...
+ *     end
+ */
 
 static VALUE
 rb_f_loop()
 {
     for (;;) {
-	rb_yield_0(Qundef, 0, 0, Qfalse, Qfalse);
+	rb_yield_0(Qundef, 0, 0, 0, Qfalse);
 	CHECK_INTS;
     }
     return Qnil;		/* dummy */
@@ -4278,7 +4891,7 @@ massign(self, node, val, pcall)
     }
     if (pcall && list) goto arg_error;
     if (node->nd_args) {
-	if (node->nd_args == (NODE*)-1) {
+	if ((long)(node->nd_args) == -1) {
 	    /* no check for mere `*' */
 	}
 	else if (!list && i<len) {
@@ -4415,38 +5028,29 @@ rb_iterate(it_proc, data1, bl_proc, data2)
     NODE *node = NEW_IFUNC(bl_proc, data2);
     VALUE self = ruby_top_self;
 
-  iter_retry:
     PUSH_ITER(ITER_PRE);
+    PUSH_TAG(PROT_LOOP);
     PUSH_BLOCK(0, node);
-    PUSH_TAG(PROT_NONE);
-
     state = EXEC_TAG();
     if (state == 0) {
+  iter_retry:
 	retval = (*it_proc)(data1);
     }
-    if (ruby_block->tag->dst == state) {
-	state &= TAG_MASK;
-	if (state == TAG_RETURN || state == TAG_BREAK) {
-	    retval = prot_tag->retval;
-	}
+    else if (state == TAG_BREAK && TAG_DST()) {
+	retval = prot_tag->retval;
+	state = 0;
     }
-    POP_TAG();
+    else if (state == TAG_RETRY) {
+	state = 0;
+	goto iter_retry;
+    }
     POP_BLOCK();
+    POP_TAG();
     POP_ITER();
 
     switch (state) {
       case 0:
 	break;
-
-      case TAG_RETRY:
-	goto iter_retry;
-
-      case TAG_BREAK:
-	break;
-
-      case TAG_RETURN:
-	return_value(retval);
-	/* fall through */
       default:
 	JUMP_TAG(state);
     }
@@ -4548,19 +5152,23 @@ rb_rescue(b_proc, data1, r_proc, data2)
     return rb_rescue2(b_proc, data1, r_proc, data2, rb_eStandardError, (VALUE)0);
 }
 
+static VALUE cont_protect;
+
 VALUE
 rb_protect(proc, data, state)
     VALUE (*proc) _((VALUE));
     VALUE data;
     int *state;
 {
-    VALUE result;		/* OK */
+    VALUE result = Qnil;	/* OK */
     int status;
 
     PUSH_TAG(PROT_NONE);
+    cont_protect = (VALUE)rb_node_newnode(NODE_MEMO, cont_protect, 0, 0);
     if ((status = EXEC_TAG()) == 0) {
 	result = (*proc)(data);
     }
+    cont_protect = ((NODE *)cont_protect)->u1.value;
     POP_TAG();
     if (state) {
 	*state = status;
@@ -4591,7 +5199,6 @@ rb_ensure(b_proc, data1, e_proc, data2)
     retval = prot_tag ? prot_tag->retval : Qnil;	/* save retval */
     (*e_proc)(data2);
     if (prot_tag) return_value(retval);
-
     if (state) JUMP_TAG(state);
     return result;
 }
@@ -4601,16 +5208,22 @@ rb_with_disable_interrupt(proc, data)
     VALUE (*proc)();
     VALUE data;
 {
-    VALUE result;		/* OK */
+    VALUE result = Qnil;	/* OK */
     int status;
 
     DEFER_INTS;
-    PUSH_TAG(PROT_NONE);
-    if ((status = EXEC_TAG()) == 0) {
-	result = (*proc)(data);
+    {
+	int thr_critical = rb_thread_critical;
+
+	rb_thread_critical = Qtrue;
+	PUSH_TAG(PROT_NONE);
+	if ((status = EXEC_TAG()) == 0) {
+	    result = (*proc)(data);
+	}
+	POP_TAG();
+	rb_thread_critical = thr_critical;
     }
-    POP_TAG();
-    ALLOW_INTS;
+    ENABLE_INTS;
     if (status) JUMP_TAG(status);
 
     return result;
@@ -4641,6 +5254,36 @@ static int last_call_status;
 #define CSTAT_VCALL 4
 #define CSTAT_SUPER 8
 
+/*
+ *  call-seq:
+ *     obj.method_missing(symbol [, *args] )   => result
+ *  
+ *  Invoked by Ruby when <i>obj</i> is sent a message it cannot handle.
+ *  <i>symbol</i> is the symbol for the method called, and <i>args</i>
+ *  are any arguments that were passed to it. By default, the interpreter
+ *  raises an error when this method is called. However, it is possible
+ *  to override the method to provide more dynamic behavior.
+ *  The example below creates
+ *  a class <code>Roman</code>, which responds to methods with names
+ *  consisting of roman numerals, returning the corresponding integer
+ *  values.
+ *     
+ *     class Roman
+ *       def romanToInt(str)
+ *         # ...
+ *       end
+ *       def method_missing(methId)
+ *         str = methId.id2name
+ *         romanToInt(str)
+ *       end
+ *     end
+ *     
+ *     r = Roman.new
+ *     r.iv      #=> 4
+ *     r.xxiii   #=> 23
+ *     r.mm      #=> 2000
+ */
+
 static VALUE
 rb_method_missing(argc, argv, obj)
     int argc;
@@ -4649,9 +5292,7 @@ rb_method_missing(argc, argv, obj)
 {
     ID id;
     VALUE exc = rb_eNoMethodError;
-    volatile VALUE d = 0;
     char *format = 0;
-    char *desc = "";
     NODE *cnode = ruby_current_node;
 
     if (argc == 0 || !SYMBOL_P(argv[0])) {
@@ -4662,58 +5303,30 @@ rb_method_missing(argc, argv, obj)
 
     id = SYM2ID(argv[0]);
 
-    switch (TYPE(obj)) {
-      case T_NIL:
-	desc = "nil";
-	break;
-      case T_TRUE:
-	desc = "true";
-	break;
-      case T_FALSE:
-	desc = "false";
-	break;
-      default:
-	if (rb_respond_to(obj, rb_intern("inspect")))
-	    d = rb_inspect(obj);
-	else
-	    d = rb_any_to_s(obj);
-	break;
-    }
-    if (d) {
-	if (RSTRING(d)->len > 65) {
-	    d = rb_any_to_s(obj);
-	}
-	desc = RSTRING(d)->ptr;
-    }
-
     if (last_call_status & CSTAT_PRIV) {
-	format = "private method `%s' called for %s%s%s";
+	format = "private method `%s' called for %s";
     }
     else if (last_call_status & CSTAT_PROT) {
-	format = "protected method `%s' called for %s%s%s";
+	format = "protected method `%s' called for %s";
     }
     else if (last_call_status & CSTAT_VCALL) {
-	format = "undefined local variable or method `%s' for %s%s%s";
+	format = "undefined local variable or method `%s' for %s";
 	exc = rb_eNameError;
     }
     else if (last_call_status & CSTAT_SUPER) {
 	format = "super: no superclass method `%s'";
     }
     if (!format) {
-	format = "undefined method `%s' for %s%s%s";
+	format = "undefined method `%s' for %s";
     }
 
     ruby_current_node = cnode;
     {
-	char buf[BUFSIZ];
-	int noclass = (!desc || desc[0]=='#');
 	int n = 0;
 	VALUE args[3];
 
-	snprintf(buf, BUFSIZ, format, rb_id2name(id),
-		 desc, noclass ? "" : ":",
-		 noclass ? "" : rb_obj_classname(obj));
-	args[n++] = rb_str_new2(buf);
+	args[n++] = rb_funcall(rb_const_get(exc, rb_intern("message")), '!',
+			       3, rb_str_new2(format), obj, argv[0]);
 	args[n++] = argv[0];
 	if (exc == rb_eNoMethodError) {
 	    args[n++] = rb_ary_new4(argc-1, argv+1);
@@ -4744,7 +5357,7 @@ method_missing(obj, id, argc, argv, call_status)
 	POP_FRAME();
     }
     else if (id == ID_ALLOCATOR) {
-	rb_raise(rb_eNoMethodError, "allocator undefined for %s", rb_class2name(obj));
+	rb_raise(rb_eTypeError, "allocator undefined for %s", rb_class2name(obj));
     }
 
     nargv = ALLOCA_N(VALUE, argc+1);
@@ -4762,7 +5375,7 @@ call_cfunc(func, recv, len, argc, argv)
     VALUE *argv;
 {
     if (len >= 0 && argc != len) {
-	rb_raise(rb_eArgError, "wrong number of arguments(%d for %d)",
+	rb_raise(rb_eArgError, "wrong number of arguments (%d for %d)",
 		 argc, len);
     }
 
@@ -4871,6 +5484,7 @@ rb_call0(klass, recv, id, oid, argc, argv, body, nosuper)
     if ((++tick & 0xff) == 0) {
 	CHECK_INTS;		/* better than nothing */
 	stack_check();
+	rb_gc_finalize_deferred();
     }
     PUSH_ITER(itr);
     PUSH_FRAME();
@@ -4913,7 +5527,7 @@ rb_call0(klass, recv, id, oid, argc, argv, body, nosuper)
 	/* for attr get/set */
       case NODE_IVAR:
 	if (argc != 0) {
-	    rb_raise(rb_eArgError, "wrong number of arguments(%d for 0)", argc);
+	    rb_raise(rb_eArgError, "wrong number of arguments (%d for 0)", argc);
 	}
 	result = rb_attr_get(recv, body->nd_vid);
 	break;
@@ -4943,8 +5557,8 @@ rb_call0(klass, recv, id, oid, argc, argv, body, nosuper)
 	    if (body->nd_rval) {
 		saved_cref = ruby_cref;
 		ruby_cref = (NODE*)body->nd_rval;
-		ruby_frame->cbase = body->nd_rval;
 	    }
+	    PUSH_CLASS(ruby_cbase);
 	    if (body->nd_tbl) {
 		local_vars = TMP_ALLOC(body->nd_tbl[0]+1);
 		*local_vars++ = (VALUE)body;
@@ -4980,10 +5594,10 @@ rb_call0(klass, recv, id, oid, argc, argv, body, nosuper)
 
 		    i = node->nd_cnt;
 		    if (i > argc) {
-			rb_raise(rb_eArgError, "wrong number of arguments(%d for %d)",
+			rb_raise(rb_eArgError, "wrong number of arguments (%d for %d)",
 				 argc, i);
 		    }
-		    if (node->nd_rest == -1) {
+		    if ((long)node->nd_rest == -1) {
 			int opt = i;
 			NODE *optnode = node->nd_opt;
 
@@ -4992,7 +5606,7 @@ rb_call0(klass, recv, id, oid, argc, argv, body, nosuper)
 			    optnode = optnode->nd_next;
 			}
 			if (opt < argc) {
-			    rb_raise(rb_eArgError, "wrong number of arguments(%d for %d)",
+			    rb_raise(rb_eArgError, "wrong number of arguments (%d for %d)",
 				     argc, opt);
 			}
 			ruby_frame->argc = opt;
@@ -5018,7 +5632,7 @@ rb_call0(klass, recv, id, oid, argc, argv, body, nosuper)
 			    }
 			}
 			local_vars = ruby_scope->local_vars;
-			if (node->nd_rest >= 0) {
+			if ((long)node->nd_rest >= 0) {
 			    VALUE v;
 
 			    if (argc > 0)
@@ -5035,12 +5649,13 @@ rb_call0(klass, recv, id, oid, argc, argv, body, nosuper)
 		}
 		result = rb_eval(recv, body);
 	    }
-	    else if (state == TAG_RETURN) {
+	    else if (state == TAG_RETURN && TAG_DST()) {
 		result = prot_tag->retval;
 		state = 0;
 	    }
 	    POP_TAG();
 	    POP_VARS();
+	    POP_CLASS();
 	    POP_SCOPE();
 	    ruby_cref = saved_cref;
 	    if (trace_func) {
@@ -5050,13 +5665,16 @@ rb_call0(klass, recv, id, oid, argc, argv, body, nosuper)
 	      case 0:
 		break;
 
+	      case TAG_BREAK:
+	      case TAG_RETURN:
+		JUMP_TAG(state);
+		break;
+
 	      case TAG_RETRY:
-		if (rb_block_given_p()) {
-                   JUMP_TAG(state);
-		}
+		if (rb_block_given_p()) JUMP_TAG(state);
 		/* fall through */
 	      default:
-		jump_tag_but_local_jump(state);
+		jump_tag_but_local_jump(state, result);
 		break;
 	    }
 	}
@@ -5140,6 +5758,24 @@ rb_apply(recv, mid, args)
     return rb_call(CLASS_OF(recv), recv, mid, argc, argv, 1);
 }
 
+/*
+ *  call-seq:
+ *     obj.send(symbol [, args...])        => obj
+ *     obj.__send__(symbol [, args...])    => obj
+ *  
+ *  Invokes the method identified by _symbol_, passing it any
+ *  arguments specified. You can use <code>__send__</code> if the name
+ *  +send+ clashes with an existing method in _obj_.
+ *     
+ *     class Klass
+ *       def hello(*args)
+ *         "Hello " + args.join(' ')
+ *       end
+ *     end
+ *     k = Klass.new
+ *     k.send :hello, "gentle", "readers"   #=> "Hello gentle readers"
+ */
+
 static VALUE
 rb_f_send(argc, argv, recv)
     int argc;
@@ -5158,6 +5794,32 @@ rb_f_send(argc, argv, recv)
     return vid;
 }
 
+static VALUE
+vafuncall(recv, mid, n, ar)
+    VALUE recv;
+    ID mid;
+    int n;
+    va_list *ar;
+{
+    VALUE *argv;
+
+    if (n > 0) {
+	long i;
+
+	argv = ALLOCA_N(VALUE, n);
+
+	for (i=0;i<n;i++) {
+	    argv[i] = va_arg(*ar, VALUE);
+	}
+	va_end(*ar);
+    }
+    else {
+	argv = 0;
+    }
+
+    return rb_call(CLASS_OF(recv), recv, mid, n, argv, 1);
+}
+
 VALUE
 #ifdef HAVE_STDARG_PROTOTYPES
 rb_funcall(VALUE recv, ID mid, int n, ...)
@@ -5170,24 +5832,41 @@ rb_funcall(recv, mid, n, va_alist)
 #endif
 {
     va_list ar;
-    VALUE *argv;
+    va_init_list(ar, n);
 
-    if (n > 0) {
-	long i;
+    return vafuncall(recv, mid, n, &ar);
+}
 
-	argv = ALLOCA_N(VALUE, n);
+VALUE
+#ifdef HAVE_STDARG_PROTOTYPES
+rb_funcall_rescue(VALUE recv, ID mid, int n, ...)
+#else
+rb_funcall_rescue(recv, mid, n, va_alist)
+    VALUE recv;
+    ID mid;
+    int n;
+    va_dcl
+#endif
+{
+    VALUE result = Qnil;	/* OK */
+    int status;
+    va_list ar;
 
-	va_init_list(ar, n);
-	for (i=0;i<n;i++) {
-	    argv[i] = va_arg(ar, VALUE);
-	}
-	va_end(ar);
+    va_init_list(ar, n);
+
+    PUSH_TAG(PROT_NONE);
+    if ((status = EXEC_TAG()) == 0) {
+	result = vafuncall(recv, mid, n, &ar);
     }
-    else {
-	argv = 0;
+    POP_TAG();
+    switch (status) {
+      case 0:
+	return result;
+      case TAG_RAISE:
+	return Qundef;
+      default:
+	JUMP_TAG(status);
     }
-
-    return rb_call(CLASS_OF(recv), recv, mid, n, argv, 1);
 }
 
 VALUE
@@ -5217,32 +5896,15 @@ rb_call_super(argc, argv)
 {
     VALUE result, self, klass, k;
 
-    if (ruby_frame->last_class == 0) {	
+    if (ruby_frame->last_class == 0) {
 	rb_name_error(ruby_frame->last_func, "calling `super' from `%s' is prohibited",
 		      rb_id2name(ruby_frame->last_func));
     }
 
     self = ruby_frame->self;
     klass = ruby_frame->last_class;
-    if (BUILTIN_TYPE(klass) == T_MODULE) {
-	k = CLASS_OF(self);
-	while (!(BUILTIN_TYPE(k) == T_ICLASS && RBASIC(k)->klass == klass)) {
-	    k = RCLASS(k)->super;
-	    if (!k) {
-		rb_raise(rb_eTypeError, "%s is not included in %s",
-			 rb_class2name(klass),
-			 rb_class2name(CLASS_OF(self)));
-	    }
-	}
-	if (RCLASS(k)->super == 0) {
-	    rb_name_error(ruby_frame->last_func,
-			  "super: no superclass method `%s'",
-			  rb_id2name(ruby_frame->last_func));
-	}
-	klass = k;
-    }
 
-    PUSH_ITER(ruby_iter->iter || rb_block_given_p() ? ITER_PRE : ITER_NOT);
+    PUSH_ITER(ruby_iter->iter ? ITER_PRE : ITER_NOT);
     result = rb_call(RCLASS(klass)->super, self, ruby_frame->orig_func, argc, argv, 3);
     POP_ITER();
 
@@ -5276,6 +5938,7 @@ backtrace(lev)
 	    snprintf(buf, BUFSIZ, "%s:%d", ruby_sourcefile, ruby_sourceline);
 	}
 	rb_ary_push(ary, rb_str_new2(buf));
+	if (lev < -1) return ary;
     }
     else {
 	while (lev-- > 0) {
@@ -5301,6 +5964,31 @@ backtrace(lev)
 
     return ary;
 }
+
+/*
+ *  call-seq:
+ *     caller(start=1)    => array
+ *  
+ *  Returns the current execution stack---an array containing strings in
+ *  the form ``<em>file:line</em>'' or ``<em>file:line: in
+ *  `method'</em>''. The optional _start_ parameter
+ *  determines the number of initial stack entries to omit from the
+ *  result.
+ *     
+ *     def a(skip)
+ *       caller(skip)
+ *     end
+ *     def b(skip)
+ *       a(skip)
+ *     end
+ *     def c(skip)
+ *       b(skip)
+ *     end
+ *     c(0)   #=> ["prog:2:in `a'", "prog:5:in `b'", "prog:8:in `c'", "prog:10"]
+ *     c(1)   #=> ["prog:5:in `b'", "prog:8:in `c'", "prog:11"]
+ *     c(2)   #=> ["prog:8:in `c'", "prog:12"]
+ *     c(3)   #=> ["prog:13"]
+ */
 
 static VALUE
 rb_f_caller(argc, argv)
@@ -5358,7 +6046,6 @@ compile(src, file, line)
     rb_thread_critical = Qtrue;
     node = rb_compile_string(file, src, line);
     rb_thread_critical = critical;
-    
 
     if (ruby_nerrs == 0) return node;
     return 0;
@@ -5381,6 +6068,7 @@ eval(self, src, scope, file, line)
     struct FRAME frame;
     NODE *nodesave = ruby_current_node;
     volatile int iter = ruby_frame->iter;
+    volatile int safe = ruby_safe_level;
     int state;
 
     if (!NIL_P(scope)) {
@@ -5403,13 +6091,13 @@ eval(self, src, scope, file, line)
 	old_vmode = scope_vmode;
 	scope_vmode = data->vmode;
 	old_cref = (VALUE)ruby_cref;
-	ruby_cref = (NODE*)ruby_frame->cbase;
+	ruby_cref = data->cref;
 	old_wrapper = ruby_wrapper;
 	ruby_wrapper = data->wrapper;
-	if ((file == 0 || (line == 1 && strcmp(file, "(eval)") == 0)) && data->body) {
-	    file = data->body->nd_file;
+	if ((file == 0 || (line == 1 && strcmp(file, "(eval)") == 0)) && data->frame.node) {
+	    file = data->frame.node->nd_file;
 	    if (!file) file = "__builtin__";
-	    line = nd_line(data->body);
+	    line = nd_line(data->frame.node);
 	}
 
 	self = data->self;
@@ -5425,9 +6113,7 @@ eval(self, src, scope, file, line)
 	file = ruby_sourcefile;
 	line = ruby_sourceline;
     }
-    PUSH_CLASS();
-    ruby_class = ruby_cbase;
-
+    PUSH_CLASS(ruby_cbase);
     ruby_in_eval++;
     if (TYPE(ruby_class) == T_ICLASS) {
 	ruby_class = RBASIC(ruby_class)->klass;
@@ -5436,18 +6122,21 @@ eval(self, src, scope, file, line)
     if ((state = EXEC_TAG()) == 0) {
 	NODE *node;
 
+	ruby_safe_level = 0;
 	result = ruby_errinfo;
 	ruby_errinfo = Qnil;
 	node = compile(src, file, line);
+	ruby_safe_level = safe;
 	if (ruby_nerrs > 0) {
 	    compile_error(0);
 	}
 	if (!NIL_P(result)) ruby_errinfo = result;
-	result = eval_node(self, node); 
+	result = eval_node(self, node);
     }
     POP_TAG();
     POP_CLASS();
     ruby_in_eval--;
+    ruby_safe_level = safe;
     if (!NIL_P(scope)) {
 	int dont_recycle = ruby_scope->flags & SCOPE_DONT_RECYCLE;
 
@@ -5460,23 +6149,16 @@ eval(self, src, scope, file, line)
 	data->vmode = scope_vmode; /* write back visibility mode */
 	scope_vmode = old_vmode;
 	if (dont_recycle) {
-	   struct tag *tag;
-	   struct RVarmap *vars;
+	    struct tag *tag;
+	    struct RVarmap *vars;
 
-           scope_dup(ruby_scope);
-	   for (tag=prot_tag; tag; tag=tag->prev) {
-	       scope_dup(tag->scope);
-	   }
-	   if (ruby_block) {
-	       struct BLOCK *block = ruby_block;
-	       while (block) {
-		   block->tag->flags |= BLOCK_DYNAMIC;
-		   block = block->prev;
-	       }
-	   }
-	   for (vars = ruby_dyna_vars; vars; vars = vars->next) {
-	       FL_SET(vars, DVAR_DONT_RECYCLE);
-	   }
+	    scope_dup(ruby_scope);
+	    for (tag=prot_tag; tag; tag=tag->prev) {
+		scope_dup(tag->scope);
+	    }
+	    for (vars = ruby_dyna_vars; vars; vars = vars->next) {
+		FL_SET(vars, DVAR_DONT_RECYCLE);
+	    }
 	}
     }
     else {
@@ -5486,20 +6168,18 @@ eval(self, src, scope, file, line)
     ruby_set_current_source();
     if (state) {
 	if (state == TAG_RAISE) {
-	    VALUE err, errat, mesg;
-
-	    mesg = rb_obj_as_string(ruby_errinfo);
 	    if (strcmp(file, "(eval)") == 0) {
-		if (ruby_sourceline > 1) {
-		    errat = get_backtrace(ruby_errinfo);
-		    err = rb_str_dup(RARRAY(errat)->ptr[0]);
-		    rb_str_cat2(err, ": ");
-		    rb_str_append(err, mesg);
+		VALUE mesg, errat;
+
+		errat = get_backtrace(ruby_errinfo);
+		mesg  = rb_attr_get(ruby_errinfo, rb_intern("mesg"));
+		if (!NIL_P(errat) && TYPE(errat) == T_ARRAY) {
+		    if (!NIL_P(mesg) && TYPE(mesg) == T_STRING) {
+			rb_str_update(mesg, 0, 0, rb_str_new2(": "));
+			rb_str_update(mesg, 0, 0, RARRAY(errat)->ptr[0]);
+		    }
+		    RARRAY(errat)->ptr[0] = RARRAY(backtrace(-2))->ptr[0];
 		}
-		else {
-		    err = mesg;
-		}
-		rb_exc_raise(rb_funcall(ruby_errinfo, rb_intern("exception"), 1, err));
 	    }
 	    rb_exc_raise(ruby_errinfo);
 	}
@@ -5508,6 +6188,25 @@ eval(self, src, scope, file, line)
 
     return result;
 }
+
+/*
+ *  call-seq:
+ *     eval(string [, binding [, filename [,lineno]]])  => obj
+ *  
+ *  Evaluates the Ruby expression(s) in <em>string</em>. If
+ *  <em>binding</em> is given, the evaluation is performed in its
+ *  context. The binding may be a <code>Binding</code> object or a
+ *  <code>Proc</code> object. If the optional <em>filename</em> and
+ *  <em>lineno</em> parameters are present, they will be used when
+ *  reporting syntax errors.
+ *     
+ *     def getBinding(str)
+ *       return binding
+ *     end
+ *     str = "hello"
+ *     eval "str + ' Fred'"                      #=> "hello Fred"
+ *     eval "str + ' Fred'", getBinding("bye")   #=> "bye Fred"
+ */
 
 static VALUE
 rb_f_eval(argc, argv, self)
@@ -5530,12 +6229,13 @@ rb_f_eval(argc, argv, self)
 	SafeStringValue(src);
     }
     if (argc >= 3) {
-	file = StringValuePtr(vfile);
+	StringValue(vfile);
     }
     if (argc >= 4) {
 	line = NUM2INT(vline);
     }
 
+    if (!NIL_P(vfile)) file = RSTRING(vfile)->ptr;
     if (NIL_P(scope) && ruby_frame->prev) {
 	struct FRAME *prev;
 	VALUE val;
@@ -5559,12 +6259,11 @@ exec_under(func, under, cbase, args)
     VALUE under, cbase;
     void *args;
 {
-    VALUE val;			/* OK */
+    VALUE val = Qnil;		/* OK */
     int state;
     int mode;
 
-    PUSH_CLASS();
-    ruby_class = under;
+    PUSH_CLASS(under);
     PUSH_FRAME();
     ruby_frame->self = _frame.prev->self;
     ruby_frame->last_func = _frame.prev->last_func;
@@ -5572,9 +6271,6 @@ exec_under(func, under, cbase, args)
     ruby_frame->argc = _frame.prev->argc;
     ruby_frame->argv = _frame.prev->argv;
     if (cbase) {
-	if (ruby_cbase != cbase) {
-	    ruby_frame->cbase = (VALUE)rb_node_newnode(NODE_CREF,under,0,ruby_frame->cbase);
-	}
 	PUSH_CREF(cbase);
     }
 
@@ -5669,14 +6365,37 @@ specific_eval(argc, argv, klass, self)
 			 rb_id2name(ruby_frame->last_func),
 			 rb_id2name(ruby_frame->last_func));
 	    }
+	    if (argc > 2) line = NUM2INT(argv[2]);
 	    if (argc > 1) {
 		file = StringValuePtr(argv[1]);
 	    }
-	    if (argc > 2) line = NUM2INT(argv[2]);
 	}
 	return eval_under(klass, self, argv[0], file, line);
     }
 }
+
+/*
+ *  call-seq:
+ *     obj.instance_eval(string [, filename [, lineno]] )   => obj
+ *     obj.instance_eval {| | block }                       => obj
+ *  
+ *  Evaluates a string containing Ruby source code, or the given block,
+ *  within the context of the receiver (_obj_). In order to set the
+ *  context, the variable +self+ is set to _obj_ while
+ *  the code is executing, giving the code access to _obj_'s
+ *  instance variables. In the version of <code>instance_eval</code>
+ *  that takes a +String+, the optional second and third
+ *  parameters supply a filename and starting line number that are used
+ *  when reporting compilation errors.
+ *     
+ *     class Klass
+ *       def initialize
+ *         @secret = 99
+ *       end
+ *     end
+ *     k = Klass.new
+ *     k.instance_eval { @secret }   #=> 99
+ */
 
 VALUE
 rb_obj_instance_eval(argc, argv, self)
@@ -5686,15 +6405,38 @@ rb_obj_instance_eval(argc, argv, self)
 {
     VALUE klass;
 
-    if (rb_special_const_p(self)) {
+    if (FIXNUM_P(self) || SYMBOL_P(self)) {
 	klass = Qnil;
     }
     else {
 	klass = rb_singleton_class(self);
     }
-
     return specific_eval(argc, argv, klass, self);
 }
+
+/*
+ *  call-seq:
+ *     mod.class_eval(string [, filename [, lineno]])  => obj
+ *     mod.module_eval {|| block }                     => obj
+ *  
+ *  Evaluates the string or block in the context of _mod_. This can
+ *  be used to add methods to a class. <code>module_eval</code> returns
+ *  the result of evaluating its argument. The optional _filename_
+ *  and _lineno_ parameters set the text for error messages.
+ *     
+ *     class Thing
+ *     end
+ *     a = %q{def hello() "Hello there!" end}
+ *     Thing.module_eval(a)
+ *     puts Thing.new.hello()
+ *     Thing.module_eval("invalid code", "dummy", 123)
+ *     
+ *  <em>produces:</em>
+ *     
+ *     Hello there!
+ *     dummy:123:in `module_eval': undefined local variable
+ *         or method `code' for Thing:Class
+ */
 
 VALUE
 rb_mod_module_eval(argc, argv, mod)
@@ -5707,6 +6449,8 @@ rb_mod_module_eval(argc, argv, mod)
 
 VALUE rb_load_path;
 
+NORETURN(static void load_failed _((VALUE)));
+
 void
 rb_load(fname, wrap)
     VALUE fname;
@@ -5714,9 +6458,11 @@ rb_load(fname, wrap)
 {
     VALUE tmp;
     int state;
+    volatile int prohibit_int = rb_prohibit_interrupt;
     volatile ID last_func;
-    volatile VALUE wrapper = 0;
+    volatile VALUE wrapper = ruby_wrapper;
     volatile VALUE self = ruby_top_self;
+    NODE *volatile last_node;
     NODE *saved_cref = ruby_cref;
     TMP_PROTECT;
 
@@ -5726,16 +6472,16 @@ rb_load(fname, wrap)
     else {
 	SafeStringValue(fname);
     }
+    fname = rb_str_new4(fname);
     tmp = rb_find_file(fname);
     if (!tmp) {
-	rb_raise(rb_eLoadError, "No such file to load -- %s", RSTRING(fname)->ptr);
+	load_failed(fname);
     }
     fname = tmp;
 
     ruby_errinfo = Qnil;	/* ensure */
     PUSH_VARS();
-    PUSH_CLASS();
-    wrapper = ruby_wrapper;
+    PUSH_CLASS(ruby_wrapper);
     ruby_cref = top_cref;
     if (!wrap) {
 	rb_secure(4);		/* should alter global state */
@@ -5754,13 +6500,17 @@ rb_load(fname, wrap)
     ruby_frame->last_func = 0;
     ruby_frame->last_class = 0;
     ruby_frame->self = self;
-    ruby_frame->cbase = (VALUE)rb_node_newnode(NODE_CREF,ruby_class,0,0);
     PUSH_SCOPE();
     /* default visibility is private at loading toplevel */
     SCOPE_SET(SCOPE_PRIVATE);
     PUSH_TAG(PROT_NONE);
     state = EXEC_TAG();
     last_func = ruby_frame->last_func;
+    last_node = ruby_current_node;
+    if (!ruby_current_node && ruby_sourcefile) {
+	last_node = NEW_NEWLINE(0);
+    }
+    ruby_current_node = 0;
     if (state == 0) {
 	NODE *node;
 	volatile int critical;
@@ -5773,17 +6523,21 @@ rb_load(fname, wrap)
 	ruby_in_eval--;
 	node = ruby_eval_tree;
 	rb_thread_critical = critical;
+	ALLOW_INTS;
 	if (ruby_nerrs == 0) {
 	    eval_node(self, node);
 	}
     }
-    ALLOW_INTS;
     ruby_frame->last_func = last_func;
+    ruby_current_node = last_node;
+    ruby_sourcefile = 0;
+    ruby_set_current_source();
     if (ruby_scope->flags == SCOPE_ALLOCA && ruby_class == rb_cObject) {
 	if (ruby_scope->local_tbl) /* toplevel was empty */
 	    free(ruby_scope->local_tbl);
     }
     POP_TAG();
+    rb_prohibit_interrupt = prohibit_int;
     ruby_cref = saved_cref;
     POP_SCOPE();
     POP_FRAME();
@@ -5795,7 +6549,7 @@ rb_load(fname, wrap)
 	ruby_nerrs = 0;
 	rb_exc_raise(ruby_errinfo);
     }
-    if (state) jump_tag_but_local_jump(state);
+    if (state) jump_tag_but_local_jump(state, Qundef);
     if (!NIL_P(ruby_errinfo))	/* exception during load */
 	rb_exc_raise(ruby_errinfo);
 }
@@ -5816,6 +6570,21 @@ rb_load_protect(fname, wrap, state)
     if (state) *state = status;
 }
 
+/*
+ *  call-seq:
+ *     load(filename, wrap=false)   => true
+ *  
+ *  Loads and executes the Ruby
+ *  program in the file _filename_. If the filename does not
+ *  resolve to an absolute path, the file is searched for in the library
+ *  directories listed in <code>$:</code>. If the optional _wrap_
+ *  parameter is +true+, the loaded script will be executed
+ *  under an anonymous module, protecting the calling program's global
+ *  namespace. In no circumstance will any local variables in the loaded
+ *  file be propagated to the loading environment.
+ */
+
+
 static VALUE
 rb_f_load(argc, argv)
     int argc;
@@ -5832,49 +6601,47 @@ VALUE ruby_dln_librefs;
 static VALUE rb_features;
 static st_table *loading_tbl;
 
-static int
-rb_feature_p(feature, wait)
-    const char *feature;
-    int wait;
+#define IS_SOEXT(e) (strcmp(e, ".so") == 0 || strcmp(e, ".o") == 0)
+#ifdef DLEXT2
+#define IS_DLEXT(e) (strcmp(e, DLEXT) == 0 || strcmp(e, DLEXT2) == 0)
+#else
+#define IS_DLEXT(e) (strcmp(e, DLEXT) == 0)
+#endif
+
+static char *
+rb_feature_p(feature, ext, rb)
+    const char *feature, *ext;
+    int rb;
 {
     VALUE v;
-    char *f;
-    long i, len = strlen(feature);
+    char *f, *e;
+    long i, len, elen;
 
+    if (ext) {
+	len = ext - feature;
+	elen = strlen(ext);
+    }
+    else {
+	len = strlen(feature);
+	elen = 0;
+    }
     for (i = 0; i < RARRAY(rb_features)->len; ++i) {
 	v = RARRAY(rb_features)->ptr[i];
 	f = StringValuePtr(v);
-	if (strcmp(f, feature) == 0) {
-	    goto load_wait;
+	if (strncmp(f, feature, len) != 0) continue;
+	if (!*(e = f + len)) {
+	    if (ext) continue;
+	    return e;
 	}
-	if (strncmp(f, feature, len) == 0) {
-	    if (strcmp(f+len, ".so") == 0) {
-		return Qtrue;
-	    }
-	    if (strcmp(f+len, ".rb") == 0) {
-		if (wait) goto load_wait;
-		return Qtrue;
-	    }
+	if (*e != '.') continue;
+	if ((!rb || !ext) && (IS_SOEXT(e) || IS_DLEXT(e))) {
+	    return e;
 	}
-    }
-    return Qfalse;
-
-  load_wait:
-    if (loading_tbl) {
-	char *ext = strrchr(f, '.');
-	if (ext && strcmp(ext, ".rb") == 0) {
-	    rb_thread_t th;
-
-	    while (st_lookup(loading_tbl, (st_data_t)f, (st_data_t *)&th)) {
-		if (th == curr_thread) {
-		    return Qtrue;
-		}
-		CHECK_INTS;
-		rb_thread_schedule();
-	    }
+	if ((rb || !ext) && (strcmp(e, ".rb") == 0)) {
+	    return e;
 	}
     }
-    return Qtrue;
+    return 0;
 }
 
 static const char *const loadable_ext[] = {
@@ -5889,14 +6656,21 @@ int
 rb_provided(feature)
     const char *feature;
 {
-    VALUE f = rb_str_new2(feature);
+    int i;
+    char *buf;
 
-    if (strrchr(feature, '.') == 0) {
-	if (rb_find_file_ext(&f, loadable_ext) == 0) {
-	    return rb_feature_p(feature, Qfalse);
-	}
+    if (rb_feature_p(feature, 0, Qfalse))
+	return Qtrue;
+    if (!loading_tbl) return Qfalse;
+    if (st_lookup(loading_tbl, (st_data_t)feature, 0)) return Qtrue;
+    buf = ALLOCA_N(char, strlen(feature)+8);
+    strcpy(buf, feature);
+    for (i=0; ; i++) {
+	if (!loadable_ext[i]) break;
+	strcpy(buf+strlen(feature), loadable_ext[i]);
+	if (st_lookup(loading_tbl, (st_data_t)buf, 0)) return Qtrue;
     }
-    return rb_feature_p(RSTRING(f)->ptr, Qfalse);
+    return Qfalse;
 }
 
 static void
@@ -5913,73 +6687,107 @@ rb_provide(feature)
     rb_provide_feature(rb_str_new2(feature));
 }
 
-NORETURN(static void load_failed _((VALUE)));
-static VALUE load_dyna _((VALUE, VALUE));
-static VALUE load_rb _((VALUE, VALUE));
+static void
+load_wait(ftptr)
+    char *ftptr;
+{
+    st_data_t th;
+
+    if (!loading_tbl) return;
+    if (!st_lookup(loading_tbl, (st_data_t)ftptr, &th)) return;
+    if ((rb_thread_t)th == curr_thread) return;
+    do {
+	CHECK_INTS;
+	rb_thread_schedule();
+    } while (st_lookup(loading_tbl, (st_data_t)ftptr, &th));
+}
+
+/*
+ *  call-seq:
+ *     require(string)    => true or false
+ *  
+ *  Ruby tries to load the library named _string_, returning
+ *  +true+ if successful. If the filename does not resolve to
+ *  an absolute path, it will be searched for in the directories listed
+ *  in <code>$:</code>. If the file has the extension ``.rb'', it is
+ *  loaded as a source file; if the extension is ``.so'', ``.o'', or
+ *  ``.dll'', or whatever the default shared library extension is on
+ *  the current platform, Ruby loads the shared library as a Ruby
+ *  extension. Otherwise, Ruby tries adding ``.rb'', ``.so'', and so on
+ *  to the name. The name of the loaded feature is added to the array in
+ *  <code>$"</code>. A feature will not be loaded if it's name already
+ *  appears in <code>$"</code>. However, the file name is not converted
+ *  to an absolute path, so that ``<code>require 'a';require
+ *  './a'</code>'' will load <code>a.rb</code> twice.
+ *     
+ *     require "my-library.rb"
+ *     require "db-driver"
+ */
 
 VALUE
 rb_f_require(obj, fname)
     VALUE obj, fname;
 {
-    VALUE feature, tmp;
-    char *ext; /* OK */
+    return rb_require_safe(fname, ruby_safe_level);
+}
 
-    SafeStringValue(fname);
-    ext = strrchr(RSTRING(fname)->ptr, '.');
-    if (ext && strchr(ext, '/')) ext = 0;
-    if (ext) {
+static int
+search_required(fname, featurep, path)
+    VALUE fname, *featurep, *path;
+{
+    VALUE tmp;
+    char *ext, *ftptr;
+    int type;
+
+    *featurep = fname;
+    *path = 0;
+    ext = strrchr(ftptr = RSTRING(fname)->ptr, '.');
+    if (ext && !strchr(ext, '/')) {
 	if (strcmp(".rb", ext) == 0) {
-	    feature = rb_str_dup(fname);
-	    tmp = rb_find_file(fname);
-	    if (tmp) {
-		return load_rb(feature, tmp);
-	    }
-	    load_failed(fname);
+	    if (rb_feature_p(ftptr, ext, Qtrue)) return 'r';
+	    if (*path = rb_find_file(fname)) return 'r';
+	    return 0;
 	}
-	else if (strcmp(".so", ext) == 0 || strcmp(".o", ext) == 0) {
+	else if (IS_SOEXT(ext)) {
+	    if (rb_feature_p(ftptr, ext, Qfalse)) return 's';
 	    tmp = rb_str_new(RSTRING(fname)->ptr, ext-RSTRING(fname)->ptr);
+	    *featurep = tmp;
 #ifdef DLEXT2
+	    OBJ_FREEZE(tmp);
 	    if (rb_find_file_ext(&tmp, loadable_ext+1)) {
-		return load_dyna(tmp, rb_find_file(tmp));
+		*featurep = tmp;
+		*path = rb_find_file(tmp);
+		return 's';
 	    }
 #else
-	    feature = tmp;
 	    rb_str_cat2(tmp, DLEXT);
-	    tmp = rb_find_file(tmp);
-	    if (tmp) {
-		return load_dyna(feature, tmp);
+	    OBJ_FREEZE(tmp);
+	    if (*path = rb_find_file(tmp)) {
+		return 's';
 	    }
 #endif
 	}
-	else if (strcmp(DLEXT, ext) == 0) {
-	    tmp = rb_find_file(fname);
-	    if (tmp) {
-		return load_dyna(fname, tmp);
-	    }
+	else if (IS_DLEXT(ext)) {
+	    if (rb_feature_p(ftptr, ext, Qfalse)) return 's';
+	    if (*path = rb_find_file(fname)) return 's';
 	}
-#ifdef DLEXT2
-	else if (strcmp(DLEXT2, ext) == 0) {
-	    tmp = rb_find_file(fname);
-	    if (tmp) {
-		return load_dyna(fname, tmp);
-	    }
-	}
-#endif
     }
     tmp = fname;
-    switch (rb_find_file_ext(&tmp, loadable_ext)) {
+    switch (type = rb_find_file_ext(&tmp, loadable_ext)) {
       case 0:
-	break;
-
-      case 1:
-	return load_rb(tmp, tmp);
+	if ((ext = rb_feature_p(ftptr, 0, Qfalse))) {
+	    type = strcmp(".rb", ext);
+	    break;
+	}
+	return 0;
 
       default:
-	return load_dyna(tmp, rb_find_file(tmp));
+	*featurep = tmp;
+	ext = strrchr(ftptr = RSTRING(tmp)->ptr, '.');
+	if (rb_feature_p(ftptr, ext, !--type)) break;
+	*path = rb_find_file(tmp);
     }
-    if (!rb_feature_p(RSTRING(fname)->ptr, Qfalse))
-	load_failed(fname);
-    return Qfalse;
+    return type ? 's' : 'r';
 }
 
 static void
@@ -5989,82 +6797,99 @@ load_failed(fname)
     rb_raise(rb_eLoadError, "No such file to load -- %s", RSTRING(fname)->ptr);
 }
 
-static VALUE
-load_dyna(feature, fname)
-    VALUE feature, fname;
+VALUE
+rb_require_safe(fname, safe)
+    VALUE fname;
+    int safe;
 {
+    VALUE result = Qnil;
+    volatile VALUE errinfo = ruby_errinfo;
     int state;
+    struct {
+	NODE *node;
+	ID func;
+	int vmode, safe;
+    } volatile saved;
+    char *volatile ftptr = 0;
 
-    if (rb_feature_p(RSTRING(feature)->ptr, Qfalse))
-	return Qfalse;
-    rb_provide_feature(feature);
-    {
-	int volatile old_vmode = scope_vmode;
-	NODE *const volatile old_node = ruby_current_node;
-	const volatile ID old_func = ruby_frame->last_func;
-
-	ruby_current_node = 0;
-	ruby_sourcefile = rb_source_filename(RSTRING(fname)->ptr);
-	ruby_sourceline = 0;
-	ruby_frame->last_func = 0;
-	PUSH_TAG(PROT_NONE);
-	if ((state = EXEC_TAG()) == 0) {
-	    void *handle;
-
-	    SCOPE_SET(SCOPE_PUBLIC);
-	    handle = dln_load(RSTRING(fname)->ptr);
-	    rb_ary_push(ruby_dln_librefs, LONG2NUM((long)handle));
-	}
-	POP_TAG();
-	ruby_current_node = old_node;
-	ruby_set_current_source();
-	ruby_frame->last_func = old_func;
-	SCOPE_SET(old_vmode);
+    if (OBJ_TAINTED(fname)) {
+	rb_check_safe_obj(fname);
     }
-    if (state) JUMP_TAG(state);
-    ruby_errinfo = Qnil;
-
-    return Qtrue;
-}
-
-static VALUE
-load_rb(feature, fname)
-    VALUE feature, fname;
-{
-    int state;
-    char *ftptr;
-    volatile int safe = ruby_safe_level;
-
-    if (rb_feature_p(RSTRING(feature)->ptr, Qtrue))
-	return Qfalse;
-    ruby_safe_level = 0;
-    rb_provide_feature(feature);
-    /* loading ruby library should be serialized. */
-    if (!loading_tbl) {
-	loading_tbl = st_init_strtable();
-    }
-    /* partial state */
-    ftptr = ruby_strdup(RSTRING(feature)->ptr);
-    st_insert(loading_tbl, (st_data_t)ftptr, (st_data_t)curr_thread);
-
+    StringValue(fname);
+    fname = rb_str_new4(fname);
+    saved.vmode = scope_vmode;
+    saved.node = ruby_current_node;
+    saved.func = ruby_frame->last_func;
+    saved.safe = ruby_safe_level;
     PUSH_TAG(PROT_NONE);
     if ((state = EXEC_TAG()) == 0) {
-	rb_load(fname, 0);
+	VALUE feature, path;
+	long handle;
+	int found;
+
+	ruby_safe_level = safe;
+	found = search_required(fname, &feature, &path);
+	if (found) {
+	    if (!path) {
+		load_wait(RSTRING(feature)->ptr);
+		result = Qfalse;
+	    }
+	    else {
+		ruby_safe_level = 0;
+		rb_provide_feature(feature);
+		switch (found) {
+		  case 'r':
+		    /* loading ruby library should be serialized. */
+		    if (!loading_tbl) {
+			loading_tbl = st_init_strtable();
+		    }
+		    /* partial state */
+		    ftptr = ruby_strdup(RSTRING(feature)->ptr);
+		    st_insert(loading_tbl, (st_data_t)ftptr, (st_data_t)curr_thread);
+		    rb_load(path, 0);
+		    break;
+
+		  case 's':
+		    ruby_current_node = 0;
+		    ruby_sourcefile = rb_source_filename(RSTRING(path)->ptr);
+		    ruby_sourceline = 0;
+		    ruby_frame->last_func = 0;
+		    SCOPE_SET(SCOPE_PUBLIC);
+		    handle = (long)dln_load(RSTRING(path)->ptr);
+		    rb_ary_push(ruby_dln_librefs, LONG2NUM(handle));
+		    break;
+		}
+		result = Qtrue;
+	    }
+	}
     }
     POP_TAG();
-    st_delete(loading_tbl, (st_data_t *)&ftptr, 0); /* loading done */
-    free(ftptr);
-    ruby_safe_level = safe;
+    ruby_current_node = saved.node;
+    ruby_set_current_source();
+    ruby_frame->last_func = saved.func;
+    SCOPE_SET(saved.vmode);
+    ruby_safe_level = saved.safe;
+    if (ftptr) {
+	if (st_delete(loading_tbl, (st_data_t *)&ftptr, 0)) { /* loading done */
+	    free(ftptr);
+	}
+    }
     if (state) JUMP_TAG(state);
+    if (NIL_P(result)) {
+	load_failed(fname);
+    }
+    ruby_errinfo = errinfo;
 
-    return Qtrue;
+    return result;
 }
 
 VALUE
 rb_require(fname)
     const char *fname;
 {
-    return rb_f_require(Qnil, rb_str_new2(fname));
+    VALUE fn = rb_str_new2(fname);
+    OBJ_FREEZE(fn);
+    return rb_require_safe(fn, ruby_safe_level);
 }
 
 static void
@@ -6092,6 +6917,16 @@ set_method_visibility(self, argc, argv, ex)
     rb_clear_cache_by_class(self);
 }
 
+/*
+ *  call-seq:
+ *     public                 => self
+ *     public(symbol, ...)    => self
+ *  
+ *  With no arguments, sets the default visibility for subsequently
+ *  defined methods to public. With arguments, sets the named methods to
+ *  have public visibility.
+ */
+
 static VALUE
 rb_mod_public(argc, argv, module)
     int argc;
@@ -6107,6 +6942,16 @@ rb_mod_public(argc, argv, module)
     }
     return module;
 }
+
+/*
+ *  call-seq:
+ *     protected                => self
+ *     protected(symbol, ...)   => self
+ *  
+ *  With no arguments, sets the default visibility for subsequently
+ *  defined methods to protected. With arguments, sets the named methods
+ *  to have protected visibility.
+ */
 
 static VALUE
 rb_mod_protected(argc, argv, module)
@@ -6124,6 +6969,25 @@ rb_mod_protected(argc, argv, module)
     return module;
 }
 
+/*
+ *  call-seq:
+ *     private                 => self
+ *     private(symbol, ...)    => self
+ *  
+ *  With no arguments, sets the default visibility for subsequently
+ *  defined methods to private. With arguments, sets the named methods
+ *  to have private visibility.
+ *     
+ *     module Mod
+ *       def a()  end
+ *       def b()  end
+ *       private
+ *       def c()  end
+ *       private :a
+ *     end
+ *     Mod.private_instance_methods   #=> ["a", "c"]
+ */
+
 static VALUE
 rb_mod_private(argc, argv, module)
     int argc;
@@ -6140,6 +7004,13 @@ rb_mod_private(argc, argv, module)
     return module;
 }
 
+/*
+ *  call-seq:
+ *     mod.public_class_method(symbol, ...)    => mod
+ *  
+ *  Makes a list of existing class methods public.
+ */
+
 static VALUE
 rb_mod_public_method(argc, argv, obj)
     int argc;
@@ -6150,6 +7021,22 @@ rb_mod_public_method(argc, argv, obj)
     return obj;
 }
 
+/*
+ *  call-seq:
+ *     mod.private_class_method(symbol, ...)   => mod
+ *  
+ *  Makes existing class methods private. Often used to hide the default
+ *  constructor <code>new</code>.
+ *     
+ *     class SimpleSingleton  # Not thread safe
+ *       private_class_method :new
+ *       def SimpleSingleton.create(*args, &block)
+ *         @me = new(*args, &block) if ! @me
+ *         @me
+ *       end
+ *     end
+ */
+
 static VALUE
 rb_mod_private_method(argc, argv, obj)
     int argc;
@@ -6159,6 +7046,16 @@ rb_mod_private_method(argc, argv, obj)
     set_method_visibility(CLASS_OF(obj), argc, argv, NOEX_PRIVATE);
     return obj;
 }
+
+/*
+ *  call-seq:
+ *     public
+ *     public(symbol, ...)
+ *  
+ *  With no arguments, sets the default visibility for subsequently
+ *  defined methods to public. With arguments, sets the named methods to
+ *  have public visibility.
+ */
 
 static VALUE
 top_public(argc, argv)
@@ -6175,6 +7072,42 @@ top_private(argc, argv)
 {
     return rb_mod_private(argc, argv, rb_cObject);
 }
+
+/*
+ *  call-seq:
+ *     module_function(symbol, ...)    => self
+ *  
+ *  Creates module functions for the named methods. These functions may
+ *  be called with the module as a receiver, and also become available
+ *  as instance methods to classes that mix in the module. Module
+ *  functions are copies of the original, and so may be changed
+ *  independently. The instance-method versions are made private. If
+ *  used with no arguments, subsequently defined methods become module
+ *  functions.
+ *     
+ *     module Mod
+ *       def one
+ *         "This is one"
+ *       end
+ *       module_function :one
+ *     end
+ *     class Cls
+ *       include Mod
+ *       def callOne
+ *         one
+ *       end
+ *     end
+ *     Mod.one     #=> "This is one"
+ *     c = Cls.new
+ *     c.callOne   #=> "This is one"
+ *     module Mod
+ *       def one
+ *         "This is the new one"
+ *       end
+ *     end
+ *     Mod.one     #=> "This is one"
+ *     c.callOne   #=> "This is the new one"
+ */
 
 static VALUE
 rb_mod_modfunc(argc, argv, module)
@@ -6203,6 +7136,9 @@ rb_mod_modfunc(argc, argv, module)
 	id = rb_to_id(argv[i]);
 	for (;;) {
 	    body = search_method(m, id, &m);
+	    if (body == 0) {
+		body = search_method(rb_cObject, id, &m);
+	    }
 	    if (body == 0 || body->nd_body == 0) {
 		rb_bug("undefined method `%s'; can't happen", rb_id2name(id));
 	    }
@@ -6210,11 +7146,24 @@ rb_mod_modfunc(argc, argv, module)
 		break;		/* normal case: need not to follow 'super' link */
 	    }
 	    m = RCLASS(m)->super;
+	    if (!m) break;
 	}
 	rb_add_method(rb_singleton_class(module), id, body->nd_body, NOEX_PUBLIC);
     }
     return module;
 }
+
+/*
+ *  call-seq:
+ *     append_features(mod)   => mod
+ *  
+ *  When this module is included in another, Ruby calls
+ *  <code>append_features</code> in this module, passing it the
+ *  receiving module in _mod_. Ruby's default implementation is
+ *  to add the constants, methods, and module variables of this module
+ *  to _mod_ if this module has not already been added to
+ *  _mod_ or one of its ancestors. See also <code>Module#include</code>.
+ */
 
 static VALUE
 rb_mod_append_features(module, include)
@@ -6233,18 +7182,25 @@ rb_mod_append_features(module, include)
     return module;
 }
 
+/*
+ *  call-seq:
+ *     include(module, ...)    => self
+ *  
+ *  Invokes <code>Module.append_features</code> on each parameter in turn.
+ */
+
 static VALUE
 rb_mod_include(argc, argv, module)
     int argc;
     VALUE *argv;
     VALUE module;
 {
-    while (argc--) {
-	VALUE m = argv[argc];
+    int i;
 
-	Check_Type(m, T_MODULE);
-	rb_funcall(m, rb_intern("append_features"), 1, module);
-	rb_funcall(m, rb_intern("included"), 1, module);
+    for (i=0; i<argc; i++) Check_Type(argv[i], T_MODULE);
+    while (argc--) {
+	rb_funcall(argv[argc], rb_intern("append_features"), 1, module);
+	rb_funcall(argv[argc], rb_intern("included"), 1, module);
     }
     return module;
 }
@@ -6267,6 +7223,33 @@ rb_extend_object(obj, module)
     rb_include_module(rb_singleton_class(obj), module);
 }
 
+/*
+ *  call-seq:
+ *     extend_object(obj)    => obj
+ *  
+ *  Extends the specified object by adding this module's constants and
+ *  methods (which are added as singleton methods). This is the callback
+ *  method used by <code>Object#extend</code>.
+ *     
+ *     module Picky
+ *       def Picky.extend_object(o)
+ *         if String === o
+ *           puts "Can't add Picky to a String"
+ *         else
+ *           puts "Picky added to #{o.class}"
+ *           super
+ *         end
+ *       end
+ *     end
+ *     (s = Array.new).extend Picky  # Call Object.extend
+ *     (s = "quick brown fox").extend Picky
+ *     
+ *  <em>produces:</em>
+ *     
+ *     Picky added to Array
+ *     Can't add Picky to a String
+ */
+
 static VALUE
 rb_mod_extend_object(mod, obj)
     VALUE mod, obj;
@@ -6274,6 +7257,31 @@ rb_mod_extend_object(mod, obj)
     rb_extend_object(obj, mod);
     return obj;
 }
+
+/*
+ *  call-seq:
+ *     obj.extend(module, ...)    => obj
+ *  
+ *  Adds to _obj_ the instance methods from each module given as a
+ *  parameter.
+ *     
+ *     module Mod
+ *       def hello
+ *         "Hello from Mod.\n"
+ *       end
+ *     end
+ *     
+ *     class Klass
+ *       def hello
+ *         "Hello from Klass.\n"
+ *       end
+ *     end
+ *     
+ *     k = Klass.new
+ *     k.hello         #=> "Hello from Klass.\n"
+ *     k.extend(Mod)   #=> #<Klass:0x401b3bc8>
+ *     k.hello         #=> "Hello from Mod.\n"
+ */
 
 static VALUE
 rb_obj_extend(argc, argv, obj)
@@ -6284,14 +7292,24 @@ rb_obj_extend(argc, argv, obj)
     int i;
 
     if (argc == 0) {
-	rb_raise(rb_eArgError, "wrong number of arguments(0 for 1)");
+	rb_raise(rb_eArgError, "wrong number of arguments (0 for 1)");
     }
     for (i=0; i<argc; i++) Check_Type(argv[i], T_MODULE);
     while (argc--) {
 	rb_funcall(argv[argc], rb_intern("extend_object"), 1, obj);
+	rb_funcall(argv[argc], rb_intern("extended"), 1, obj);
     }
     return obj;
 }
+
+/*
+ *  call-seq:
+ *     include(module, ...)   => self
+ *  
+ *  Invokes <code>Module.append_features</code>
+ *  on each parameter in turn. Effectively adds the methods and constants
+ *  in each module to the receiver.
+ */
 
 static VALUE
 top_include(argc, argv, self)
@@ -6301,12 +7319,10 @@ top_include(argc, argv, self)
 {
     rb_secure(4);
     if (ruby_wrapper) {
-	rb_warn("main#include in the wrapped load is effective only for toplevel");
-	return rb_obj_extend(argc, argv, self);
+	rb_warning("main#include in the wrapped load is effective only in wrapper module");
+	return rb_mod_include(argc, argv, ruby_wrapper);
     }
-    else {
-	return rb_mod_include(argc, argv, rb_cObject);
-    }
+    return rb_mod_include(argc, argv, rb_cObject);
 }
 
 VALUE rb_f_trace_var();
@@ -6343,6 +7359,19 @@ errat_setter(val, id, var)
     set_backtrace(ruby_errinfo, val);
 }
 
+/*
+ *  call-seq:
+ *     local_variables    => array
+ *  
+ *  Returns the names of the current local variables.
+ *     
+ *     fred = 1
+ *     for i in 1..10
+ *        # ...
+ *     end
+ *     local_variables   #=> ["fred", "i"]
+ */
+
 static VALUE
 rb_f_local_variables()
 {
@@ -6377,10 +7406,11 @@ NORETURN(static VALUE rb_f_throw _((int,VALUE*)));
 struct end_proc_data {
     void (*func)();
     VALUE data;
+    int safe;
     struct end_proc_data *next;
 };
 
-static struct end_proc_data *end_procs, *ephemeral_end_procs;
+static struct end_proc_data *end_procs, *ephemeral_end_procs, *tmp_end_procs;
 
 void
 rb_set_end_proc(func, data)
@@ -6395,6 +7425,7 @@ rb_set_end_proc(func, data)
     link->next = *list;
     link->func = func;
     link->data = data;
+    link->safe = ruby_safe_level;
     *list = link;
 }
 
@@ -6413,6 +7444,11 @@ rb_mark_end_proc()
 	rb_gc_mark(link->data);
 	link = link->next;
     }
+    link = tmp_end_procs;
+    while (link) {
+	rb_gc_mark(link->data);
+	link = link->next;
+    }
 }
 
 static void call_end_proc _((VALUE data));
@@ -6424,6 +7460,7 @@ call_end_proc(data)
     PUSH_ITER(ITER_NOT);
     PUSH_FRAME();
     ruby_frame->self = ruby_frame->prev->self;
+    ruby_frame->node = 0;
     ruby_frame->last_func = 0;
     ruby_frame->last_class = 0;
     proc_invoke(data, rb_ary_new2(0), Qundef, 0);
@@ -6436,15 +7473,40 @@ rb_f_END()
 {
     PUSH_FRAME();
     ruby_frame->argc = 0;
+    ruby_frame->iter = ITER_CUR;
     rb_set_end_proc(call_end_proc, rb_block_proc());
     POP_FRAME();
 }
+
+/*
+ *  call-seq:
+ *     at_exit { block } -> proc
+ *  
+ *  Converts _block_ to a +Proc+ object (and therefore
+ *  binds it at the point of call) and registers it for execution when
+ *  the program exits. If multiple handlers are registered, they are
+ *  executed in reverse order of registration.
+ *     
+ *     def do_at_exit(str1)
+ *       at_exit { print str1 }
+ *     end
+ *     at_exit { puts "cruel world" }
+ *     do_at_exit("goodbye ")
+ *     exit
+ *     
+ *  <em>produces:</em>
+ *     
+ *     goodbye cruel world
+ */
 
 static VALUE
 rb_f_at_exit()
 {
     VALUE proc;
 
+    if (!rb_block_given_p()) {
+	rb_raise(rb_eArgError, "called without a block");
+    }
     proc = rb_block_proc();
     rb_set_end_proc(call_end_proc, proc);
     return proc;
@@ -6453,46 +7515,47 @@ rb_f_at_exit()
 void
 rb_exec_end_proc()
 {
-    struct end_proc_data *link, *save;
+    struct end_proc_data *link, *tmp;
     int status;
+    volatile int safe = ruby_safe_level;
 
-    save = link = end_procs;
-    while (link) {
-	PUSH_TAG(PROT_NONE);
-	if ((status = EXEC_TAG()) == 0) {
-	    (*link->func)(link->data);
-	}
-	POP_TAG();
-	if (status) {
-	    error_handle(status);
-	}
-	link = link->next;
-    }
-    link = end_procs;
-    while (link != save) {
-	PUSH_TAG(PROT_NONE);
-	if ((status = EXEC_TAG()) == 0) {
-	    (*link->func)(link->data);
-	}
-	POP_TAG();
-	if (status) {
-	    error_handle(status);
-	}
-	link = link->next;
-    }
     while (ephemeral_end_procs) {
-	link = ephemeral_end_procs;
-	ephemeral_end_procs = link->next;
-	PUSH_TAG(PROT_NONE);
-	if ((status = EXEC_TAG()) == 0) {
-	    (*link->func)(link->data);
+	tmp_end_procs = link = ephemeral_end_procs;
+	ephemeral_end_procs = 0;
+	while (link) {
+	    PUSH_TAG(PROT_NONE);
+	    if ((status = EXEC_TAG()) == 0) {
+		ruby_safe_level = link->safe;
+		(*link->func)(link->data);
+	    }
+	    POP_TAG();
+	    if (status) {
+		error_handle(status);
+	    }
+	    tmp = link;
+	    tmp_end_procs = link = link->next;
+	    free(tmp);
 	}
-	POP_TAG();
-	if (status) {
-	    error_handle(status);
-	}
-	free(link);
     }
+    while (end_procs) {
+	tmp_end_procs = link = end_procs;
+	end_procs = 0;
+	while (link) {
+	    PUSH_TAG(PROT_NONE);
+	    if ((status = EXEC_TAG()) == 0) {
+		ruby_safe_level = link->safe;
+		(*link->func)(link->data);
+	    }
+	    POP_TAG();
+	    if (status) {
+		error_handle(status);
+	    }
+	    tmp = link;
+	    tmp_end_procs = link = link->next;
+	    free(tmp);
+	}
+    }
+    ruby_safe_level = safe;
 }
 
 void
@@ -6532,7 +7595,10 @@ Init_eval()
     rb_define_global_function("loop", rb_f_loop, 0);
 
     rb_define_method(rb_mKernel, "respond_to?", rb_obj_respond_to, -1);
-
+    respond_to   = rb_intern("respond_to?");
+    basic_respond_to = rb_method_node(rb_cObject, respond_to);
+    rb_global_variable((VALUE*)&basic_respond_to);
+    
     rb_define_global_function("raise", rb_f_raise, -1);
     rb_define_global_function("fail", rb_f_raise, -1);
 
@@ -6545,7 +7611,7 @@ Init_eval()
 
     rb_define_global_function("catch", rb_f_catch, 1);
     rb_define_global_function("throw", rb_f_throw, -1);
-    rb_define_global_function("global_variables", rb_f_global_variables, 0);
+    rb_define_global_function("global_variables", rb_f_global_variables, 0); /* in variable.c */
     rb_define_global_function("local_variables", rb_f_local_variables, 0);
 
     rb_define_method(rb_mKernel, "send", rb_f_send, -1);
@@ -6584,14 +7650,28 @@ Init_eval()
 
     rb_define_method(rb_mKernel, "extend", rb_obj_extend, -1);
 
-    rb_define_global_function("trace_var", rb_f_trace_var, -1);
-    rb_define_global_function("untrace_var", rb_f_untrace_var, -1);
+    rb_define_global_function("trace_var", rb_f_trace_var, -1); /* in variable.c */
+    rb_define_global_function("untrace_var", rb_f_untrace_var, -1); /* in variable.c */
 
     rb_define_global_function("set_trace_func", set_trace_func, 1);
     rb_global_variable(&trace_func);
 
     rb_define_virtual_variable("$SAFE", safe_getter, safe_setter);
 }
+
+/*
+ *  call-seq:
+ *     mod.autoload(name, filename)   => nil
+ *  
+ *  Registers _filename_ to be loaded (using <code>Kernel::require</code>) 
+ *  the first time that _module_ (which may be a <code>String</code> or
+ *  a symbol) is accessed in the namespace of _mod_.
+ *     
+ *     module A
+ *     end
+ *     A.autoload(:B, "b")
+ *     A::B.doit            # autoloads "b"
+ */
 
 static VALUE
 rb_mod_autoload(mod, sym, file)
@@ -6606,6 +7686,10 @@ rb_mod_autoload(mod, sym, file)
     return Qnil;
 }
 
+/*
+ * MISSING: documentation
+ */
+
 static VALUE
 rb_mod_autoload_p(mod, sym)
     VALUE mod, sym;
@@ -6613,22 +7697,38 @@ rb_mod_autoload_p(mod, sym)
     return rb_autoload_p(mod, rb_to_id(sym));
 }
 
+/*
+ *  call-seq:
+ *     autoload(module, filename)   => nil
+ *  
+ *  Registers _filename_ to be loaded (using <code>Kernel::require</code>) 
+ *  the first time that _module_ (which may be a <code>String</code> or
+ *  a symbol) is accessed.
+ *     
+ *     autoload(:MyModule, "/usr/local/lib/modules/my_module.rb")
+ */
+
 static VALUE
 rb_f_autoload(obj, sym, file)
     VALUE obj;
     VALUE sym;
     VALUE file;
 {
-    return rb_mod_autoload(ruby_class, sym, file);
+    return rb_mod_autoload(ruby_cbase, sym, file);
 }
+
+
+/*
+ * MISSING: documentation
+ */
 
 static VALUE
 rb_f_autoload_p(obj, sym)
     VALUE obj;
     VALUE sym;
 {
-    /* use ruby_class as same as rb_f_autoload. */
-    return rb_mod_autoload_p(ruby_class, sym);
+    /* use ruby_cbase as same as rb_f_autoload. */
+    return rb_mod_autoload_p(ruby_cbase, sym);
 }
 
 void
@@ -6641,6 +7741,7 @@ Init_load()
 
     rb_features = rb_ary_new();
     rb_define_readonly_variable("$\"", &rb_features);
+    rb_define_readonly_variable("$LOADED_FEATURES", &rb_features);
 
     rb_define_global_function("load", rb_f_load, -1);
     rb_define_global_function("require", rb_f_require, 1);
@@ -6685,8 +7786,7 @@ blk_mark(data)
 	rb_gc_mark((VALUE)data->body);
 	rb_gc_mark((VALUE)data->self);
 	rb_gc_mark((VALUE)data->dyna_vars);
-	rb_gc_mark((VALUE)data->klass);
-	rb_gc_mark((VALUE)data->tag);
+	rb_gc_mark((VALUE)data->cref);
 	rb_gc_mark(data->wrapper);
 	rb_gc_mark(data->block_obj);
 	data = data->prev;
@@ -6694,13 +7794,14 @@ blk_mark(data)
 }
 
 static void
-blk_free(data)
-    struct BLOCK *data;
-{
+frame_free(frame)
     struct FRAME *frame;
-    void *tmp;
+{
+    struct FRAME *tmp;
 
-    frame = data->frame.prev;
+    if (frame->argc > 0 && (frame->flags & FRAME_MALLOC))
+        free(frame->argv);
+    frame = frame->prev;
     while (frame) {
 	if (frame->argc > 0 && (frame->flags & FRAME_MALLOC))
 	    free(frame->argv);
@@ -6708,40 +7809,19 @@ blk_free(data)
 	frame = frame->prev;
 	free(tmp);
     }
-    while (data) {
-	if (data->frame.argc > 0)
-	    free(data->frame.argv);
-	tmp = data;
-	data = data->prev;
-	free(tmp);
-    }
 }
 
 static void
-blk_copy_prev(block)
-    struct BLOCK *block;
+blk_free(data)
+    struct BLOCK *data;
 {
-    struct BLOCK *tmp;
-    struct RVarmap* vars;
+    void *tmp;
 
-    while (block->prev) {
-	tmp = ALLOC_N(struct BLOCK, 1);
-	MEMCPY(tmp, block->prev, struct BLOCK, 1);
-	if (tmp->frame.argc > 0) {
-	    tmp->frame.argv = ALLOC_N(VALUE, tmp->frame.argc);
-	    MEMCPY(tmp->frame.argv, block->prev->frame.argv, VALUE, tmp->frame.argc);
-	    tmp->frame.flags |= FRAME_MALLOC;
-	}
-	scope_dup(tmp->scope);
-	tmp->tag->flags |= BLOCK_DYNAMIC;
-
-	for (vars = tmp->dyna_vars; vars; vars = vars->next) {
-	    if (FL_TEST(vars, DVAR_DONT_RECYCLE)) break;
-	    FL_SET(vars, DVAR_DONT_RECYCLE);
-	}
-
-	block->prev = tmp;
-	block = tmp;
+    while (data) {
+	frame_free(&data->frame);
+	tmp = data;
+	data = data->prev;
+	free(tmp);
     }
 }
 
@@ -6768,6 +7848,50 @@ frame_dup(frame)
     }
 }
 
+
+static void
+blk_copy_prev(block)
+    struct BLOCK *block;
+{
+    struct BLOCK *tmp;
+    struct RVarmap* vars;
+
+    while (block->prev) {
+	tmp = ALLOC_N(struct BLOCK, 1);
+	MEMCPY(tmp, block->prev, struct BLOCK, 1);
+	scope_dup(tmp->scope);
+	frame_dup(&tmp->frame);
+
+	for (vars = tmp->dyna_vars; vars; vars = vars->next) {
+	    if (FL_TEST(vars, DVAR_DONT_RECYCLE)) break;
+	    FL_SET(vars, DVAR_DONT_RECYCLE);
+	}
+
+	block->prev = tmp;
+	block = tmp;
+    }
+}
+
+
+static void
+blk_dup(dup, orig)
+    struct BLOCK *dup, *orig;
+{
+    MEMCPY(dup, orig, struct BLOCK, 1);
+    frame_dup(&dup->frame);
+
+    if (dup->iter) {
+	blk_copy_prev(dup);
+    }
+    else {
+	dup->prev = 0;
+    }
+}
+
+/*
+ * MISSING: documentation
+ */
+
 static VALUE
 proc_clone(self)
     VALUE self;
@@ -6778,18 +7902,44 @@ proc_clone(self)
     Data_Get_Struct(self, struct BLOCK, orig);
     bind = Data_Make_Struct(rb_obj_class(self),struct BLOCK,blk_mark,blk_free,data);
     CLONESETUP(bind, self);
-    MEMCPY(data, orig, struct BLOCK, 1);
-    frame_dup(&data->frame);
-
-    if (data->iter) {
-	blk_copy_prev(data);
-    }
-    else {
-	data->prev = 0;
-    }
+    blk_dup(data, orig);
 
     return bind;
 }
+
+/*
+ * MISSING: documentation
+ */
+
+static VALUE
+proc_dup(self)
+    VALUE self;
+{
+    struct BLOCK *orig, *data;
+    VALUE bind;
+
+    Data_Get_Struct(self, struct BLOCK, orig);
+    bind = Data_Make_Struct(rb_obj_class(self),struct BLOCK,blk_mark,blk_free,data);
+    blk_dup(data, orig);
+
+    return bind;
+}
+
+/*
+ *  call-seq:
+ *     binding -> a_binding
+ *  
+ *  Returns a +Binding+ object, describing the variable and
+ *  method bindings at the point of call. This object can be used when
+ *  calling +eval+ to execute the evaluated command in this
+ *  environment. Also see the description of class +Binding+.
+ *     
+ *     def getBinding(param)
+ *       return binding
+ *     end
+ *     b = getBinding("hello")
+ *     eval("param", b)   #=> "hello"
+ */
 
 static VALUE
 rb_f_binding(self)
@@ -6818,8 +7968,6 @@ rb_f_binding(self)
     else {
 	data->prev = 0;
     }
-    data->flags |= BLOCK_DYNAMIC;
-    data->tag->flags |= BLOCK_DYNAMIC;
 
     for (p = data; p; p = p->prev) {
 	for (vars = p->dyna_vars; vars; vars = vars->next) {
@@ -6833,57 +7981,33 @@ rb_f_binding(self)
     return bind;
 }
 
-#define PROC_T3    FL_USER1
-#define PROC_T4    FL_USER2
-#define PROC_TMAX  (FL_USER1|FL_USER2)
-#define PROC_TMASK (FL_USER1|FL_USER2)
+#define PROC_TSHIFT (FL_USHIFT+1)
+#define PROC_TMASK  (FL_USER1|FL_USER2|FL_USER3)
+#define PROC_TMAX   (PROC_TMASK >> PROC_TSHIFT)
+
+#define SAFE_LEVEL_MAX PROC_TMASK
 
 static void
 proc_save_safe_level(data)
     VALUE data;
 {
-    if (OBJ_TAINTED(data)) {
-	switch (ruby_safe_level) {
-	  case 3:
-	    FL_SET(data, PROC_T3);
-	    break;
-	  case 4:
-	    FL_SET(data, PROC_T4);
-	    break;
-	  default:
-	    if (ruby_safe_level > 4) {
-		FL_SET(data, PROC_TMAX);
-	    }
-	    break;
-	}
-    }
+    int safe = ruby_safe_level;
+    if (safe > PROC_TMAX) safe = PROC_TMAX;
+    FL_SET(data, (safe << PROC_TSHIFT) & PROC_TMASK);
 }
 
 static int
 proc_get_safe_level(data)
     VALUE data;
 {
-    if (OBJ_TAINTED(data)) {
-	switch (RBASIC(data)->flags & PROC_TMASK) {
-	  case PROC_T3:
-	    return 3;
-	  case PROC_T4:
-	    return 4;
-	  case PROC_TMAX:
-	    return 5;
-	}
-	return 3;
-    }
-    return 0;
+    return (RBASIC(data)->flags & PROC_TMASK) >> PROC_TSHIFT;
 }
 
 static void
 proc_set_safe_level(data)
     VALUE data;
 {
-    if (OBJ_TAINTED(data)) {
-	ruby_safe_level = proc_get_safe_level(data);
-    }
+    ruby_safe_level = proc_get_safe_level(data);
 }
 
 static VALUE
@@ -6902,7 +8026,7 @@ proc_alloc(klass, proc)
 	rb_warn("tried to create Proc object without a block");
     }
 
-    if (!proc && ruby_block->block_obj) {
+    if (!proc && ruby_block->block_obj && CLASS_OF(ruby_block->block_obj) == klass) {
 	return ruby_block->block_obj;
     }
     block = Data_Make_Struct(klass, struct BLOCK, blk_mark, blk_free, data);
@@ -6911,6 +8035,7 @@ proc_alloc(klass, proc)
     data->orig_thread = rb_thread_current();
     data->wrapper = ruby_wrapper;
     data->iter = data->prev?Qtrue:Qfalse;
+    data->block_obj = block;
     frame_dup(&data->frame);
     if (data->iter) {
 	blk_copy_prev(data);
@@ -6918,8 +8043,6 @@ proc_alloc(klass, proc)
     else {
 	data->prev = 0;
     }
-    data->flags |= BLOCK_DYNAMIC;
-    data->tag->flags |= BLOCK_DYNAMIC;
 
     for (p = data; p; p = p->prev) {
 	for (vars = p->dyna_vars; vars; vars = vars->next) {
@@ -6938,6 +8061,23 @@ proc_alloc(klass, proc)
 
     return block;
 }
+
+/*
+ *  call-seq:
+ *     Proc.new {|...| block } => a_proc 
+ *     Proc.new                => a_proc 
+ *  
+ *  Creates a new <code>Proc</code> object, bound to the current
+ *  context. <code>Proc::new</code> may be called without a block only
+ *  within a method with an attached block, in which case that block is
+ *  converted to the <code>Proc</code> object.
+ *     
+ *     def proc_from
+ *       Proc.new
+ *     end
+ *     proc = proc_from { "hello" }
+ *     proc.call   #=> "hello"
+ */
 
 static VALUE
 proc_s_new(argc, argv, klass)
@@ -6964,6 +8104,15 @@ rb_f_lambda()
     return proc_alloc(rb_cProc, Qtrue);
 }
 
+/*
+ * call-seq:
+ *   proc   { |...| block }  => a_proc
+ *   lambda { |...| block }  => a_proc
+ *
+ * Equivalent to <code>Proc.new</code>, except the resulting Proc objects
+ * check the number of parameters passed when called.
+ */
+
 static VALUE
 proc_lambda()
 {
@@ -6974,8 +8123,7 @@ static int
 block_orphan(data)
     struct BLOCK *data;
 {
-    if ((data->tag->flags & BLOCK_ORPHAN) &&
-	(data->scope->flags & SCOPE_NOSTACK)) {
+    if (data->scope->flags & SCOPE_NOSTACK) {
 	return 1;
     }
     if (data->orig_thread != rb_thread_current()) {
@@ -6992,24 +8140,29 @@ proc_invoke(proc, args, self, klass)
     struct BLOCK * volatile old_block;
     struct BLOCK _block;
     struct BLOCK *data;
-    volatile VALUE result = Qnil;
-    int state, incoming_state;
-    volatile int orphan;
+    volatile VALUE result = Qundef;
+    int state;
     volatile int safe = ruby_safe_level;
     volatile VALUE old_wrapper = ruby_wrapper;
-    struct RVarmap * volatile old_dvars = ruby_dyna_vars;
-    volatile int pcall;
+    volatile int pcall, avalue = Qtrue;
+    volatile VALUE tmp = args;
 
     if (rb_block_given_p() && ruby_frame->last_func) {
+	if (klass != ruby_frame->last_class)
+	    klass = rb_obj_class(proc);
 	rb_warning("block for %s#%s is useless",
-		   rb_obj_classname(proc),
+		   rb_class2name(klass),
 		   rb_id2name(ruby_frame->last_func));
     }
 
     Data_Get_Struct(proc, struct BLOCK, data);
-    orphan = block_orphan(data);
-    pcall = data->flags & BLOCK_LAMBDA ? YIELD_PROC_CALL : 0;
+    pcall = (data->flags & BLOCK_LAMBDA) ? YIELD_LAMBDA_CALL : 0;
+    if (!pcall && RARRAY(args)->len == 1) {
+	avalue = Qfalse;
+	args = RARRAY(args)->ptr[0];
+    }
 
+    PUSH_VARS();
     ruby_wrapper = data->wrapper;
     ruby_dyna_vars = data->dyna_vars;
     /* PUSH BLOCK from data */
@@ -7017,56 +8170,85 @@ proc_invoke(proc, args, self, klass)
     _block = *data;
     if (self != Qundef) _block.frame.self = self;
     if (klass) _block.frame.last_class = klass;
+    _block.frame.argc = RARRAY(tmp)->len;
+    _block.frame.argv = ALLOCA_N(VALUE, RARRAY(tmp)->len);
+    MEMCPY(_block.frame.argv, RARRAY(tmp)->ptr, VALUE, RARRAY(tmp)->len);
+    _block.frame.flags = FRAME_ALLOCA;
     ruby_block = &_block;
 
     PUSH_ITER(ITER_CUR);
     ruby_frame->iter = ITER_CUR;
-    PUSH_TAG(PROT_NONE);
+    PUSH_TAG(pcall ? PROT_LAMBDA : PROT_NONE);
     state = EXEC_TAG();
     if (state == 0) {
 	proc_set_safe_level(proc);
-	result = rb_yield_0(args, self, self!=Qundef?CLASS_OF(self):0, pcall, Qtrue);
+	result = rb_yield_0(args, self, (self!=Qundef)?CLASS_OF(self):0, pcall, avalue);
+    }
+    else if (TAG_DST()) {
+	result = prot_tag->retval;
     }
     POP_TAG();
-
     POP_ITER();
-    incoming_state = state;
-    if (orphan || ruby_block->tag->dst == state) {
-	state &= TAG_MASK;
-    }
     ruby_block = old_block;
     ruby_wrapper = old_wrapper;
-    ruby_dyna_vars = old_dvars;
+    POP_VARS();
     ruby_safe_level = safe;
 
     switch (state) {
       case 0:
 	break;
       case TAG_RETRY:
-	if (pcall || orphan) {
-	    localjump_error("retry from proc-closure", Qnil, state);
-	}
-	/* fall through */
+	proc_jump_error(TAG_RETRY, Qnil); /* xxx */
+	JUMP_TAG(state);
+	break;
       case TAG_BREAK:
+	if (!pcall && result != Qundef) {
+	    proc_jump_error(state, result);
+	}
       case TAG_RETURN:
-	if (pcall) {
-	    result = prot_tag->retval;
-	    break;
-	}
-	else if (orphan) {	/* orphan block */
-	    char mesg[32];
-	    snprintf(mesg, sizeof mesg, "%s from proc-closure",
-		     state == TAG_BREAK ? "break" : "return");
-	    localjump_error(mesg, prot_tag->retval, state);
-	}
-	else if (state == incoming_state) {
-	    ruby_block->tag->dst = incoming_state;
+	if (result != Qundef) {
+	    if (pcall) break;
+	    return_jump(result);
 	}
       default:
 	JUMP_TAG(state);
     }
     return result;
 }
+
+/* CHECKME: are the argument checking semantics correct? */
+
+/*
+ *  call-seq:
+ *     prc.call(params,...)   => obj
+ *     prc[params,...]        => obj
+ *  
+ *  Invokes the block, setting the block's parameters to the values in
+ *  <i>params</i> using something close to method calling semantics.
+ *  Generates a warning if multiple values are passed to a proc that
+ *  expects just one (previously this silently converted the parameters
+ *  to an array). 
+ *
+ *  For procs created using <code>Kernel.proc</code>, generates an 
+ *  error if the wrong number of parameters
+ *  are passed to a proc with multiple parameters. For procs created using
+ *  <code>Proc.new</code>, extra parameters are silently discarded.
+ *
+ *  Returns the value of the last expression evaluated in the block. See
+ *  also <code>Proc#yield</code>.
+ *     
+ *     a_proc = Proc.new {|a, *b| b.collect {|i| i*a }}
+ *     a_proc.call(9, 1, 2, 3)   #=> [9, 18, 27]
+ *     a_proc[9, 1, 2, 3]        #=> [9, 18, 27]
+ *     a_proc = Proc.new {|a,b| a}
+ *     a_proc.call(1,2,3)
+ *     
+ *  <em>produces:</em>
+ *     
+ *     prog.rb:5: wrong number of arguments (3 for 2) (ArgumentError)
+ *     	from prog.rb:4:in `call'
+ *     	from prog.rb:5
+ */
 
 static VALUE
 proc_call(proc, args)
@@ -7077,6 +8259,27 @@ proc_call(proc, args)
 
 static VALUE bmcall _((VALUE, VALUE));
 static VALUE method_arity _((VALUE));
+
+/*
+ *  call-seq:
+ *     prc.arity -> fixnum
+ *  
+ *  Returns the number of arguments required by the block. If the block
+ *  is declared to take no arguments, returns 0. If the block is known
+ *  to take exactly n arguments, returns n. If the block has optional
+ *  arguments, return -n-1, where n is the number of mandatory
+ *  arguments. A <code>proc</code> with no argument declarations 
+ *  returns -1, as it can accept (and ignore) an arbitrary number of
+ *  parameters.
+ *     
+ *     Proc.new {}.arity          #=> -1
+ *     Proc.new {||}.arity        #=>  0
+ *     Proc.new {|a|}.arity       #=>  1
+ *     Proc.new {|a,b|}.arity     #=>  2
+ *     Proc.new {|a,b,c|}.arity   #=>  3
+ *     Proc.new {|*a|}.arity      #=> -1
+ *     Proc.new {|a,*b|}.arity    #=> -2
+ */
 
 static VALUE
 proc_arity(proc)
@@ -7111,6 +8314,14 @@ proc_arity(proc)
     }
 }
 
+/*
+ * call-seq:
+ *   prc == other_proc   =>  true or false
+ *
+ * Return <code>true</code> if <i>prc</i> is the same object as
+ * <i>other_proc</i>, or if they are both procs with the same body.
+ */
+
 static VALUE
 proc_eq(self, other)
     VALUE self, other;
@@ -7123,13 +8334,26 @@ proc_eq(self, other)
     if (CLASS_OF(self) != CLASS_OF(other)) return Qfalse;
     Data_Get_Struct(self, struct BLOCK, data);
     Data_Get_Struct(other, struct BLOCK, data2);
-    if (data->tag == data2->tag) return Qtrue;
-    return Qfalse;
+    if (data->body != data2->body) return Qfalse;
+    if (data->var != data2->var) return Qfalse;
+    if (data->scope != data2->scope) return Qfalse;
+    if (data->dyna_vars != data2->dyna_vars) return Qfalse;
+    if (data->flags != data2->flags) return Qfalse;
+
+    return Qtrue;
 }
 
+/*
+ * call-seq:
+ *   prc.to_s   => string
+ *
+ * Shows the unique identifier for this proc, along with
+ * an indication of where the proc was defined.
+ */
+
 static VALUE
-proc_to_s(self, other)
-    VALUE self, other;
+proc_to_s(self)
+    VALUE self;
 {
     struct BLOCK *data;
     NODE *node;
@@ -7142,12 +8366,12 @@ proc_to_s(self, other)
     if ((node = data->frame.node) || (node = data->body)) {
 	len += strlen(node->nd_file) + 2 + (SIZEOF_LONG*CHAR_BIT-NODE_LSHIFT)/3;
 	str = rb_str_new(0, len);
-	sprintf(RSTRING(str)->ptr, "#<%s:0x%.*lx@%s:%d>", cname, w, (VALUE)data->tag,
+	sprintf(RSTRING(str)->ptr, "#<%s:0x%.*lx@%s:%d>", cname, w, (VALUE)data->body,
 		node->nd_file, nd_line(node));
     }
     else {
 	str = rb_str_new(0, len);
-	sprintf(RSTRING(str)->ptr, "#<%s:0x%.*lx>", cname, w, (VALUE)data->tag);
+	sprintf(RSTRING(str)->ptr, "#<%s:0x%.*lx>", cname, w, (VALUE)data->body);
     }
     RSTRING(str)->len = strlen(RSTRING(str)->ptr);
     if (OBJ_TAINTED(self)) OBJ_TAINT(str);
@@ -7155,12 +8379,38 @@ proc_to_s(self, other)
     return str;
 }
 
+/*
+ *  call-seq:
+ *     prc.to_proc -> prc
+ *  
+ *  Part of the protocol for converting objects to <code>Proc</code>
+ *  objects. Instances of class <code>Proc</code> simply return
+ *  themselves.
+ */
+
 static VALUE
 proc_to_self(self)
     VALUE self;
 {
     return self;
 }
+
+/*
+ *  call-seq:
+ *     prc.binding    => binding
+ *  
+ *  Returns the binding associated with <i>prc</i>. Note that
+ *  <code>Kernel#eval</code> accepts either a <code>Proc</code> or a
+ *  <code>Binding</code> object as its second parameter.
+ *     
+ *     def fred(param)
+ *       proc {}
+ *     end
+ *     
+ *     b = fred(99)
+ *     eval("param", b.binding)   #=> 99
+ *     eval("param", b)           #=> 99
+ */
 
 static VALUE
 proc_binding(proc)
@@ -7220,61 +8470,54 @@ block_pass(self, node)
 	}
     }
 
+    if (ruby_block && ruby_block->block_obj == proc) {
+	PUSH_ITER(ITER_PRE);
+	result = rb_eval(self, node->nd_iter);
+	POP_ITER();
+	return result;
+    }
+
     Data_Get_Struct(proc, struct BLOCK, data);
     orphan = block_orphan(data);
 
-  retry:
     /* PUSH BLOCK from data */
     old_block = ruby_block;
     _block = *data;
     _block.outer = ruby_block;
+    _block.uniq = block_unique++;
     ruby_block = &_block;
     PUSH_ITER(ITER_PRE);
-    ruby_frame->iter = ITER_PRE;
+    if (ruby_frame->iter == ITER_NOT)
+	ruby_frame->iter = ITER_PRE;
 
-    PUSH_TAG(PROT_NONE);
+    PUSH_TAG(PROT_LOOP);
     state = EXEC_TAG();
     if (state == 0) {
+      retry:
 	proc_set_safe_level(proc);
 	if (safe > ruby_safe_level)
 	    ruby_safe_level = safe;
 	result = rb_eval(self, node->nd_iter);
     }
+    else if (state == TAG_BREAK && TAG_DST()) {
+	result = prot_tag->retval;
+	state = 0;
+    }
+    else if (state == TAG_RETRY) {
+	state = 0;
+	goto retry;
+    }
     POP_TAG();
     POP_ITER();
-    if (_block.tag->dst == state) {
-	if (orphan) {
-	    state &= TAG_MASK;
-	}
-	else {
-	    struct BLOCK *ptr = old_block;
-
-	    while (ptr) {
-		if (ptr->scope == _block.scope) {
-		    ptr->tag->dst = state;
-		    break;
-		}
-		ptr = ptr->prev;
-	    }
-	    if (!ptr) {
-		state &= TAG_MASK;
-	    }
-	}
-    }
     ruby_block = old_block;
     ruby_safe_level = safe;
 
     switch (state) {/* escape from orphan block */
       case 0:
 	break;
-      case TAG_BREAK:
-	result = prot_tag->retval;
-	break;
-      case TAG_RETRY:
-	goto retry;
       case TAG_RETURN:
 	if (orphan) {
-	    localjump_error("return from proc-closure", prot_tag->retval, state);
+	    proc_jump_error(state, prot_tag->retval);
 	}
       default:
 	JUMP_TAG(state);
@@ -7339,6 +8582,40 @@ mnew(klass, obj, id, mklass)
     return method;
 }
 
+
+/**********************************************************************
+ *
+ * Document-class : Method
+ *
+ *  Method objects are created by <code>Object#method</code>, and are
+ *  associated with a particular object (not just with a class). They
+ *  may be used to invoke the method within the object, and as a block
+ *  associated with an iterator. They may also be unbound from one
+ *  object (creating an <code>UnboundMethod</code>) and bound to
+ *  another.
+ *     
+ *     class Thing
+ *       def square(n)
+ *         n*n
+ *       end
+ *     end
+ *     thing = Thing.new
+ *     meth  = thing.method(:square)
+ *     
+ *     meth.call(9)                 #=> 81
+ *     [ 1, 2, 3 ].collect(&meth)   #=> [1, 4, 9]
+ *     
+ */
+
+/*
+ * call-seq:
+ *   meth == other_meth  => true or false
+ *
+ * Two method objects are equal if that are bound to the same
+ * object and contain the same body.
+ */
+
+
 static VALUE
 method_eq(method, other)
     VALUE method, other;
@@ -7360,6 +8637,15 @@ method_eq(method, other)
     return Qtrue;
 }
 
+/*
+ *  call-seq:
+ *     meth.unbind    => unbound_method
+ *  
+ *  Dissociates <i>meth</i> from it's current receiver. The resulting
+ *  <code>UnboundMethod</code> can subsequently be bound to a new object
+ *  of the same class (see <code>UnboundMethod</code>).
+ */
+
 static VALUE
 method_unbind(obj)
     VALUE obj;
@@ -7380,6 +8666,34 @@ method_unbind(obj)
     return method;
 }
 
+/*
+ *  call-seq:
+ *     obj.method(sym)    => method
+ *  
+ *  Looks up the named method as a receiver in <i>obj</i>, returning a
+ *  <code>Method</code> object (or raising <code>NameError</code>). The
+ *  <code>Method</code> object acts as a closure in <i>obj</i>'s object
+ *  instance, so instance variables and the value of <code>self</code>
+ *  remain available.
+ *     
+ *     class Demo
+ *       def initialize(n)
+ *         @iv = n
+ *       end
+ *       def hello()
+ *         "Hello, @iv = #{@iv}"
+ *       end
+ *     end
+ *     
+ *     k = Demo.new(99)
+ *     m = k.method(:hello)
+ *     m.call   #=> "Hello, @iv = 99"
+ *     
+ *     l = Demo.new('Fred')
+ *     m = l.method("hello")
+ *     m.call   #=> "Hello, @iv = Fred"
+ */
+
 static VALUE
 rb_obj_method(obj, vid)
     VALUE obj;
@@ -7388,6 +8702,38 @@ rb_obj_method(obj, vid)
     return mnew(CLASS_OF(obj), obj, rb_to_id(vid), rb_cMethod);
 }
 
+/*
+ *  call-seq:
+ *     mod.instance_method(symbol)   => unbound_method
+ *  
+ *  Returns an +UnboundMethod+ representing the given
+ *  instance method in _mod_.
+ *     
+ *     class Interpreter
+ *       def do_a() print "there, "; end
+ *       def do_d() print "Hello ";  end
+ *       def do_e() print "!\n";     end
+ *       def do_v() print "Dave";    end
+ *       Dispatcher = {
+ *        ?a => instance_method(:do_a),
+ *        ?d => instance_method(:do_d),
+ *        ?e => instance_method(:do_e),
+ *        ?v => instance_method(:do_v)
+ *       }
+ *       def interpret(string)
+ *         string.each_byte {|b| Dispatcher[b].bind(self).call }
+ *       end
+ *     end
+ *     
+ *     
+ *     interpreter = Interpreter.new
+ *     interpreter.interpret('dave')
+ *     
+ *  <em>produces:</em>
+ *     
+ *     Hello there, Dave!
+ */
+
 static VALUE
 rb_mod_method(mod, vid)
     VALUE mod;
@@ -7395,6 +8741,10 @@ rb_mod_method(mod, vid)
 {
     return mnew(mod, Qundef, rb_to_id(vid), rb_cUnboundMethod);
 }
+
+/*
+ * MISSING: documentation
+ */
 
 static VALUE
 method_clone(self)
@@ -7411,16 +8761,29 @@ method_clone(self)
     return clone;
 }
 
+/*
+ *  call-seq:
+ *     meth.call(args, ...)    => obj
+ *     meth[args, ...]         => obj
+ *  
+ *  Invokes the <i>meth</i> with the specified arguments, returning the
+ *  method's return value.
+ *     
+ *     m = 12.method("+")
+ *     m.call(3)    #=> 15
+ *     m.call(20)   #=> 32
+ */
+
 static VALUE
 method_call(argc, argv, method)
     int argc;
     VALUE *argv;
     VALUE method;
 {
-    VALUE result;	/* OK */
+    VALUE result = Qnil;	/* OK */
     struct METHOD *data;
     int state;
-    volatile int safe = ruby_safe_level;
+    volatile int safe = -1;
 
     Data_Get_Struct(method, struct METHOD, data);
     if (data->recv == Qundef) {
@@ -7428,18 +8791,110 @@ method_call(argc, argv, method)
     }
     PUSH_ITER(rb_block_given_p()?ITER_PRE:ITER_NOT);
     PUSH_TAG(PROT_NONE);
-    if (OBJ_TAINTED(method) && ruby_safe_level < 4) {
-	ruby_safe_level = 4;
+    if (OBJ_TAINTED(method)) {
+	safe = ruby_safe_level;
+	if (ruby_safe_level < 4) ruby_safe_level = 4;
     }
     if ((state = EXEC_TAG()) == 0) {
 	result = rb_call0(data->klass,data->recv,data->id,data->oid,argc,argv,data->body,0);
     }
     POP_TAG();
     POP_ITER();
-    ruby_safe_level = safe;
+    if (safe >= 0) ruby_safe_level = safe;
     if (state) JUMP_TAG(state);
     return result;
 }
+
+/**********************************************************************
+ *
+ * Document-class: UnboundMethod
+ *
+ *  Ruby supports two forms of objectified methods. Class
+ *  <code>Method</code> is used to represent methods that are associated
+ *  with a particular object: these method objects are bound to that
+ *  object. Bound method objects for an object can be created using
+ *  <code>Object#method</code>.
+ *     
+ *  Ruby also supports unbound methods; methods objects that are not
+ *  associated with a particular object. These can be created either by
+ *  calling <code>Module#instance_method</code> or by calling
+ *  <code>unbind</code> on a bound method object. The result of both of
+ *  these is an <code>UnboundMethod</code> object.
+ *     
+ *  Unbound methods can only be called after they are bound to an
+ *  object. That object must be be a kind_of? the method's original
+ *  class.
+ *     
+ *     class Square
+ *       def area
+ *         @side * @side
+ *       end
+ *       def initialize(side)
+ *         @side = side
+ *       end
+ *     end
+ *     
+ *     area_un = Square.instance_method(:area)
+ *     
+ *     s = Square.new(12)
+ *     area = area_un.bind(s)
+ *     area.call   #=> 144
+ *     
+ *  Unbound methods are a reference to the method at the time it was
+ *  objectified: subsequent changes to the underlying class will not
+ *  affect the unbound method.
+ *     
+ *     class Test
+ *       def test
+ *         :original
+ *       end
+ *     end
+ *     um = Test.instance_method(:test)
+ *     class Test
+ *       def test
+ *         :modified
+ *       end
+ *     end
+ *     t = Test.new
+ *     t.test            #=> :modified
+ *     um.bind(t).call   #=> :original
+ *     
+ */
+
+/*
+ *  call-seq:
+ *     umeth.bind(obj) -> method
+ *  
+ *  Bind <i>umeth</i> to <i>obj</i>. If <code>Klass</code> was the class
+ *  from which <i>umeth</i> was obtained,
+ *  <code>obj.kind_of?(Klass)</code> must be true.
+ *     
+ *     class A
+ *       def test
+ *         puts "In test, class = #{self.class}"
+ *       end
+ *     end
+ *     class B < A
+ *     end
+ *     class C < B
+ *     end
+ *     
+ *     
+ *     um = B.instance_method(:test)
+ *     bm = um.bind(C.new)
+ *     bm.call
+ *     bm = um.bind(B.new)
+ *     bm.call
+ *     bm = um.bind(A.new)
+ *     bm.call
+ *     
+ *  <em>produces:</em>
+ *     
+ *     In test, class = C
+ *     In test, class = B
+ *     prog.rb:16:in `bind': bind argument must be an instance of B (TypeError)
+ *     	from prog.rb:16
+ */
 
 static VALUE
 umethod_bind(method, recv)
@@ -7451,10 +8906,6 @@ umethod_bind(method, recv)
     if (data->rklass != CLASS_OF(recv)) {
 	if (FL_TEST(data->rklass, FL_SINGLETON)) {
 	    rb_raise(rb_eTypeError, "singleton method called for a different object");
-	}
-	if (FL_TEST(CLASS_OF(recv), FL_SINGLETON) &&
-	    st_lookup(RCLASS(CLASS_OF(recv))->m_tbl, data->oid, 0)) {
-	    rb_raise(rb_eTypeError, "method `%s' overridden", rb_id2name(data->oid));
 	}
 	if(!rb_obj_is_kind_of(recv, data->rklass)) {
 	    rb_raise(rb_eTypeError, "bind argument must be an instance of %s",
@@ -7469,6 +8920,39 @@ umethod_bind(method, recv)
 
     return method;
 }
+
+/*
+ *  call-seq:
+ *     meth.arity    => fixnum
+ *  
+ *  Returns an indication of the number of arguments accepted by a
+ *  method. Returns a nonnegative integer for methods that take a fixed
+ *  number of arguments. For Ruby methods that take a variable number of
+ *  arguments, returns -n-1, where n is the number of required
+ *  arguments. For methods written in C, returns -1 if the call takes a
+ *  variable number of arguments.
+ *     
+ *     class C
+ *       def one;    end
+ *       def two(a); end
+ *       def three(*a);  end
+ *       def four(a, b); end
+ *       def five(a, b, *c);    end
+ *       def six(a, b, *c, &d); end
+ *     end
+ *     c = C.new
+ *     c.method(:one).arity     #=> 0
+ *     c.method(:two).arity     #=> 1
+ *     c.method(:three).arity   #=> -1
+ *     c.method(:four).arity    #=> 2
+ *     c.method(:five).arity    #=> -3
+ *     c.method(:six).arity     #=> -3
+ *     
+ *     "cat".method(:size).arity      #=> 0
+ *     "cat".method(:replace).arity   #=> 1
+ *     "cat".method(:squeeze).arity   #=> -1
+ *     "cat".method(:count).arity     #=> -1
+ */
 
 static VALUE
 method_arity(method)
@@ -7493,7 +8977,7 @@ method_arity(method)
 	return INT2FIX(0);
       case NODE_BMETHOD:
       case NODE_DMETHOD:
-       return proc_arity(method);
+	return proc_arity(body->nd_cval);
       default:
 	body = body->nd_next;	/* skip NODE_SCOPE */
 	if (nd_type(body) == NODE_BLOCK)
@@ -7505,6 +8989,16 @@ method_arity(method)
 	return INT2FIX(n);
     }
 }
+
+/*
+ *  call-seq:
+ *   meth.to_s      =>  string
+ *   meth.inspect   =>  string
+ *
+ *  Show the name of the underlying method.
+ *
+ *    "cat".method(:count).inspect   #=> "#<Method: String#count>"
+ */
 
 static VALUE
 method_inspect(method)
@@ -7593,6 +9087,13 @@ rb_proc_new(func, val)
     return proc;
 }
 
+/*
+ *  call-seq:
+ *     meth.to_proc    => prc
+ *  
+ *  Returns a <code>Proc</code> object corresponding to this method.
+ */
+
 static VALUE
 method_proc(method)
     VALUE method;
@@ -7621,6 +9122,43 @@ rb_obj_is_method(m)
     return Qfalse;
 }
 
+/*
+ *  call-seq:
+ *     define_method(symbol, method)     => new_method
+ *     define_method(symbol) { block }   => proc
+ *  
+ *  Defines an instance method in the receiver. The _method_
+ *  parameter can be a +Proc+ or +Method+ object.
+ *  If a block is specified, it is used as the method body. This block
+ *  is evaluated using <code>instance_eval</code>, a point that is
+ *  tricky to demonstrate because <code>define_method</code> is private.
+ *  (This is why we resort to the +send+ hack in this example.)
+ *     
+ *     class A
+ *       def fred
+ *         puts "In Fred"
+ *       end
+ *       def create_method(name, &block)
+ *         self.class.send(:define_method, name, &block)
+ *       end
+ *       define_method(:wilma) { puts "Charge it!" }
+ *     end
+ *     class B < A
+ *       define_method(:barney, instance_method(:fred))
+ *     end
+ *     a = B.new
+ *     a.barney
+ *     a.wilma
+ *     a.create_method(:betty) { p self }
+ *     a.betty
+ *     
+ *  <em>produces:</em>
+ *     
+ *     In Fred
+ *     Charge it!
+ *     #<B:0x401b39e8>
+ */
+
 static VALUE
 rb_mod_define_method(argc, argv, mod)
     int argc;
@@ -7645,7 +9183,7 @@ rb_mod_define_method(argc, argv, mod)
 	}
     }
     else {
-	rb_raise(rb_eArgError, "wrong number of arguments(%d for 1)", argc);
+	rb_raise(rb_eArgError, "wrong number of arguments (%d for 1)", argc);
     }
     if (RDATA(body)->dmark == (RUBY_DATA_FUNC)bm_mark) {
 	node = NEW_DMETHOD(method_unbind(body));
@@ -7678,6 +9216,24 @@ rb_mod_define_method(argc, argv, mod)
     return body;
 }
 
+/*
+ *  <code>Proc</code> objects are blocks of code that have been bound to
+ *  a set of local variables. Once bound, the code may be called in
+ *  different contexts and still access those variables.
+ *     
+ *     def gen_times(factor)
+ *       return Proc.new {|n| n*factor }
+ *     end
+ *     
+ *     times3 = gen_times(3)
+ *     times5 = gen_times(5)
+ *     
+ *     times3.call(12)               #=> 36
+ *     times5.call(5)                #=> 25
+ *     times3.call(times5.call(4))   #=> 60
+ *     
+ */
+
 void
 Init_Proc()
 {
@@ -7690,6 +9246,7 @@ Init_Proc()
 
     rb_eSysStackError = rb_define_class("SystemStackError", rb_eStandardError);
     sysstack_error = rb_exc_new2(rb_eSysStackError, "stack level too deep");
+    OBJ_TAINT(sysstack_error);
     rb_global_variable(&sysstack_error);
 
     rb_cProc = rb_define_class("Proc", rb_cObject);
@@ -7697,6 +9254,7 @@ Init_Proc()
     rb_define_singleton_method(rb_cProc, "new", proc_s_new, -1);
 
     rb_define_method(rb_cProc, "clone", proc_clone, 0);
+    rb_define_method(rb_cProc, "dup", proc_dup, 0);
     rb_define_method(rb_cProc, "call", proc_call, -2);
     rb_define_method(rb_cProc, "arity", proc_arity, 0);
     rb_define_method(rb_cProc, "[]", proc_call, -2);
@@ -7707,12 +9265,6 @@ Init_Proc()
 
     rb_define_global_function("proc", proc_lambda, 0);
     rb_define_global_function("lambda", proc_lambda, 0);
-
-    rb_cBinding = rb_define_class("Binding", rb_cObject);
-    rb_undef_alloc_func(rb_cBinding);
-    rb_undef_method(CLASS_OF(rb_cBinding), "new");
-    rb_define_method(rb_cBinding, "clone", proc_clone, 0);
-    rb_define_global_function("binding", rb_f_binding, 0);
 
     rb_cMethod = rb_define_class("Method", rb_cObject);
     rb_undef_alloc_func(rb_cMethod);
@@ -7740,6 +9292,64 @@ Init_Proc()
     rb_define_method(rb_cModule, "instance_method", rb_mod_method, 1);
 }
 
+/*
+ *  Objects of class <code>Binding</code> encapsulate the execution
+ *  context at some particular place in the code and retain this context 
+ *  for future use. The variables, methods, value of <code>self</code>,
+ *  and possibly an iterator block that can be accessed in this context
+ *  are all retained. Binding objects can be created using
+ *  <code>Kernel#binding</code>, and are made available to the callback
+ *  of <code>Kernel#set_trace_func</code>.
+ *     
+ *  These binding objects can be passed as the second argument of the
+ *  <code>Kernel#eval</code> method, establishing an environment for the
+ *  evaluation.
+ *     
+ *     class Demo
+ *       def initialize(n)
+ *         @secret = n
+ *       end
+ *       def getBinding
+ *         return binding()
+ *       end
+ *     end
+ *     
+ *     k1 = Demo.new(99)
+ *     b1 = k1.getBinding
+ *     k2 = Demo.new(-3)
+ *     b2 = k2.getBinding
+ *     
+ *     eval("@secret", b1)   #=> 99
+ *     eval("@secret", b2)   #=> -3
+ *     eval("@secret")       #=> nil
+ *     
+ *  Binding objects have no class-specific methods.
+ *     
+ */
+
+void 
+Init_Binding() 
+{
+    rb_cBinding = rb_define_class("Binding", rb_cObject);
+    rb_undef_alloc_func(rb_cBinding);
+    rb_undef_method(CLASS_OF(rb_cBinding), "new");
+    rb_define_method(rb_cBinding, "clone", proc_clone, 0);
+    rb_define_global_function("binding", rb_f_binding, 0);
+}
+
+#ifdef __ia64__
+#if defined(__FreeBSD__)
+/*
+ * FreeBSD/ia64 currently does not have a way for a process to get the
+ * base address for the RSE backing store, so hardcode it.
+ */
+#define __libc_ia64_register_backing_store_base (4ULL<<61)
+#else
+#pragma weak __libc_ia64_register_backing_store_base
+extern unsigned long __libc_ia64_register_backing_store_base;
+#endif
+#endif
+
 /* Windows SEH refers data on the stack. */
 #undef SAVE_WIN32_EXCEPTION_LIST
 #if defined _WIN32 || defined __CYGWIN__
@@ -7754,6 +9364,10 @@ win32_get_exception_list()
 # if defined _MSC_VER
 #   ifdef _M_IX86
 #   define SAVE_WIN32_EXCEPTION_LIST
+#   if _MSC_VER >= 1310
+      /* warning: unsafe assignment to fs:0 ... this is ok */
+#     pragma warning(disable: 4733)
+#   endif
     __asm mov eax, fs:[0];
     __asm mov p, eax;
 #   endif
@@ -7794,8 +9408,6 @@ win32_set_exception_list(p)
 #endif
 #endif
 
-static VALUE rb_eThreadError;
-
 int rb_thread_pending = 0;
 
 VALUE rb_cThread;
@@ -7830,17 +9442,21 @@ enum thread_status {
 
 struct thread {
     struct thread *next, *prev;
-    jmp_buf context;
+    rb_jmpbuf_t context;
 #ifdef SAVE_WIN32_EXCEPTION_LIST
     DWORD win32_exception_list;
 #endif
 
     VALUE result;
 
-    int    stk_len;
-    int   stk_max;
-    VALUE*stk_ptr;
-    VALUE*stk_pos;
+    long   stk_len;
+    long   stk_max;
+    VALUE *stk_ptr;
+    VALUE *stk_pos;
+#ifdef __ia64__
+    VALUE *bstr_ptr;
+    long   bstr_len;
+#endif
 
     struct FRAME *frame;
     struct SCOPE *scope;
@@ -7955,24 +9571,33 @@ thread_reset_raised()
 
 static void rb_thread_ready _((rb_thread_t));
 
+static VALUE run_trap_eval _((VALUE));
 static VALUE
-rb_trap_eval(cmd, sig)
+run_trap_eval(arg)
+    VALUE arg;
+{
+    VALUE *p = (VALUE *)arg;
+    return rb_eval_cmd(p[0], p[1], (int)p[2]);
+}
+
+static VALUE
+rb_trap_eval(cmd, sig, safe)
     VALUE cmd;
-    int sig;
+    int sig, safe;
 {
     int state;
-    VALUE val;			/* OK */
+    VALUE val = Qnil;		/* OK */
     volatile struct thread_status_t save;
+    VALUE arg[3];
 
+    arg[0] = cmd;
+    arg[1] = rb_ary_new3(1, INT2FIX(sig));
+    arg[2] = (VALUE)safe;
     THREAD_COPY_STATUS(curr_thread, &save);
     rb_thread_ready(curr_thread);
-    PUSH_TAG(PROT_NONE);
     PUSH_ITER(ITER_NOT);
-    if ((state = EXEC_TAG()) == 0) {
-	val = rb_eval_cmd(cmd, rb_ary_new3(1, INT2FIX(sig)), 0);
-    }
+    val = rb_protect(run_trap_eval, (VALUE)&arg, &state);
     POP_ITER();
-    POP_TAG();
     THREAD_COPY_STATUS(&save, curr_thread);
 
     if (state) {
@@ -8012,6 +9637,7 @@ rb_set_safe_level(level)
     int level;
 {
     if (level > ruby_safe_level) {
+	if (level > SAFE_LEVEL_MAX) level = SAFE_LEVEL_MAX;
 	ruby_safe_level = level;
 	curr_thread->safe = level;
     }
@@ -8033,6 +9659,7 @@ safe_setter(val)
 	rb_raise(rb_eSecurityError, "tried to downgrade safe level from %d to %d",
 		 ruby_safe_level, level);
     }
+    if (level > SAFE_LEVEL_MAX) level = SAFE_LEVEL_MAX;
     ruby_safe_level = level;
     curr_thread->safe = level;
 }
@@ -8048,6 +9675,25 @@ timeofday()
 
 #define STACK(addr) (th->stk_pos<(VALUE*)(addr) && (VALUE*)(addr)<th->stk_pos+th->stk_len)
 #define ADJ(addr) (void*)(STACK(addr)?(((VALUE*)(addr)-th->stk_pos)+th->stk_ptr):(VALUE*)(addr))
+#ifdef C_ALLOCA
+# define MARK_FRAME_ADJ(f) rb_gc_mark_frame(f)
+#else
+# define MARK_FRAME_ADJ(f) mark_frame_adj(f, th)
+static void
+mark_frame_adj(frame, th)
+    struct FRAME *frame;
+    rb_thread_t th;
+{
+    if (frame->flags & FRAME_MALLOC) {
+	rb_gc_mark_locations(frame->argv, frame->argv+frame->argc);
+    }
+    else {
+	VALUE *start = ADJ(frame->argv);
+	rb_gc_mark_locations(start, start+frame->argc);
+    }
+    rb_gc_mark((VALUE)frame->node);
+}
+#endif
 
 static void
 thread_mark(th)
@@ -8070,6 +9716,7 @@ thread_mark(th)
     rb_gc_mark(th->last_line);
     rb_gc_mark(th->last_match);
     rb_mark_tbl(th->locals);
+    rb_gc_mark(th->thgroup);
 
     /* mark data in copied stack */
     if (th == curr_thread) return;
@@ -8080,17 +9727,22 @@ thread_mark(th)
 #if defined(THINK_C) || defined(__human68k__)
 	rb_gc_mark_locations(th->stk_ptr+2, th->stk_ptr+th->stk_len+2);
 #endif
+#ifdef __ia64__
+	if (th->bstr_ptr) {
+	    rb_gc_mark_locations(th->bstr_ptr, th->bstr_ptr+th->bstr_len);
+	}
+#endif
     }
     frame = th->frame;
     while (frame && frame != top_frame) {
 	frame = ADJ(frame);
-	rb_gc_mark_frame(frame);
+	MARK_FRAME_ADJ(frame);
 	if (frame->tmp) {
 	    struct FRAME *tmp = frame->tmp;
 
 	    while (tmp && tmp != top_frame) {
 		tmp = ADJ(tmp);
-		rb_gc_mark_frame(tmp);
+		MARK_FRAME_ADJ(tmp);
 		tmp = tmp->prev;
 	    }
 	}
@@ -8099,7 +9751,7 @@ thread_mark(th)
     block = th->block;
     while (block) {
 	block = ADJ(block);
-	rb_gc_mark_frame(&block->frame);
+	MARK_FRAME_ADJ(&block->frame);
 	block = block->prev;
     }
 }
@@ -8124,6 +9776,10 @@ thread_free(th)
 {
     if (th->stk_ptr) free(th->stk_ptr);
     th->stk_ptr = 0;
+#ifdef __ia64__
+    if (th->bstr_ptr) free(th->bstr_ptr);
+    th->bstr_ptr = 0;
+#endif
     if (th->locals) st_free_table(th->locals);
     if (th->status != THREAD_KILLED) {
 	if (th->prev) th->prev->next = th->next;
@@ -8145,11 +9801,10 @@ rb_thread_check(data)
 
 static VALUE rb_thread_raise _((int, VALUE*, rb_thread_t));
 
-static int   th_raise_argc;
-static VALUE th_raise_argv[2];
+static VALUE th_raise_exception;
 static NODE *th_raise_node;
 static VALUE th_cmd;
-static int   th_sig;
+static int   th_sig, th_safe;
 static char *th_signm;
 
 #define RESTORE_NORMAL		1
@@ -8158,6 +9813,7 @@ static char *th_signm;
 #define RESTORE_TRAP		4
 #define RESTORE_RAISE		5
 #define RESTORE_SIGNAL		6
+#define RESTORE_EXIT		7
 
 extern VALUE *rb_gc_stack_start;
 
@@ -8177,8 +9833,25 @@ rb_thread_save_context(th)
 	th->stk_max = len;
     }
     th->stk_len = len;
-    FLUSH_REGISTER_WINDOWS; 
+    FLUSH_REGISTER_WINDOWS;
     MEMCPY(th->stk_ptr, th->stk_pos, VALUE, th->stk_len);
+#ifdef __ia64__
+    {
+	ucontext_t ctx;
+	VALUE *top, *bot;
+
+	getcontext(&ctx);
+	bot = (VALUE*)__libc_ia64_register_backing_store_base;
+#if defined(__FreeBSD__)
+	top = (VALUE*)ctx.uc_mcontext.mc_special.bspstore;
+#else
+	top = (VALUE*)ctx.uc_mcontext.sc_ar_bsp;
+#endif
+	th->bstr_len = top - bot;
+	REALLOC_N(th->bstr_ptr, VALUE, th->bstr_len);
+	MEMCPY(th->bstr_ptr, (VALUE*)__libc_ia64_register_backing_store_base, VALUE, th->bstr_len);
+    }
+#endif
 #ifdef SAVE_WIN32_EXCEPTION_LIST
     th->win32_exception_list = win32_get_exception_list();
 #endif
@@ -8223,15 +9896,21 @@ rb_thread_switch(n)
 	rb_interrupt();
 	break;
       case RESTORE_TRAP:
-	rb_trap_eval(th_cmd, th_sig);
+	rb_trap_eval(th_cmd, th_sig, th_safe);
 	break;
       case RESTORE_RAISE:
 	ruby_frame->last_func = 0;
 	ruby_current_node = th_raise_node;
-	rb_f_raise(th_raise_argc, th_raise_argv);
+	rb_raise_jump(th_raise_exception);
 	break;
       case RESTORE_SIGNAL:
 	rb_raise(rb_eSignal, "SIG%s", th_signm);
+	break;
+      case RESTORE_EXIT:
+	ruby_errinfo = th_raise_exception;
+	ruby_current_node = th_raise_node;
+	error_print();
+	terminate_process(EXIT_FAILURE, 0, 0);
 	break;
       case RESTORE_NORMAL:
       default:
@@ -8244,8 +9923,11 @@ rb_thread_switch(n)
     (rb_thread_save_context(th),\
      rb_thread_switch((FLUSH_REGISTER_WINDOWS, setjmp((th)->context))))
 
-static void rb_thread_restore_context _((rb_thread_t,int));
+NORETURN(static void rb_thread_restore_context _((rb_thread_t,int)));
 
+# if _MSC_VER >= 1300
+__declspec(noinline)
+# endif
 static void
 stack_extend(th, exit)
     rb_thread_t th;
@@ -8309,6 +9991,9 @@ rb_thread_restore_context(th, exit)
     ex = exit;
     FLUSH_REGISTER_WINDOWS;
     MEMCPY(tmp->stk_pos, tmp->stk_ptr, VALUE, tmp->stk_len);
+#ifdef __ia64__
+    MEMCPY((VALUE*)__libc_ia64_register_backing_store_base, tmp->bstr_ptr, VALUE, tmp->bstr_len);
+#endif
 
     tval = rb_lastline_get();
     rb_lastline_set(tmp->last_line);
@@ -8378,6 +10063,19 @@ rb_thread_fd_close(fd)
     END_FOREACH(th);
 }
 
+NORETURN(static void rb_thread_main_jump _((VALUE, int)));
+static void
+rb_thread_main_jump(err, tag)
+    VALUE err;
+    int tag;
+{
+    curr_thread = main_thread;
+    th_raise_exception = err;
+    th_raise_node = ruby_current_node;
+    rb_thread_restore_context(main_thread, tag);
+}
+
+NORETURN(static void rb_thread_deadlock _((void)));
 static void
 rb_thread_deadlock()
 {
@@ -8389,11 +10087,7 @@ rb_thread_deadlock()
     if (curr_thread == main_thread) {
 	rb_exc_raise(e);
     }
-    curr_thread = main_thread;
-    th_raise_argc = 1;
-    th_raise_argv[0] = e;
-    th_raise_node = ruby_current_node;
-    rb_thread_restore_context(main_thread, RESTORE_RAISE);
+    rb_thread_main_jump(e, RESTORE_RAISE);
 }
 
 static void
@@ -8439,7 +10133,7 @@ intersect_fds(src, dst, max)
 	    if (FD_ISSET(i, src)) {
 		/* Wake up only one thread per fd. */
 		FD_CLR(i, src);
-		++n;
+		n++;
 	    }
 	    else {
 		FD_CLR(i, dst);
@@ -8482,6 +10176,11 @@ rb_thread_schedule()
     int need_select = 0;
     int select_timeout = 0;
 
+#ifdef HAVE_NATIVETHREAD
+    if (!is_ruby_native_thread()) {
+	rb_bug("cross-thread violation on rb_thread_schedule()");
+    }
+#endif
     rb_thread_pending = 0;
     if (curr_thread == curr_thread->next
 	&& curr_thread->status == THREAD_RUNNABLE)
@@ -8548,7 +10247,7 @@ rb_thread_schedule()
 	}
     }
     END_FOREACH_FROM(curr, th);
-    
+
     /* Do the select if needed */
     if (need_select) {
 	/* Convert delay to a timeval */
@@ -8600,16 +10299,16 @@ rb_thread_schedule()
  		    th->wait_for = 0;
  		    th->select_value = 0;
  		    found = 1;
-                    intersect_fds(&readfds, &th->readfds, max);
-                    intersect_fds(&writefds, &th->writefds, max);
-                    intersect_fds(&exceptfds, &th->exceptfds, max);
+		    intersect_fds(&readfds, &th->readfds, max);
+		    intersect_fds(&writefds, &th->writefds, max);
+		    intersect_fds(&exceptfds, &th->exceptfds, max);
 		}
 	    }
 	    END_FOREACH_FROM(curr, th);
 	}
 	if (n > 0) {
 	    now = -1.0;
-	    /* Some descriptors are ready. 
+	    /* Some descriptors are ready.
 	       Make the corresponding threads runnable. */
 	    FOREACH_THREAD_FROM(curr, th) {
 		if ((th->wait_for&WAIT_FD) && FD_ISSET(th->fd, &readfds)) {
@@ -8648,11 +10347,11 @@ rb_thread_schedule()
 	    break;
 	}
 	if (th->status == THREAD_RUNNABLE && th->stk_ptr) {
-	    if (!next || next->priority < th->priority) 
+	    if (!next || next->priority < th->priority)
 	       next = th;
 	}
     }
-    END_FOREACH_FROM(curr, th); 
+    END_FOREACH_FROM(curr, th);
 
     if (!next) {
 	/* raise fatal error to main thread */
@@ -8752,13 +10451,16 @@ rb_thread_wait_for(time)
 	curr_thread == curr_thread->next ||
 	curr_thread->status == THREAD_TO_KILL) {
 	int n;
+	int thr_critical = rb_thread_critical;
 #ifndef linux
 	double d, limit;
 	limit = timeofday()+(double)time.tv_sec+(double)time.tv_usec*1e-6;
 #endif
 	for (;;) {
+	    rb_thread_critical = Qtrue;
 	    TRAP_BEG;
 	    n = select(0, 0, 0, 0, &time);
+	    rb_thread_critical = thr_critical;
 	    TRAP_END;
 	    if (n == 0) return;
 	    if (n < 0) {
@@ -8920,16 +10622,58 @@ rb_thread_join(th, limit)
     if (!NIL_P(th->errinfo) && (th->flags & THREAD_RAISED)) {
 	VALUE oldbt = get_backtrace(th->errinfo);
 	VALUE errat = make_backtrace();
+	VALUE errinfo = rb_obj_dup(th->errinfo);
 
 	if (TYPE(oldbt) == T_ARRAY && RARRAY(oldbt)->len > 0) {
 	    rb_ary_unshift(errat, rb_ary_entry(oldbt, 0));
 	}
-	set_backtrace(th->errinfo, errat);
-	rb_exc_raise(th->errinfo);
+	set_backtrace(errinfo, errat);
+	rb_exc_raise(errinfo);
     }
 
     return Qtrue;
 }
+
+
+/*
+ *  call-seq:
+ *     thr.join          => thr
+ *     thr.join(limit)   => thr
+ *  
+ *  The calling thread will suspend execution and run <i>thr</i>. Does not
+ *  return until <i>thr</i> exits or until <i>limit</i> seconds have passed. If
+ *  the time limit expires, <code>nil</code> will be returned, otherwise
+ *  <i>thr</i> is returned.
+ *     
+ *  Any threads not joined will be killed when the main program exits.  If
+ *  <i>thr</i> had previously raised an exception and the
+ *  <code>abort_on_exception</code> and <code>$DEBUG</code> flags are not set
+ *  (so the exception has not yet been processed) it will be processed at this
+ *  time.
+ *     
+ *     a = Thread.new { print "a"; sleep(10); print "b"; print "c" }
+ *     x = Thread.new { print "x"; Thread.pass; print "y"; print "z" }
+ *     x.join # Let x thread finish, a will be killed on exit.
+ *     
+ *  <em>produces:</em>
+ *     
+ *     axyz
+ *     
+ *  The following example illustrates the <i>limit</i> parameter.
+ *     
+ *     y = Thread.new { 4.times { sleep 0.1; puts 'tick... ' }}
+ *     puts "Waiting" until y.join(0.15)
+ *     
+ *  <em>produces:</em>
+ *     
+ *     tick...
+ *     Waiting
+ *     tick...
+ *     Waitingtick...
+ *     
+ *     
+ *     tick...
+ */
 
 static VALUE
 rb_thread_join_m(argc, argv, thread)
@@ -8948,17 +10692,58 @@ rb_thread_join_m(argc, argv, thread)
     return thread;
 }
 
+
+/*
+ *  call-seq:
+ *     Thread.current   => thread
+ *  
+ *  Returns the currently executing thread.
+ *     
+ *     Thread.current   #=> #<Thread:0x401bdf4c run>
+ */
+
 VALUE
 rb_thread_current()
 {
     return curr_thread->thread;
 }
 
+
+/*
+ *  call-seq:
+ *     Thread.main   => thread
+ *  
+ *  Returns the main thread for the process.
+ *     
+ *     Thread.main   #=> #<Thread:0x401bdf4c run>
+ */
+
 VALUE
 rb_thread_main()
 {
     return main_thread->thread;
 }
+
+
+/*
+ *  call-seq:
+ *     Thread.list   => array
+ *  
+ *  Returns an array of <code>Thread</code> objects for all threads that are
+ *  either runnable or stopped.
+ *     
+ *     Thread.new { sleep(200) }
+ *     Thread.new { 1000000.times {|i| i*i } }
+ *     Thread.new { Thread.stop }
+ *     Thread.list.each {|t| p t}
+ *     
+ *  <em>produces:</em>
+ *     
+ *     #<Thread:0x401b3e84 sleep>
+ *     #<Thread:0x401b3f38 run>
+ *     #<Thread:0x401b3fb0 sleep>
+ *     #<Thread:0x401bdf4c run>
+ */
 
 VALUE
 rb_thread_list()
@@ -8981,6 +10766,22 @@ rb_thread_list()
     return ary;
 }
 
+
+/*
+ *  call-seq:
+ *     thr.wakeup   => thr
+ *  
+ *  Marks <i>thr</i> as eligible for scheduling (it may still remain blocked on
+ *  I/O, however). Does not invoke the scheduler (see <code>Thread#run</code>).
+ *     
+ *     c = Thread.new { Thread.stop; puts "hey!" }
+ *     c.wakeup
+ *     
+ *  <em>produces:</em>
+ *     
+ *     hey!
+ */
+
 VALUE
 rb_thread_wakeup(thread)
     VALUE thread;
@@ -8994,6 +10795,27 @@ rb_thread_wakeup(thread)
     return thread;
 }
 
+
+/*
+ *  call-seq:
+ *     thr.run   => thr
+ *  
+ *  Wakes up <i>thr</i>, making it eligible for scheduling. If not in a critical
+ *  section, then invokes the scheduler.
+ *     
+ *     a = Thread.new { puts "a"; Thread.stop; puts "c" }
+ *     Thread.pass
+ *     puts "Got here"
+ *     a.run
+ *     a.join
+ *     
+ *  <em>produces:</em>
+ *     
+ *     a
+ *     Got here
+ *     c
+ */
+
 VALUE
 rb_thread_run(thread)
     VALUE thread;
@@ -9003,6 +10825,19 @@ rb_thread_run(thread)
 
     return thread;
 }
+
+
+/*
+ *  call-seq:
+ *     thr.exit        => thr or nil
+ *     thr.kill        => thr or nil
+ *     thr.terminate   => thr or nil
+ *  
+ *  Terminates <i>thr</i> and schedules another thread to be run. If this thread
+ *  is already marked to be killed, <code>exit</code> returns the
+ *  <code>Thread</code>. If this is the main thread, or the last thread, exits
+ *  the process.
+ */
 
 VALUE
 rb_thread_kill(thread)
@@ -9014,14 +10849,29 @@ rb_thread_kill(thread)
 	rb_secure(4);
     }
     if (th->status == THREAD_TO_KILL || th->status == THREAD_KILLED)
-	return thread; 
-    if (th == th->next || th == main_thread) rb_exit(0);
+	return thread;
+    if (th == th->next || th == main_thread) rb_exit(EXIT_SUCCESS);
 
     rb_thread_ready(th);
     th->status = THREAD_TO_KILL;
     if (!rb_thread_critical) rb_thread_schedule();
     return thread;
 }
+
+
+/*
+ *  call-seq:
+ *     Thread.kill(thread)   => thread
+ *  
+ *  Causes the given <em>thread</em> to exit (see <code>Thread::exit</code>).
+ *     
+ *     count = 0
+ *     a = Thread.new { loop { count += 1 } }
+ *     sleep(0.1)       #=> 0
+ *     Thread.kill(a)   #=> #<Thread:0x401b3d30 dead>
+ *     count            #=> 93947
+ *     a.alive?         #=> false
+ */
 
 static VALUE
 rb_thread_s_kill(obj, th)
@@ -9030,11 +10880,43 @@ rb_thread_s_kill(obj, th)
     return rb_thread_kill(th);
 }
 
+
+/*
+ *  call-seq:
+ *     Thread.exit   => thread
+ *  
+ *  Terminates the currently running thread and schedules another thread to be
+ *  run. If this thread is already marked to be killed, <code>exit</code>
+ *  returns the <code>Thread</code>. If this is the main thread, or the last
+ *  thread, exit the process.
+ */
+
 static VALUE
 rb_thread_exit()
 {
     return rb_thread_kill(curr_thread->thread);
 }
+
+
+/*
+ *  call-seq:
+ *     Thread.pass   => nil
+ *  
+ *  Invokes the thread scheduler to pass execution to another thread.
+ *     
+ *     a = Thread.new { print "a"; Thread.pass;
+ *                      print "b"; Thread.pass;
+ *                      print "c" }
+ *     b = Thread.new { print "x"; Thread.pass;
+ *                      print "y"; Thread.pass;
+ *                      print "z" }
+ *     a.join
+ *     b.join
+ *     
+ *  <em>produces:</em>
+ *     
+ *     axbycz
+ */
 
 static VALUE
 rb_thread_pass()
@@ -9042,6 +10924,26 @@ rb_thread_pass()
     rb_thread_schedule();
     return Qnil;
 }
+
+
+/*
+ *  call-seq:
+ *     Thread.stop   => nil
+ *  
+ *  Stops execution of the current thread, putting it into a ``sleep'' state,
+ *  and schedules execution of another thread. Resets the ``critical'' condition
+ *  to <code>false</code>.
+ *     
+ *     a = Thread.new { print "a"; Thread.stop; print "c" }
+ *     Thread.pass
+ *     print "b"
+ *     a.run
+ *     a.join
+ *     
+ *  <em>produces:</em>
+ *     
+ *     abc
+ */
 
 VALUE
 rb_thread_stop()
@@ -9090,10 +10992,13 @@ rb_thread_sleep(sec)
 void
 rb_thread_sleep_forever()
 {
+    int thr_critical = rb_thread_critical;
     if (curr_thread == curr_thread->next ||
 	curr_thread->status == THREAD_TO_KILL) {
+	rb_thread_critical = Qtrue;
 	TRAP_BEG;
 	pause();
+	rb_thread_critical = thr_critical;
 	TRAP_END;
 	return;
     }
@@ -9104,12 +11009,47 @@ rb_thread_sleep_forever()
     rb_thread_schedule();
 }
 
+
+/*
+ *  call-seq:
+ *     thr.priority   => integer
+ *  
+ *  Returns the priority of <i>thr</i>. Default is zero; higher-priority threads
+ *  will run before lower-priority threads.
+ *     
+ *     Thread.current.priority   #=> 0
+ */
+
 static VALUE
 rb_thread_priority(thread)
     VALUE thread;
 {
     return INT2NUM(rb_thread_check(thread)->priority);
 }
+
+
+/*
+ *  call-seq:
+ *     thr.priority= integer   => thr
+ *  
+ *  Sets the priority of <i>thr</i> to <i>integer</i>. Higher-priority threads
+ *  will run before lower-priority threads.
+ *     
+ *     count1 = count2 = 0
+ *     a = Thread.new do
+ *           loop { count1 += 1 }
+ *         end
+ *     a.priority = -1
+ *     
+ *     b = Thread.new do
+ *           loop { count2 += 1 }
+ *         end
+ *     b.priority = -2
+ *     sleep 1   #=> 1
+ *     Thread.critical = 1
+ *     count1    #=> 622504
+ *     count2    #=> 5832
+ */
 
 static VALUE
 rb_thread_priority_set(thread, prio)
@@ -9124,6 +11064,19 @@ rb_thread_priority_set(thread, prio)
     rb_thread_schedule();
     return prio;
 }
+
+
+/*
+ *  call-seq:
+ *     thr.safe_level   => integer
+ *  
+ *  Returns the safe level in effect for <i>thr</i>. Setting thread-local safe
+ *  levels can help when implementing sandboxes which run insecure code.
+ *     
+ *     thr = Thread.new { $SAFE = 3; sleep }
+ *     Thread.current.safe_level   #=> 0
+ *     thr.safe_level              #=> 3
+ */
 
 static VALUE
 rb_thread_safe_level(thread)
@@ -9141,11 +11094,49 @@ rb_thread_safe_level(thread)
 static int ruby_thread_abort;
 static VALUE thgroup_default;
 
+
+/*
+ *  call-seq:
+ *     Thread.abort_on_exception   => true or false
+ *  
+ *  Returns the status of the global ``abort on exception'' condition.  The
+ *  default is <code>false</code>. When set to <code>true</code>, or if the
+ *  global <code>$DEBUG</code> flag is <code>true</code> (perhaps because the
+ *  command line option <code>-d</code> was specified) all threads will abort
+ *  (the process will <code>exit(0)</code>) if an exception is raised in any
+ *  thread. See also <code>Thread::abort_on_exception=</code>.
+ */
+
 static VALUE
 rb_thread_s_abort_exc()
 {
     return ruby_thread_abort?Qtrue:Qfalse;
 }
+
+
+/*
+ *  call-seq:
+ *     Thread.abort_on_exception= boolean   => true or false
+ *  
+ *  When set to <code>true</code>, all threads will abort if an exception is
+ *  raised. Returns the new state.
+ *     
+ *     Thread.abort_on_exception = true
+ *     t1 = Thread.new do
+ *       puts  "In new thread"
+ *       raise "Exception from thread"
+ *     end
+ *     sleep(1)
+ *     puts "not reached"
+ *     
+ *  <em>produces:</em>
+ *     
+ *     In new thread
+ *     prog.rb:4: Exception from thread (RuntimeError)
+ *     	from prog.rb:2:in `initialize'
+ *     	from prog.rb:2:in `new'
+ *     	from prog.rb:2
+ */
 
 static VALUE
 rb_thread_s_abort_exc_set(self, val)
@@ -9156,12 +11147,32 @@ rb_thread_s_abort_exc_set(self, val)
     return val;
 }
 
+
+/*
+ *  call-seq:
+ *     thr.abort_on_exception   => true or false
+ *  
+ *  Returns the status of the thread-local ``abort on exception'' condition for
+ *  <i>thr</i>. The default is <code>false</code>. See also
+ *  <code>Thread::abort_on_exception=</code>.
+ */
+
 static VALUE
 rb_thread_abort_exc(thread)
     VALUE thread;
 {
     return rb_thread_check(thread)->abort?Qtrue:Qfalse;
 }
+
+
+/*
+ *  call-seq:
+ *     thr.abort_on_exception= boolean   => true or false
+ *  
+ *  When set to <code>true</code>, causes all threads (including the main
+ *  program) to abort if an exception is raised in <i>thr</i>. The process will
+ *  effectively <code>exit(0)</code>.
+ */
 
 static VALUE
 rb_thread_abort_exc_set(thread, val)
@@ -9171,6 +11182,17 @@ rb_thread_abort_exc_set(thread, val)
     rb_thread_check(thread)->abort = RTEST(val);
     return val;
 }
+
+
+/*
+ *  call-seq:
+ *     thr.group   => thgrp or nil
+ *  
+ *  Returns the <code>ThreadGroup</code> which contains <i>thr</i>, or nil if
+ *  the thread is not a member of any group.
+ *     
+ *     Thread.main.group   #=> #<ThreadGroup:0x4029d914>
+ */
 
 VALUE
 rb_thread_group(thread)
@@ -9182,6 +11204,12 @@ rb_thread_group(thread)
     }
     return group;
 }
+
+#ifdef __ia64__
+# define IA64_INIT(x) x
+#else
+# define IA64_INIT(x)
+#endif
 
 #define THREAD_ALLOC(th) do {\
     th = ALLOC(struct thread);\
@@ -9197,6 +11225,8 @@ rb_thread_group(thread)
     th->stk_len = 0;\
     th->stk_max = 0;\
     th->wait_for = 0;\
+    IA64_INIT(th->bstr_ptr = 0);\
+    IA64_INIT(th->bstr_len = 0);\
     FD_ZERO(&th->readfds);\
     FD_ZERO(&th->writefds);\
     FD_ZERO(&th->exceptfds);\
@@ -9221,6 +11251,7 @@ rb_thread_group(thread)
     th->priority = 0;\
     th->thgroup = thgroup_default;\
     th->locals = 0;\
+    th->thread = 0;\
 } while (0)
 
 static rb_thread_t
@@ -9240,7 +11271,57 @@ rb_thread_alloc(klass)
     return th;
 }
 
-#if defined(HAVE_SETITIMER)
+static int thread_init = 0;
+
+#if defined(_THREAD_SAFE)
+static void
+catch_timer(sig)
+    int sig;
+{
+#if !defined(POSIX_SIGNAL) && !defined(BSD_SIGNAL)
+    signal(sig, catch_timer);
+#endif
+    /* cause EINTR */
+}
+
+static pthread_t time_thread;
+
+static void*
+thread_timer(dummy)
+    void *dummy;
+{
+    for (;;) {
+#ifdef HAVE_NANOSLEEP
+	struct timespec req, rem;
+
+	req.tv_sec = 0;
+	req.tv_nsec = 10000000;
+	nanosleep(&req, &rem);
+#else
+	struct timeval tv;
+	tv.tv_sec = 0;
+	tv.tv_usec = 10000;
+	select(0, NULL, NULL, NULL, &tv);
+#endif
+	if (!rb_thread_critical) {
+	    rb_thread_pending = 1;
+	    if (rb_trap_immediate) {
+		pthread_kill(ruby_thid, SIGVTALRM);
+	    }
+	}
+    }
+}
+
+void
+rb_thread_start_timer()
+{
+}
+
+void
+rb_thread_stop_timer()
+{
+}
+#elif defined(HAVE_SETITIMER)
 static void
 catch_timer(sig)
     int sig;
@@ -9249,18 +11330,10 @@ catch_timer(sig)
     signal(sig, catch_timer);
 #endif
     if (!rb_thread_critical) {
-	if (rb_trap_immediate) {
-	    rb_thread_schedule();
-	}
-	else rb_thread_pending = 1;
+	rb_thread_pending = 1;
     }
+    /* cause EINTR */
 }
-#else
-int rb_thread_tick = THREAD_TICK;
-#endif
-
-#if defined(HAVE_SETITIMER)
-static int thread_init = 0;
 
 void
 rb_thread_start_timer()
@@ -9285,37 +11358,43 @@ rb_thread_stop_timer()
     tval.it_value = tval.it_interval;
     setitimer(ITIMER_VIRTUAL, &tval, NULL);
 }
+#else  /* !(_THREAD_SAFE || HAVE_SETITIMER) */
+int rb_thread_tick = THREAD_TICK;
 #endif
 
 static VALUE
-rb_thread_start_0(fn, arg, th_arg)
+rb_thread_start_0(fn, arg, th)
     VALUE (*fn)();
     void *arg;
-    rb_thread_t th_arg;
+    rb_thread_t th;
 {
-    volatile rb_thread_t th = th_arg;
+    volatile rb_thread_t th_save = th;
     volatile VALUE thread = th->thread;
-    struct BLOCK* saved_block = 0;
+    struct BLOCK *volatile saved_block = 0, *block;
     enum thread_status status;
     int state;
 
     if (OBJ_FROZEN(curr_thread->thgroup)) {
-	rb_raise(rb_eThreadError, 
+	rb_raise(rb_eThreadError,
 		 "can't start a new thread (frozen ThreadGroup)");
     }
 
-#if defined(HAVE_SETITIMER)
     if (!thread_init) {
-#ifdef POSIX_SIGNAL
+	thread_init = 1;
+#if defined(HAVE_SETITIMER) || defined(_THREAD_SAFE)
+#if defined(POSIX_SIGNAL)
 	posix_signal(SIGVTALRM, catch_timer);
 #else
 	signal(SIGVTALRM, catch_timer);
 #endif
 
-	thread_init = 1;
+#ifdef _THREAD_SAFE
+	pthread_create(&time_thread, 0, thread_timer, 0);
+#else
 	rb_thread_start_timer();
-    }
 #endif
+#endif
+    }
 
     if (THREAD_SAVE_CONTEXT(curr_thread)) {
 	return thread;
@@ -9346,6 +11425,11 @@ rb_thread_start_0(fn, arg, th_arg)
 	    curr_thread = th;
 	    th->result = (*fn)(arg, th);
 	}
+	th = th_save;
+    }
+    else if (TAG_DST()) {
+	th = th_save;
+	th->result = prot_tag->retval;
     }
     POP_TAG();
     status = th->status;
@@ -9353,18 +11437,13 @@ rb_thread_start_0(fn, arg, th_arg)
     if (th == main_thread) ruby_stop(state);
     rb_thread_remove(th);
 
-    while (saved_block) {
-	struct BLOCK *tmp = saved_block;
-
-	if (tmp->frame.argc > 0)
-	    free(tmp->frame.argv);
-	saved_block = tmp->prev;
-	free(tmp);
+    if (saved_block) {
+	blk_free(saved_block);
     }
 
     if (state && status != THREAD_TO_KILL && !NIL_P(ruby_errinfo)) {
 	th->flags |= THREAD_RAISED;
-	if (state == TAG_FATAL) { 
+	if (state == TAG_FATAL) {
 	    /* fatal error within this thread, need to stop whole script */
 	    main_thread->errinfo = ruby_errinfo;
 	    rb_thread_cleanup();
@@ -9378,14 +11457,12 @@ rb_thread_start_0(fn, arg, th_arg)
 	    }
 	    else {
 		/* delegate exception to main_thread */
-		rb_thread_raise(1, &ruby_errinfo, main_thread);
+		rb_thread_main_jump(ruby_errinfo, RESTORE_RAISE);
 	    }
 	}
 	else if (th->safe < 4 && (ruby_thread_abort || th->abort || RTEST(ruby_debug))) {
-	    VALUE err = system_exit(1, 0, 0);
-	    error_print();
 	    /* exit on main_thread */
-	    rb_thread_raise(1, &err, main_thread);
+	    rb_thread_main_jump(ruby_errinfo, RESTORE_EXIT);
 	}
 	else {
 	    th->errinfo = ruby_errinfo;
@@ -9406,7 +11483,7 @@ rb_thread_create(fn, arg)
 }
 
 static VALUE
-rb_thread_yield(arg, th) 
+rb_thread_yield(arg, th)
     VALUE arg;
     rb_thread_t th;
 {
@@ -9427,8 +11504,26 @@ rb_thread_yield(arg, th)
     rb_dvar_push('~', Qnil);
     ruby_block->dyna_vars = ruby_dyna_vars;
 
-    return rb_yield_0(arg, 0, 0, Qtrue, Qtrue);
+    return rb_yield_0(arg, 0, 0, YIELD_LAMBDA_CALL, Qtrue);
 }
+
+/*
+ *  call-seq:
+ *     Thread.new([arg]*) {|args| block }   => thread
+ *  
+ *  Creates and runs a new thread to execute the instructions given in
+ *  <i>block</i>. Any arguments passed to <code>Thread::new</code> are passed
+ *  into the block.
+ *     
+ *     x = Thread.new { sleep 0.1; print "x"; print "y"; print "z" }
+ *     a = Thread.new { print "a"; print "b"; sleep 0.2; print "c" }
+ *     x.join # Let the threads finish before
+ *     a.join # main thread exits...
+ *     
+ *  <em>produces:</em>
+ *     
+ *     abxyzc
+ */
 
 static VALUE
 rb_thread_s_new(argc, argv, klass)
@@ -9449,6 +11544,25 @@ rb_thread_s_new(argc, argv, klass)
     return th->thread;
 }
 
+
+/*
+ *  call-seq:
+ *     Thread.new([arg]*) {|args| block }   => thread
+ *  
+ *  Creates and runs a new thread to execute the instructions given in
+ *  <i>block</i>. Any arguments passed to <code>Thread::new</code> are passed
+ *  into the block.
+ *     
+ *     x = Thread.new { sleep 0.1; print "x"; print "y"; print "z" }
+ *     a = Thread.new { print "a"; print "b"; sleep 0.2; print "c" }
+ *     x.join # Let the threads finish before
+ *     a.join # main thread exits...
+ *     
+ *  <em>produces:</em>
+ *     
+ *     abxyzc
+ */
+
 static VALUE
 rb_thread_initialize(thread, args)
     VALUE thread, args;
@@ -9458,6 +11572,17 @@ rb_thread_initialize(thread, args)
     }
     return rb_thread_start_0(rb_thread_yield, args, rb_thread_check(thread));
 }
+
+
+/*
+ *  call-seq:
+ *     Thread.start([args]*) {|args| block }   => thread
+ *     Thread.fork([args]*) {|args| block }    => thread
+ *  
+ *  Basically the same as <code>Thread::new</code>. However, if class
+ *  <code>Thread</code> is subclassed, then calling <code>start</code> in that
+ *  subclass will not invoke the subclass's <code>initialize</code> method.
+ */
 
 static VALUE
 rb_thread_start(klass, args)
@@ -9469,6 +11594,18 @@ rb_thread_start(klass, args)
     return rb_thread_start_0(rb_thread_yield, args, rb_thread_alloc(klass));
 }
 
+
+/*
+ *  call-seq:
+ *     thr.value   => obj
+ *  
+ *  Waits for <i>thr</i> to complete (via <code>Thread#join</code>) and returns
+ *  its value.
+ *     
+ *     a = Thread.new { 2 + 2 }
+ *     a.value   #=> 4
+ */
+
 static VALUE
 rb_thread_value(thread)
     VALUE thread;
@@ -9479,6 +11616,30 @@ rb_thread_value(thread)
 
     return th->result;
 }
+
+
+/*
+ *  call-seq:
+ *     thr.status   => string, false or nil
+ *  
+ *  Returns the status of <i>thr</i>: ``<code>sleep</code>'' if <i>thr</i> is
+ *  sleeping or waiting on I/O, ``<code>run</code>'' if <i>thr</i> is executing,
+ *  ``<code>aborting</code>'' if <i>thr</i> is aborting, <code>false</code> if
+ *  <i>thr</i> terminated normally, and <code>nil</code> if <i>thr</i>
+ *  terminated with an exception.
+ *     
+ *     a = Thread.new { raise("die now") }
+ *     b = Thread.new { Thread.stop }
+ *     c = Thread.new { Thread.exit }
+ *     d = Thread.new { sleep }
+ *     Thread.critical = true
+ *     d.kill                  #=> #<Thread:0x401b3678 aborting>
+ *     a.status                #=> nil
+ *     b.status                #=> "sleep"
+ *     c.status                #=> false
+ *     d.status                #=> "aborting"
+ *     Thread.current.status   #=> "run"
+ */
 
 static VALUE
 rb_thread_status(thread)
@@ -9495,6 +11656,19 @@ rb_thread_status(thread)
     return rb_str_new2(thread_status_name(th->status));
 }
 
+
+/*
+ *  call-seq:
+ *     thr.alive?   => true or false
+ *  
+ *  Returns <code>true</code> if <i>thr</i> is running or sleeping.
+ *     
+ *     thr = Thread.new { }
+ *     thr.join                #=> #<Thread:0x401b3fb0 dead>
+ *     Thread.current.alive?   #=> true
+ *     thr.alive?              #=> false
+ */
+
 static VALUE
 rb_thread_alive_p(thread)
     VALUE thread;
@@ -9504,6 +11678,19 @@ rb_thread_alive_p(thread)
     if (rb_thread_dead(th)) return Qfalse;
     return Qtrue;
 }
+
+
+/*
+ *  call-seq:
+ *     thr.stop?   => true or false
+ *  
+ *  Returns <code>true</code> if <i>thr</i> is dead or sleeping.
+ *     
+ *     a = Thread.new { Thread.stop }
+ *     b = Thread.current
+ *     a.stop?   #=> true
+ *     b.stop?   #=> false
+ */
 
 static VALUE
 rb_thread_stop_p(thread)
@@ -9550,9 +11737,9 @@ rb_thread_cleanup()
     FOREACH_THREAD_FROM(curr, th) {
 	if (th->status != THREAD_KILLED) {
 	    rb_thread_ready(th);
-	    th->thgroup = 0;
-	    th->priority = 0;
 	    if (th != main_thread) {
+		th->thgroup = 0;
+		th->priority = 0;
 		th->status = THREAD_TO_KILL;
 		RDATA(th->thread)->dfree = NULL;
 	    }
@@ -9563,11 +11750,34 @@ rb_thread_cleanup()
 
 int rb_thread_critical;
 
+
+/*
+ *  call-seq:
+ *     Thread.critical   => true or false
+ *  
+ *  Returns the status of the global ``thread critical'' condition.
+ */
+
 static VALUE
 rb_thread_critical_get()
 {
     return rb_thread_critical?Qtrue:Qfalse;
 }
+
+
+/*
+ *  call-seq:
+ *     Thread.critical= boolean   => true or false
+ *  
+ *  Sets the status of the global ``thread critical'' condition and returns
+ *  it. When set to <code>true</code>, prohibits scheduling of any existing
+ *  thread. Does not block new threads from being created and run. Certain
+ *  thread operations (such as stopping or killing a thread, sleeping in the
+ *  current thread, and raising an exception) may cause a thread to be scheduled
+ *  even when in a critical section.  <code>Thread::critical</code> is not
+ *  intended for daily use: it is primarily there to support folks writing
+ *  threading libraries.
+ */
 
 static VALUE
 rb_thread_critical_set(obj, val)
@@ -9616,27 +11826,15 @@ rb_thread_signal_raise(sig)
 }
 
 void
-rb_thread_trap_eval(cmd, sig)
+rb_thread_trap_eval(cmd, sig, safe)
     VALUE cmd;
-    int sig;
+    int sig, safe;
 {
-#if 0
     rb_thread_critical = 0;
-    if (!rb_thread_dead(curr_thread)) {
-	rb_thread_ready(curr_thread);
-	rb_trap_eval(cmd, sig);
+    if (curr_thread == main_thread) {
+	rb_trap_eval(cmd, sig, safe);
 	return;
     }
-    rb_thread_ready(main_thread);
-    if (THREAD_SAVE_CONTEXT(curr_thread)) {
-	return;
-    }
-    th_cmd = cmd;
-    th_sig = sig;
-    curr_thread = main_thread;
-    rb_thread_restore_context(curr_thread, RESTORE_TRAP);
-#else
-    rb_thread_critical = 0;
     if (!rb_thread_dead(curr_thread)) {
 	if (THREAD_SAVE_CONTEXT(curr_thread)) {
 	    return;
@@ -9644,9 +11842,9 @@ rb_thread_trap_eval(cmd, sig)
     }
     th_cmd = cmd;
     th_sig = sig;
+    th_safe = safe;
     curr_thread = main_thread;
     rb_thread_restore_context(curr_thread, RESTORE_TRAP);
-#endif
 }
 
 static VALUE
@@ -9655,26 +11853,52 @@ rb_thread_raise(argc, argv, th)
     VALUE *argv;
     rb_thread_t th;
 {
+    volatile rb_thread_t th_save = th;
+    VALUE exc;
+
+    if (!th->next) {
+	rb_raise(rb_eArgError, "unstarted thread");
+    }
     if (rb_thread_dead(th)) return Qnil;
+    exc = rb_make_exception(argc, argv);
     if (curr_thread == th) {
-	rb_f_raise(argc, argv);
+	rb_raise_jump(exc);
     }
 
     if (!rb_thread_dead(curr_thread)) {
 	if (THREAD_SAVE_CONTEXT(curr_thread)) {
-	    return th->thread;
+	    return th_save->thread;
 	}
     }
 
-    rb_scan_args(argc, argv, "11", &th_raise_argv[0], &th_raise_argv[1]);
     rb_thread_ready(th);
     curr_thread = th;
 
-    th_raise_argc = argc;
+    th_raise_exception = exc;
     th_raise_node = ruby_current_node;
     rb_thread_restore_context(curr_thread, RESTORE_RAISE);
     return Qnil;		/* not reached */
 }
+
+
+/*
+ *  call-seq:
+ *     thr.raise(exception)
+ *  
+ *  Raises an exception (see <code>Kernel::raise</code>) from <i>thr</i>. The
+ *  caller does not have to be <i>thr</i>.
+ *     
+ *     Thread.abort_on_exception = true
+ *     a = Thread.new { sleep(200) }
+ *     a.raise("Gotcha")
+ *     
+ *  <em>produces:</em>
+ *     
+ *     prog.rb:3: Gotcha (RuntimeError)
+ *     	from prog.rb:2:in `initialize'
+ *     	from prog.rb:2:in `new'
+ *     	from prog.rb:2
+ */
 
 static VALUE
 rb_thread_raise_m(argc, argv, thread)
@@ -9710,6 +11934,28 @@ rb_thread_local_aref(thread, id)
     return Qnil;
 }
 
+
+/*
+ *  call-seq:
+ *      thr[sym]   => obj or nil
+ *  
+ *  Attribute Reference---Returns the value of a thread-local variable, using
+ *  either a symbol or a string name. If the specified variable does not exist,
+ *  returns <code>nil</code>.
+ *     
+ *     a = Thread.new { Thread.current["name"] = "A"; Thread.stop }
+ *     b = Thread.new { Thread.current[:name]  = "B"; Thread.stop }
+ *     c = Thread.new { Thread.current["name"] = "C"; Thread.stop }
+ *     Thread.list.each {|x| puts "#{x.inspect}: #{x[:name]}" }
+ *     
+ *  <em>produces:</em>
+ *     
+ *     #<Thread:0x401b3b3c sleep>: C
+ *     #<Thread:0x401b3bc8 sleep>: B
+ *     #<Thread:0x401b3c68 sleep>: A
+ *     #<Thread:0x401bdf4c run>:
+ */
+
 static VALUE
 rb_thread_aref(thread, id)
     VALUE thread, id;
@@ -9742,12 +11988,35 @@ rb_thread_local_aset(thread, id, val)
     return val;
 }
 
+
+/*
+ *  call-seq:
+ *      thr[sym] = obj   => obj
+ *  
+ *  Attribute Assignment---Sets or creates the value of a thread-local variable,
+ *  using either a symbol or a string. See also <code>Thread#[]</code>.
+ */
+
 static VALUE
 rb_thread_aset(thread, id, val)
     VALUE thread, id, val;
 {
     return rb_thread_local_aset(thread, rb_to_id(id), val);
 }
+
+
+/*
+ *  call-seq:
+ *     thr.key?(sym)   => true or false
+ *  
+ *  Returns <code>true</code> if the given string (or symbol) exists as a
+ *  thread-local variable.
+ *     
+ *     me = Thread.current
+ *     me[:oliver] = "a"
+ *     me.key?(:oliver)    #=> true
+ *     me.key?(:stanley)   #=> false
+ */
 
 static VALUE
 rb_thread_key_p(thread, id)
@@ -9770,6 +12039,21 @@ thread_keys_i(key, value, ary)
     return ST_CONTINUE;
 }
 
+
+/*
+ *  call-seq:
+ *     thr.keys   => array
+ *  
+ *  Returns an an array of the names of the thread-local variables (as Symbols).
+ *     
+ *     thr = Thread.new do
+ *       Thread.current[:cat] = 'meow'
+ *       Thread.current["dog"] = 'woof'
+ *     end
+ *     thr.join   #=> #<Thread:0x401b3f10 dead>
+ *     thr.keys   #=> [:dog, :cat]
+ */
+
 static VALUE
 rb_thread_keys(thread)
     VALUE thread;
@@ -9783,6 +12067,13 @@ rb_thread_keys(thread)
     return ary;
 }
 
+/*
+ * call-seq:
+ *   thr.inspect   => string
+ *
+ * Dump the name, id, and status of _thr_ to a string.
+ */
+
 static VALUE
 rb_thread_inspect(thread)
     VALUE thread;
@@ -9792,7 +12083,7 @@ rb_thread_inspect(thread)
     const char *status = thread_status_name(th->status);
     VALUE str;
 
-    str = rb_str_new(0, strlen(cname)+7+16+9+1); /* 7:tags 16:addr 9:status 1:nul */ 
+    str = rb_str_new(0, strlen(cname)+7+16+9+1); /* 7:tags 16:addr 9:status 1:nul */
     sprintf(RSTRING(str)->ptr, "#<%s:0x%lx %s>", cname, thread, status);
     RSTRING(str)->len = strlen(RSTRING(str)->ptr);
     OBJ_INFECT(str, thread);
@@ -9817,7 +12108,69 @@ rb_thread_atfork()
     curr_thread->prev = curr_thread;
 }
 
+
+/*
+ *  Document-class: Continuation
+ *
+ *  Continuation objects are generated by
+ *  <code>Kernel#callcc</code>. They hold a return address and execution
+ *  context, allowing a nonlocal return to the end of the
+ *  <code>callcc</code> block from anywhere within a program.
+ *  Continuations are somewhat analogous to a structured version of C's
+ *  <code>setjmp/longjmp</code> (although they contain more state, so
+ *  you might consider them closer to threads).
+ *     
+ *  For instance:
+ *     
+ *     arr = [ "Freddie", "Herbie", "Ron", "Max", "Ringo" ]
+ *     callcc{|$cc|}
+ *     puts(message = arr.shift)
+ *     $cc.call unless message =~ /Max/
+ *     
+ *  <em>produces:</em>
+ *     
+ *     Freddie
+ *     Herbie
+ *     Ron
+ *     Max
+ *     
+ *  This (somewhat contrived) example allows the inner loop to abandon
+ *  processing early:
+ *     
+ *     callcc {|cont|
+ *       for i in 0..4
+ *         print "\n#{i}: "
+ *         for j in i*5...(i+1)*5
+ *           cont.call() if j == 17
+ *           printf "%3d", j
+ *         end
+ *       end
+ *     }
+ *     print "\n"
+ *     
+ *  <em>produces:</em>
+ *     
+ *     0:   0  1  2  3  4
+ *     1:   5  6  7  8  9
+ *     2:  10 11 12 13 14
+ *     3:  15 16
+ */
+
 static VALUE rb_cCont;
+
+/*
+ *  call-seq:
+ *     callcc {|cont| block }   =>  obj
+ *  
+ *  Generates a <code>Continuation</code> object, which it passes to the
+ *  associated block. Performing a <em>cont</em><code>.call</code> will
+ *  cause the <code>callcc</code> to return (as will falling through the
+ *  end of the block). The value returned by the <code>callcc</code> is
+ *  the value of the block, or the value passed to
+ *  <em>cont</em><code>.call</code>. See class <code>Continuation</code> 
+ *  for more details. Also see <code>Kernel::throw</code> for
+ *  an alternative mechanism for unwinding a call stack.
+ */
 
 static VALUE
 rb_callcc(self)
@@ -9825,8 +12178,10 @@ rb_callcc(self)
 {
     volatile VALUE cont;
     rb_thread_t th;
+    volatile rb_thread_t th_save;
     struct tag *tag;
     struct RVarmap *vars;
+    struct BLOCK *blk;
 
     THREAD_ALLOC(th);
     cont = Data_Wrap_Struct(rb_cCont, thread_mark, thread_free, th);
@@ -9835,28 +12190,37 @@ rb_callcc(self)
     for (tag=prot_tag; tag; tag=tag->prev) {
 	scope_dup(tag->scope);
     }
-    if (ruby_block) {
-	struct BLOCK *block = ruby_block;
-
-	while (block) {
-	    block->tag->flags |= BLOCK_DYNAMIC;
-	    block = block->prev;
-	}
-    }
     th->thread = curr_thread->thread;
+    th->thgroup = cont_protect;
 
-    for (vars = th->dyna_vars; vars; vars = vars->next) {
+    for (vars = ruby_dyna_vars; vars; vars = vars->next) {
 	if (FL_TEST(vars, DVAR_DONT_RECYCLE)) break;
 	FL_SET(vars, DVAR_DONT_RECYCLE);
     }
-
+    th_save = th;
     if (THREAD_SAVE_CONTEXT(th)) {
-	return th->result;
+	return th_save->result;
     }
     else {
 	return rb_yield(cont);
     }
 }
+
+/*
+ *  call-seq:
+ *     cont.call(args, ...) 
+ *     cont[args, ...]
+ *  
+ *  Invokes the continuation. The program continues from the end of the
+ *  <code>callcc</code> block. If no arguments are given, the original
+ *  <code>callcc</code> returns <code>nil</code>. If one argument is
+ *  given, <code>callcc</code> returns it. Otherwise, an array
+ *  containing <i>args</i> is returned.
+ *     
+ *     callcc {|cont|  cont.call }           #=> nil
+ *     callcc {|cont|  cont.call 1 }         #=> 1
+ *     callcc {|cont|  cont.call 1, 2, 3 }   #=> [1, 2, 3]
+ */
 
 static VALUE
 rb_cont_call(argc, argv, cont)
@@ -9868,6 +12232,9 @@ rb_cont_call(argc, argv, cont)
 
     if (th->thread != curr_thread->thread) {
 	rb_raise(rb_eRuntimeError, "continuation called across threads");
+    }
+    if (th->thgroup != cont_protect) {
+	rb_raise(rb_eRuntimeError, "continuation called across trap");
     }
     switch (argc) {
       case 0:
@@ -9890,6 +12257,19 @@ struct thgroup {
     VALUE group;
 };
 
+
+/*
+ * Document-class: ThreadGroup
+ *
+ *  <code>ThreadGroup</code> provides a means of keeping track of a number of
+ *  threads as a group. A <code>Thread</code> can belong to only one
+ *  <code>ThreadGroup</code> at a time; adding a thread to a new group will
+ *  remove it from any previous group.
+ *     
+ *  Newly created threads belong to the same group as the thread from which they
+ *  were created.
+ */
+
 static VALUE thgroup_s_alloc _((VALUE));
 static VALUE
 thgroup_s_alloc(klass)
@@ -9904,6 +12284,17 @@ thgroup_s_alloc(klass)
 
     return group;
 }
+
+
+/*
+ *  call-seq:
+ *     thgrp.list   => array
+ *  
+ *  Returns an array of all existing <code>Thread</code> objects that belong to
+ *  this group.
+ *     
+ *     ThreadGroup::Default.list   #=> [#<Thread:0x401bdf4c run>]
+ */
 
 static VALUE
 thgroup_list(group)
@@ -9926,6 +12317,25 @@ thgroup_list(group)
     return ary;
 }
 
+
+/*
+ *  call-seq:
+ *     thgrp.enclose   => thgrp
+ *  
+ *  Prevents threads from being added to or removed from the receiving
+ *  <code>ThreadGroup</code>. New threads can still be started in an enclosed
+ *  <code>ThreadGroup</code>.
+ *     
+ *     ThreadGroup::Default.enclose        #=> #<ThreadGroup:0x4029d914>
+ *     thr = Thread::new { Thread.stop }   #=> #<Thread:0x402a7210 sleep>
+ *     tg = ThreadGroup::new               #=> #<ThreadGroup:0x402752d4>
+ *     tg.add thr
+ *
+ *  <em>produces:</em>
+ *
+ *     ThreadError: can't move from the enclosed thread group
+ */
+
 VALUE
 thgroup_enclose(group)
     VALUE group;
@@ -9938,6 +12348,15 @@ thgroup_enclose(group)
     return group;
 }
 
+
+/*
+ *  call-seq:
+ *     thgrp.enclosed?   => true or false
+ *  
+ *  Returns <code>true</code> if <em>thgrp</em> is enclosed. See also
+ *  ThreadGroup#enclose.
+ */
+
 static VALUE
 thgroup_enclosed_p(group)
     VALUE group;
@@ -9949,6 +12368,33 @@ thgroup_enclosed_p(group)
     return Qfalse;
 }
 
+
+/*
+ *  call-seq:
+ *     thgrp.add(thread)   => thgrp
+ *  
+ *  Adds the given <em>thread</em> to this group, removing it from any other
+ *  group to which it may have previously belonged.
+ *     
+ *     puts "Initial group is #{ThreadGroup::Default.list}"
+ *     tg = ThreadGroup.new
+ *     t1 = Thread.new { sleep }
+ *     t2 = Thread.new { sleep }
+ *     puts "t1 is #{t1}"
+ *     puts "t2 is #{t2}"
+ *     tg.add(t1)
+ *     puts "Initial group now #{ThreadGroup::Default.list}"
+ *     puts "tg group now #{tg.list}"
+ *     
+ *  <em>produces:</em>
+ *     
+ *     Initial group is #<Thread:0x401bdf4c>
+ *     t1 is #<Thread:0x401b3c90>
+ *     t2 is #<Thread:0x401b3c18>
+ *     Initial group now #<Thread:0x401b3c18>#<Thread:0x401bdf4c>
+ *     tg group now #<Thread:0x401b3c90>
+ */
+
 static VALUE
 thgroup_add(group, thread)
     VALUE group, thread;
@@ -9958,6 +12404,10 @@ thgroup_add(group, thread)
 
     rb_secure(4);
     th = rb_thread_check(thread);
+    if (!th->next || !th->prev) {
+	rb_raise(rb_eTypeError, "wrong argument type %s (expected Thread)",
+		 rb_obj_classname(thread));
+    }
 
     if (OBJ_FROZEN(group)) {
       rb_raise(rb_eThreadError, "can't move to the frozen thread group");
@@ -9981,6 +12431,16 @@ thgroup_add(group, thread)
     th->thgroup = group;
     return group;
 }
+
+
+/*
+ *  +Thread+ encapsulates the behavior of a thread of
+ *  execution, including the main thread of the Ruby script.
+ *     
+ *  In the descriptions of the methods in this class, the parameter _sym_
+ *  refers to a symbol, which is either a quoted string or a 
+ *  +Symbol+ (such as <code>:name</code>).
+ */
 
 void
 Init_Thread()
@@ -10041,7 +12501,9 @@ Init_Thread()
     rb_undef_alloc_func(rb_cCont);
     rb_undef_method(CLASS_OF(rb_cCont), "new");
     rb_define_method(rb_cCont, "call", rb_cont_call, -1);
+    rb_define_method(rb_cCont, "[]", rb_cont_call, -1);
     rb_define_global_function("callcc", rb_callcc, 0);
+    rb_global_variable(&cont_protect);
 
     cThGroup = rb_define_class("ThreadGroup", rb_cObject);
     rb_define_alloc_func(cThGroup, thgroup_s_alloc);
@@ -10051,26 +12513,57 @@ Init_Thread()
     rb_define_method(cThGroup, "add", thgroup_add, 1);
     thgroup_default = rb_obj_alloc(cThGroup);
     rb_define_const(cThGroup, "Default", thgroup_default);
+    rb_global_variable(&thgroup_default);
 
     /* allocate main thread */
     main_thread = rb_thread_alloc(rb_cThread);
     curr_thread = main_thread->prev = main_thread->next = main_thread;
 }
 
+/*
+ *  call-seq:
+ *     catch(symbol) {| | block }  > obj
+ *  
+ *  +catch+ executes its block. If a +throw+ is
+ *  executed, Ruby searches up its stack for a +catch+ block
+ *  with a tag corresponding to the +throw+'s
+ *  _symbol_. If found, that block is terminated, and
+ *  +catch+ returns the value given to +throw+. If
+ *  +throw+ is not called, the block terminates normally, and
+ *  the value of +catch+ is the value of the last expression
+ *  evaluated. +catch+ expressions may be nested, and the
+ *  +throw+ call need not be in lexical scope.
+ *     
+ *     def routine(n)
+ *       puts n
+ *       throw :done if n <= 0
+ *       routine(n-1)
+ *     end
+ *     
+ *     
+ *     catch(:done) { routine(3) }
+ *     
+ *  <em>produces:</em>
+ *     
+ *     3
+ *     2
+ *     1
+ *     0
+ */
+
 static VALUE
 rb_f_catch(dmy, tag)
     VALUE dmy, tag;
 {
     int state;
-    ID t;
-    VALUE val;			/* OK */
+    VALUE val = Qnil;		/* OK */
 
-    t = rb_to_id(tag);
-    PUSH_TAG(t);
+    tag = ID2SYM(rb_to_id(tag));
+    PUSH_TAG(tag);
     if ((state = EXEC_TAG()) == 0) {
-	val = rb_yield_0(tag, 0, 0, Qfalse, Qfalse);
+	val = rb_yield_0(tag, 0, 0, 0, Qfalse);
     }
-    else if (state == TAG_THROW && t == prot_tag->dst) {
+    else if (state == TAG_THROW && tag == prot_tag->dst) {
 	val = prot_tag->retval;
 	state = 0;
     }
@@ -10082,9 +12575,9 @@ rb_f_catch(dmy, tag)
 
 static VALUE
 catch_i(tag)
-    ID tag;
+    VALUE tag;
 {
-    return rb_funcall(Qnil, rb_intern("catch"), 1, ID2SYM(tag));
+    return rb_funcall(Qnil, rb_intern("catch"), 1, tag);
 }
 
 VALUE
@@ -10093,8 +12586,20 @@ rb_catch(tag, func, data)
     VALUE (*func)();
     VALUE data;
 {
-    return rb_iterate((VALUE(*)_((VALUE)))catch_i, rb_intern(tag), func, data);
+    return rb_iterate((VALUE(*)_((VALUE)))catch_i, ID2SYM(rb_intern(tag)), func, data);
 }
+
+/*
+ *  call-seq:
+ *     throw(symbol [, obj])
+ *  
+ *  Transfers control to the end of the active +catch+ block
+ *  waiting for _symbol_. Raises +NameError+ if there
+ *  is no +catch+ block for the symbol. The optional second
+ *  parameter supplies a return value for the +catch+ block,
+ *  which otherwise defaults to +nil+. For examples, see
+ *  <code>Kernel::catch</code>.
+ */
 
 static VALUE
 rb_f_throw(argc, argv)
@@ -10102,28 +12607,27 @@ rb_f_throw(argc, argv)
     VALUE *argv;
 {
     VALUE tag, value;
-    ID t;
     struct tag *tt = prot_tag;
 
     rb_scan_args(argc, argv, "11", &tag, &value);
-    t = rb_to_id(tag);
+    tag = ID2SYM(rb_to_id(tag));
 
     while (tt) {
-	if (tt->tag == t) {
-	    tt->dst = t;
+	if (tt->tag == tag) {
+	    tt->dst = tag;
+	    tt->retval = value;
 	    break;
 	}
 	if (tt->tag == PROT_THREAD) {
 	    rb_raise(rb_eThreadError, "uncaught throw `%s' in thread 0x%lx",
-		     rb_id2name(t),
+		     rb_id2name(SYM2ID(tag)),
 		     curr_thread);
 	}
 	tt = tt->prev;
     }
     if (!tt) {
-	rb_name_error(t, "uncaught throw `%s'", rb_id2name(t));
+	rb_name_error(SYM2ID(tag), "uncaught throw `%s'", rb_id2name(SYM2ID(tag)));
     }
-    return_value(value);
     rb_trap_restore_mask();
     JUMP_TAG(TAG_THROW);
 #ifndef __GNUC__
@@ -10137,26 +12641,8 @@ rb_throw(tag, val)
     VALUE val;
 {
     VALUE argv[2];
-    ID t = rb_intern(tag);
 
-    argv[0] = ID2SYM(t);
+    argv[0] = ID2SYM(rb_intern(tag));
     argv[1] = val;
     rb_f_throw(2, argv);
-}
-
-static void
-return_check()
-{
-    struct tag *tt = prot_tag;
-
-    while (tt) {
-	if (tt->tag == PROT_FUNC) {
-	    break;
-	}
-	if (tt->tag == PROT_THREAD) {
-	    rb_raise(rb_eThreadError, "return from within thread 0x%lx",
-		     curr_thread);
-	}
-	tt = tt->prev;
-    }
 }

@@ -2,8 +2,8 @@
 #
 #               biorhythm.rb - 
 #                       $Release Version: $
-#                       $Revision: 1.1.1.2 $
-#                       $Date: 2003/10/15 10:11:49 $
+#                       $Revision: 1.9 $
+#                       $Date: 2003/05/05 14:02:14 $
 #                       by Yasuo OHBA(STAFS Development Room)
 #
 # --

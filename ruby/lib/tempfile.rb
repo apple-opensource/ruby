@@ -1,7 +1,7 @@
 #
 # tempfile - manipulates temporary files
 #
-# $Id: tempfile.rb,v 1.1.1.3 2003/10/15 10:11:48 melville Exp $
+# $Id: tempfile.rb,v 1.19.2.3 2004/10/19 10:25:19 matz Exp $
 #
 
 require 'delegate'
@@ -9,7 +9,7 @@ require 'tmpdir'
 
 # A class for managing temporary files.  This library is written to be
 # thread safe.
-class Tempfile < SimpleDelegator
+class Tempfile < DelegateClass(File)
   MAX_TRY = 10
   @@cleanlist = []
 
@@ -33,7 +33,7 @@ class Tempfile < SimpleDelegator
       Thread.critical = true
 
       begin
-	tmpname = sprintf('%s/%s%d.%d', tmpdir, basename, $$, n)
+	tmpname = File.join(tmpdir, make_tmpname(basename, n))
 	lock = tmpname + '.lock'
 	n += 1
       end while @@cleanlist.include?(tmpname) or
@@ -65,6 +65,11 @@ class Tempfile < SimpleDelegator
 
     Dir.rmdir(lock)
   end
+
+  def make_tmpname(basename, n)
+    sprintf('%s%d.%d', basename, $$, n)
+  end
+  private :make_tmpname
 
   # Opens or reopens the file with mode "r+".
   def open
@@ -106,8 +111,14 @@ class Tempfile < SimpleDelegator
   # file.
   def unlink
     # keep this order for thread safeness
-    File.unlink(@tmpname) if File.exist?(@tmpname)
-    @@cleanlist.delete(@tmpname) if @@cleanlist
+    begin
+      File.unlink(@tmpname) if File.exist?(@tmpname)
+      @@cleanlist.delete(@tmpname)
+      @data = @tmpname = nil
+      ObjectSpace.undefine_finalizer(self)
+    rescue Errno::EACCESS
+      # may not be able to unlink on Windows; just ignore
+    end
   end
   alias delete unlink
 

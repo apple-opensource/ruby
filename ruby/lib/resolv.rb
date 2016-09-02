@@ -10,9 +10,10 @@ It is possible to lookup various resources of DNS using DNS module directly.
   Resolv.getaddress("www.ruby-lang.org")
   Resolv.getname("210.251.121.214")
 
-  dns = Resolv::DNS.new
-  dns.getresources("www.ruby-lang.org", Resolv::DNS::Resource::IN::A).collect {|r| r.address}
-  dns.getresources("ruby-lang.org", Resolv::DNS::Resource::IN::MX).collect {|r| [r.exchange.to_s, r.preference]}
+  Resolv::DNS.open {|dns|
+    dns.getresources("www.ruby-lang.org", Resolv::DNS::Resource::IN::A).collect {|r| r.address}
+    dns.getresources("ruby-lang.org", Resolv::DNS::Resource::IN::MX).collect {|r| [r.exchange.to_s, r.preference]}
+  }
 
 == Resolv class
 
@@ -57,10 +58,17 @@ hostname resolver using /etc/hosts format.
 DNS stub resolver.
 
 === class methods
---- Resolv::DNS.new(resolv_conf='/etc/resolv.conf')
+--- Resolv::DNS.new(config_info=nil)
 
---- Resolv::DNS.open(resolv_conf='/etc/resolv.conf')
---- Resolv::DNS.open(resolv_conf='/etc/resolv.conf') {|dns| ...}
+    ((|config_info|)) should be nil, a string or a hash.
+    If nil is given, /etc/resolv.conf and platform specific information is used.
+    If a string is given, it should be a filename which format is same as /etc/resolv.conf.
+    If a hash is given, it may contains information for nameserver, search and ndots as follows.
+
+      Resolv::DNS.new({:nameserver=>["210.251.121.21"], :search=>["ruby-lang.org"], :ndots=>1})
+
+--- Resolv::DNS.open(config_info=nil)
+--- Resolv::DNS.open(config_info=nil) {|dns| ...}
 
 === methods
 --- Resolv::DNS#close
@@ -369,9 +377,9 @@ class Resolv
       end
     end
 
-    def initialize(config="/etc/resolv.conf")
+    def initialize(config_info=nil)
       @mutex = Mutex.new
-      @config = Config.new(config)
+      @config = Config.new(config_info)
       @initialized = nil
     end
 
@@ -704,10 +712,49 @@ class Resolv
     end
 
     class Config
-      def initialize(filename="/etc/resolv.conf")
+      def initialize(config_info=nil)
         @mutex = Mutex.new
-        @filename = filename
+        @config_info = config_info
         @initialized = nil
+      end
+
+      def Config.parse_resolv_conf(filename)
+        nameserver = []
+        search = nil
+        ndots = 1
+        open(filename) {|f|
+          f.each {|line|
+            line.sub!(/[#;].*/, '')
+            keyword, *args = line.split(/\s+/)
+            args.each { |arg|
+              arg.untaint
+            }
+            next unless keyword
+            case keyword
+            when 'nameserver'
+              nameserver += args
+            when 'domain'
+              search = [args[0]]
+            when 'search'
+              search = args
+            end
+          }
+        }
+        return { :nameserver => nameserver, :search => search, :ndots => ndots }
+      end
+
+      def Config.default_config_hash(filename="/etc/resolv.conf")
+        if File.exist? filename
+          config_hash = Config.parse_resolv_conf(filename)
+        else
+          if /mswin32|cygwin|mingw|bccwin/ =~ RUBY_PLATFORM
+            search, nameserver = Win32::Resolv.get_resolv_info
+            config_hash = {}
+            config_hash[:nameserver] = nameserver if nameserver
+            config_hash[:search] = [search].flatten if search
+          end
+        end
+        config_hash
       end
 
       def lazy_initialize
@@ -716,35 +763,30 @@ class Resolv
             @nameserver = []
             @search = nil
             @ndots = 1
-            begin
-              open(@filename) {|f|
-                f.each {|line|
-                  line.sub!(/[#;].*/, '')
-                  keyword, *args = line.split(/\s+/)
-                  args.each { |arg|
-                    arg.untaint
-                  }
-                  next unless keyword
-                  case keyword
-                  when 'nameserver'
-                    @nameserver += args
-                  when 'domain'
-                    @search = [Label.split(args[0])]
-                  when 'search'
-                    @search = args.map {|arg| Label.split(arg)}
-                  end
-                }
-              }
-            rescue Errno::ENOENT
-              if /mswin32|cygwin|mingw|bccwin/ =~ RUBY_PLATFORM
-                search, nameserver = Win32::Resolv.get_resolv_info
-                @search = [search] if search
-                @nameserver = nameserver if nameserver
+            case @config_info
+            when nil
+              config_hash = Config.default_config_hash
+            when String
+              config_hash = Config.parse_resolv_conf(@config_info)
+            when Hash
+              config_hash = @config_info.dup
+              if String === config_hash[:nameserver]
+                config_hash[:nameserver] = [config_hash[:nameserver]]
               end
+              if String === config_hash[:search]
+                config_hash[:search] = [config_hash[:search]]
+              end
+            else
+              raise ArgumentError.new("invalid resolv configuration: #{@config_info.inspect}")
             end
+            @nameserver = config_hash[:nameserver] if config_hash.include? :nameserver
+            @search = config_hash[:search] if config_hash.include? :search
+            @ndots = config_hash[:ndots] if config_hash.include? :ndots
 
             @nameserver = ['0.0.0.0'] if @nameserver.empty?
-            unless @search
+            if @search
+              @search = @search.map {|arg| Label.split(arg) }
+            else
               hostname = Socket.gethostname
               if /\./ =~ hostname
                 @search = [Label.split($')]
@@ -752,6 +794,21 @@ class Resolv
                 @search = [[]]
               end
             end
+
+            if !@nameserver.kind_of?(Array) ||
+               !@nameserver.all? {|ns| String === ns }
+              raise ArgumentError.new("invalid nameserver config: #{@nameserver.inspect}")
+            end
+
+            if !@search.kind_of?(Array) ||
+               !@search.all? {|ls| ls.all? {|l| Label::Str === l } }
+              raise ArgumentError.new("invalid search config: #{@search.inspect}")
+            end
+
+            if !@ndots.kind_of?(Integer)
+              raise ArgumentError.new("invalid ndots config: #{@ndots.inspect}")
+            end
+
             @initialized = true
           end
         }
@@ -1155,11 +1212,11 @@ class Resolv
           len, = self.get_unpack('n')
           save_limit = @limit
           @limit = @index + len
-          d = yield len
+          d = yield(len)
           if @index < @limit
-            raise DecodeError.new("junk exist")
+            raise DecodeError.new("junk exists")
           elsif @limit < @index
-            raise DecodeError.new("limit exceed")
+            raise DecodeError.new("limit exceeded")
           end
           @limit = save_limit
           return d
@@ -1185,7 +1242,7 @@ class Resolv
               raise StandardError.new("unsupported template: '#{byte.chr}' in '#{template}'")
             end
           }
-          raise DecodeError.new("limit exceed") if @limit < @index + len
+          raise DecodeError.new("limit exceeded") if @limit < @index + len
           arr = @data.unpack("@#{@index}#{template}")
           @index += len
           return arr
@@ -1193,7 +1250,7 @@ class Resolv
 
         def get_string
           len = @data[@index]
-          raise DecodeError.new("limit exceed") if @limit < @index + 1 + len
+          raise DecodeError.new("limit exceeded") if @limit < @index + 1 + len
           d = @data[@index + 1, len]
           @index += 1 + len
           return d
@@ -1554,7 +1611,7 @@ class Resolv
           raise ArgumentError.new("IPv4 address with invalid value: " + arg)
         end
       else
-        raise ArgumentError.new("cannot interprete as IPv4 address: #{arg.inspect}")
+        raise ArgumentError.new("cannot interpret as IPv4 address: #{arg.inspect}")
       end
     end
 
@@ -1615,10 +1672,10 @@ class Resolv
       \z/x
 
     Regex = /
-      (?:#{Regex_8Hex.source}) |
-      (?:#{Regex_CompressedHex.source}) |
-      (?:#{Regex_6Hex4Dec.source}) |
-      (?:#{Regex_CompressedHex4Dec.source})/x
+      (?:#{Regex_8Hex}) |
+      (?:#{Regex_CompressedHex}) |
+      (?:#{Regex_6Hex4Dec}) |
+      (?:#{Regex_CompressedHex4Dec})/x
 
     def self.create(arg)
       case arg
@@ -1662,7 +1719,7 @@ class Resolv
         end
         return IPv6.new(address)
       else
-        raise ArgumentError.new("cannot interprete as IPv6 address: #{arg.inspect}")
+        raise ArgumentError.new("cannot interpret as IPv6 address: #{arg.inspect}")
       end
     end
 
@@ -1706,5 +1763,5 @@ class Resolv
   end
 
   DefaultResolver = self.new
-  AddressRegex = /(?:#{IPv4::Regex.source})|(?:#{IPv6::Regex.source})/
+  AddressRegex = /(?:#{IPv4::Regex})|(?:#{IPv6::Regex})/
 end

@@ -55,13 +55,12 @@ module WEBrick
       @logger.info("WEBrick #{webrickv}")
       @logger.info("ruby #{rubyv}")
 
-      if  @config[:DoNotListen]
-        @listeners = []
-      else
-        @listeners = listen(@config[:BindAddress], @config[:Port])
-        @config[:Listen].each{|addr, port|
-          listen(addr, port).each{|sock| @listeners << sock }
-        }
+      @listeners = []
+      unless @config[:DoNotListen]
+        if @config[:Listen]
+          warn(":Listen option is deprecated; use GenericServer#listen")
+        end
+        listen(@config[:BindAddress], @config[:Port])
       end
     end
 
@@ -70,26 +69,7 @@ module WEBrick
     end
 
     def listen(address, port)
-      res = Socket::getaddrinfo(address, port,
-                                Socket::AF_UNSPEC,   # address family
-                                Socket::SOCK_STREAM, # socket type
-                                0,                   # protocol
-                                Socket::AI_PASSIVE)  # flag
-      last_error = nil
-      sockets = []
-      res.each{|ai|
-        begin
-          @logger.debug("TCPServer.new(#{ai[3]}, #{ai[1]})")
-          sock = TCPServer.new(ai[3], ai[1])
-          Utils::set_close_on_exec(sock)
-          sockets << sock
-        rescue => ex
-          @logger.warn("TCPServer Error: #{ex}")
-          last_error  = ex
-        end
-      }
-      raise last_error if sockets.empty?
-      return sockets
+      @listeners += Utils::create_listeners(address, port, @logger)
     end
 
     def start(&block)
@@ -117,12 +97,14 @@ module WEBrick
               }
             end
           rescue Errno::ECONNRESET, Errno::ECONNABORTED, Errno::EPROTO => ex
+            # TCP connection was established but RST segment was sent
+            # from peer before calling TCPServer#accept.
+          rescue Errno::EBADF, IOError => ex
+            # if the listening socket was closed in GenericServer#shutdown,
+            # IO::select raise it.
+          rescue Exception => ex
             msg = "#{ex.class}: #{ex.message}\n\t#{ex.backtrace[0]}"
             @logger.error msg
-          rescue Errno::EBADF => ex  # IO::select causes by shutdown
-          rescue => ex
-            @logger.error ex
-            break
           end
         end
 
@@ -162,18 +144,29 @@ module WEBrick
       Thread.start{
         begin
           Thread.current[:WEBrickSocket] = sock
-          addr = sock.peeraddr
-          @logger.debug "accept: #{addr[3]}:#{addr[1]}"
+          begin
+            addr = sock.peeraddr
+            @logger.debug "accept: #{addr[3]}:#{addr[1]}"
+          rescue SocketError
+            @logger.debug "accept: <address unknown>"
+            raise
+          end
           call_callback(:AcceptCallback, sock)
           block ? block.call(sock) : run(sock)
-        rescue ServerError, Errno::ENOTCONN => ex
+        rescue Errno::ENOTCONN
+          @logger.debug "Errno::ENOTCONN raised"
+        rescue ServerError => ex
           msg = "#{ex.class}: #{ex.message}\n\t#{ex.backtrace[0]}"
           @logger.error msg
         rescue Exception => ex
           @logger.error ex
         ensure
           Thread.current[:WEBrickSocket] = nil
-          @logger.debug "close: #{addr[3]}:#{addr[1]}"
+          if addr
+            @logger.debug "close: #{addr[3]}:#{addr[1]}"
+          else
+            @logger.debug "close: <address unknown>"
+          end
           sock.close
         end
         @tokens.push(nil)

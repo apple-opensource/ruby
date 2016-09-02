@@ -1,3 +1,5 @@
+# -*- makefile -*-
+
 SHELL = $(COMSPEC)
 
 #### Start of system configuration section. ####
@@ -74,9 +76,19 @@ RT = msvcrt
 !ifndef RUBY_SO_NAME
 RUBY_SO_NAME = $(RT)-$(RUBY_INSTALL_NAME)$(MAJOR)$(MINOR)
 !endif
+!ifndef RUBY_PLATFORM
+RUBY_PLATFORM = $(ARCH)-$(OS)
+!endif
+
 
 !if !defined(prefix)
 prefix = /usr
+!endif
+!if !defined(exec_prefix)
+exec_prefix = $(prefix)
+!endif
+!if !defined(libdir)
+libdir = $(exec_prefix)/lib
 !endif
 !if !defined(DESTDIR)
 DESTDIR = $(prefix)
@@ -111,7 +123,7 @@ LDSHARED = $(LD) -LD
 XCFLAGS =
 LDFLAGS = -link -incremental:yes -pdb:none -MACHINE:$(MACHINE) -subsystem:$(SUBSYSTEM)
 DLDFLAGS = $(LDFLAGS) -dll
-XLDFLAGS = -stack:$(STACK)
+XLDFLAGS = -stack:$(STACK) -subsystem:$(SUBSYSTEM)
 SOLIBS = 
 
 LIBRUBY_LDSHARED = $(LDSHARED)
@@ -122,6 +134,7 @@ PROGRAM=$(RUBY_INSTALL_NAME)$(EXEEXT)
 WPROGRAM=$(RUBYW_INSTALL_NAME)$(EXEEXT)
 RUBYDEF = $(RUBY_SO_NAME).def
 MINIRUBY = .\minirubyce$(EXEEXT)
+MINIRUBY_WIN = .\miniruby$(EXEEXT)
 
 !if !defined(STACK)
 STACK = 0x200000,0x10000
@@ -182,7 +195,7 @@ OBJS          = array.obj \
 
 all:		ext minirubyce$(EXEEXT) rbconfig.rb \
 		$(LIBRUBY) $(MISCLIBS)
-		@miniruby$(EXEEXT) $(srcdir)/ext/extmk.rb --extstatic=$(EXTSTATIC) --make "$(MAKE)" --make-flags "-$(MFLAGS)$(MAKEFLAGS)"
+		@$(MINIRUBY_WIN) $(srcdir)/ext/extmk.rb --extstatic=$(EXTSTATIC) --make "$(MAKE)" --make-flags "-$(MFLAGS)$(MAKEFLAGS)"
 
 ext:
 		@mkdir $@
@@ -208,7 +221,6 @@ config.h:
 #define HAVE_STDLIB_H 1
 #define HAVE_STRING_H 1
 #define HAVE_MEMORY_H 1
-#define HAVE_FLOAT_H 1
 #define HAVE_OFF_T 1
 #define SIZEOF_INT 4
 #define SIZEOF_SHORT 2
@@ -219,21 +231,17 @@ config.h:
 #define SIZEOF_VOIDP 4
 #define SIZEOF_FLOAT 4
 #define SIZEOF_DOUBLE 8
+#define SIZEOF_TIME_T 4
 #define HAVE_PROTOTYPES 1
 #define TOKEN_PASTE(x,y) x##y
 #define HAVE_STDARG_PROTOTYPES 1
-#if _MSC_VER > 1100 && !defined NORETURN
+#if _MSC_VER > 1100
 #define NORETURN(x) __declspec(noreturn) x
-#else
-#define NORETURN(x) x
 #endif
 #define HAVE_DECL_SYS_NERR 1
-#define STDC_HEADERS 1
-#define HAVE_STDLIB_H 1
-#define HAVE_STRING_H 1
 #define HAVE_FCNTL_H 1
 #define HAVE_SYS_UTIME_H 1
-#define HAVE_MEMORY_H 1
+#define HAVE_FLOAT_H 1
 #define uid_t int
 #define gid_t int
 #define HAVE_STRUCT_STAT_ST_RDEV 1
@@ -255,11 +263,12 @@ config.h:
 #define HAVE_FLOCK 1
 #define HAVE_VSNPRINTF 1
 #define HAVE_FINITE 1
+#define HAVE_HYPOT 1
 #define HAVE_FMOD 1
 #define HAVE_FREXP 1
-#define HAVE_HYPOT 1
 #define HAVE_MODF 1
 #define HAVE_WAITPID 1
+#define HAVE_GETCWD 1
 #define HAVE_CHSIZE 0
 #define HAVE_TIMES 1
 #define HAVE_TELLDIR 1
@@ -268,12 +277,12 @@ config.h:
 #define HAVE_COSH 1
 #define HAVE_SINH 1
 #define HAVE_TANH 1
-#define HAVE_EXECVE 0
 #define HAVE_TZNAME 1
 #define HAVE_DAYLIGHT 1
 #define SETPGRP_VOID 1
-#define inline __inline
 #define RSHIFT(x,y) ((x)>>(int)y)
+#define inline __inline
+#define NEED_IO_SEEK_BETWEEN_RW 1
 #define DEFAULT_KCODE KCODE_NONE
 #define DLEXT ".so"
 #define DLEXT2 ".dll"
@@ -300,7 +309,7 @@ $(BANG)endif
 #if _WIN32_WCE < 300
   #define isascii(c) ( (c>=0x00&&c<=0x7f)?1:0 )
   #define isspace(c) ( ((c>=0x09&&c<=0x0d)||c==0x20)?1:0 )
-  #define isdigit(c) ( (c>=0x00&&c<=0x09)?1:0 )
+  #define isdigit(c) ( (c>=0x30&&c<=0x39)?1:0 )
   #define isupper(c) ( (c>='A'&&c<='Z')?1:0 )
   #define isalpha(c) ( ((c>='A'&&c<='Z')||(c>='a'&&c<='z'))?1:0 )
   #define isprint(c) ( (c>=0x20&&c<=0x7e)?1:0 )
@@ -365,8 +374,10 @@ s,@ALLOCA@,$(ALLOCA),;t t
 s,@DEFAULT_KCODE@,$(DEFAULT_KCODE),;t t
 s,@EXEEXT@,.exe,;t t
 s,@OBJEXT@,obj,;t t
+s,@XCFLAGS@,$(XCFLAGS),;t t
 s,@XLDFLAGS@,$(XLDFLAGS),;t t
 s,@DLDFLAGS@,$(DLDFLAGS) $$(LIBPATH) -def:$$(DEFFILE),;t t
+s,@ARCH_FLAG@,$(ARCH_FLAG),;t t
 s,@STATIC@,$(STATIC),;t t
 s,@CCDLFLAGS@,-DIMPORT,;t t
 s,@LDSHARED@,$(LDSHARED),;t t
@@ -395,16 +406,17 @@ s,@DLDLIBS@,$(DLDLIBS),;t t
 s,@ENABLE_SHARED@,yes,;t t
 s,@OUTFLAG@,-Fe,;t t
 s,@CPPOUTFILE@,-P,;t t
-s,@LIBPATHFLAG@, -libpath:%s,;t t
+s,@LIBPATHFLAG@, -libpath:"%s",;t t
+s,@RPATHFLAG@,,;t t
 s,@LIBARG@,%s.lib,;t t
 s,@LINK_SO@,$$(LDSHARED) -Fe$$(@) $$(OBJS) $$(LIBS) $$(LOCAL_LIBS) $$(DLDFLAGS),;t t
 s,@COMPILE_C@,$$(CC) $$(CFLAGS) $$(CPPFLAGS) -c -Tc$$(<:\=/),;t t
 s,@COMPILE_CXX@,$$(CXX) $$(CXXFLAGS) $$(CPPFLAGS) -c -Tp$$(<:\=/),;t t
 s,@COMPILE_RULES@,{$$(srcdir)}.%s{}.%s: .%s.%s:,;t t
 s,@TRY_LINK@,$$(CC) -Feconftest $$(INCFLAGS) -I$$(hdrdir) $$(CPPFLAGS) $$(CFLAGS) $$(src) $$(LOCAL_LIBS) $$(LIBS) -link $$(LDFLAGS) $$(LIBPATH) $$(XLDFLAGS),;t t
-s,@COMMON_LIBS@,m,;t t
+s,@COMMON_LIBS@,coredll winsock,;t t
 s,@COMMON_MACROS@,WIN32_LEAN_AND_MEAN;t t
-s,@COMMON_HEADERS@,winsock2.h windows.h,;t t
+s,@COMMON_HEADERS@,winsock.h windows.h,;t t
 s,@EXPORT_PREFIX@, ,;t t
 s,@arch@,$(ARCH)-$(OS),;t t
 s,@sitearch@,$(ARCH)-$(RT),;t t
@@ -413,6 +425,7 @@ s,@configure_args@,--with-make-prog=nmake --enable-shared $(configure_args),;t t
 s,@configure_input@,$$configure_input,;t t
 s,@srcdir@,$(srcdir),;t t
 s,@top_srcdir@,$(srcdir),;t t
+s,@RUBY_PLATFORM@,$(RUBY_PLATFORM),;t t
 <<KEEP
 
 minirubyce$(EXEEXT):	$(OBJS) $(MAINOBJ) $(WINMAINOBJ) dmyext.obj
@@ -439,16 +452,16 @@ $(LIBRUBY_SO):	$(LIBRUBY_A) $(EXTOBJS) $(RUBYDEF) $*.res
 			-Fe$@ $(LDFLAGS) $(LIBRUBY_DLDFLAGS)
 
 $(RUBYDEF):	$(LIBRUBY_A) minirubyce$(EXEEXT)
-			miniruby$(EXEEXT) $(srcdir)/wince/mkexports.rb \
+			$(MINIRUBY_WIN) $(srcdir)/wince/mkexports.rb \
               -output=$@ $(LIBRUBY_A) $(ARCH)
 
 {$(srcdir)/wince}.def.lib:
 		$(AR) $(ARFLAGS)$@ -def:$<
 
 install:	rbconfig.rb
-		miniruby$(EXEEXT) $(srcdir)/instruby.rb \
+		$(MINIRUBY_WIN) $(srcdir)/instruby.rb \
           "--dest-dir=$(DESTDIR)" "--make=nmake"
-		miniruby$(EXEEXT) $(srcdir)/ext/extmk.rb \
+		$(MINIRUBY_WIN) $(srcdir)/ext/extmk.rb \
           --make "$(MAKE)" --make-flags "-$(MFLAGS)$(MAKEFLAGS) DESTDIR=$(DESTDIR)" install
 
 clean:		clean-ext clean-local
@@ -464,8 +477,7 @@ clean-local:
 		@if exist *.res del *.res
 
 clean-ext:
-#		@-$(MINIRUBY) $(srcdir)/ext/extmk.rb --make "$(MAKE)" --make-flags "-$(MFLAGS)$(MAKEFLAGS)" clean
-		@-miniruby$(EXEEXT) $(srcdir)/ext/extmk.rb --make "$(MAKE)" --make-flags "-$(MFLAGS)$(MAKEFLAGS)" clean
+		@-$(MINIRUBY_WIN) $(srcdir)/ext/extmk.rb --make "$(MAKE)" --make-flags "-$(MFLAGS)$(MAKEFLAGS)" clean
 
 distclean:	distclean-ext distclean-local
 
@@ -499,22 +511,23 @@ distclean-local:	clean-local
 		@if exist minirubyce$(EXEEXT) del minirubyce$(EXEEXT)
 
 distclean-ext:
-		@-$(MINIRUBY) $(srcdir)/ext/extmk.rb --make "$(MAKE)" --make-flags "-$(MFLAGS)$(MAKEFLAGS)" distclean
+		@-$(MINIRUBY_WIN) $(srcdir)/ext/extmk.rb --make "$(MAKE)" --make-flags "-$(MFLAGS)$(MAKEFLAGS)" distclean
 
 realclean:	distclean
 		@if exist parse.c del parse.c
 		@if exist lex.c del lex.c
 
-test:		miniruby$(EXEEXT)
+test:		miniruby$(EXEEXT) rbconfig.rb $(PROGRAM) NUL
 		@miniruby$(EXEEXT) $(srcdir)/rubytest.rb
 
-rbconfig.rb:	minirubyce$(EXEEXT) config.status
-		miniruby$(EXEEXT) $(srcdir)/mkconfig.rb -srcdir=$(srcdir) \
+rbconfig.rb:	miniruby$(EXEEXT) config.status
+		$(MINIRUBY_WIN) $(srcdir)/mkconfig.rb -srcdir=$(srcdir) \
 			-install_name=$(RUBY_INSTALL_NAME) \
 			-so_name=$(RUBY_SO_NAME) rbconfig.rb
+		$(MINIRUBY_WIN) $(srcdir)/wince/mkconfig_wce.rb rbconfig.rb
 
 $(RUBY_INSTALL_NAME).rc $(RUBYW_INSTALL_NAME).rc $(RUBY_SO_NAME).rc: rbconfig.rb
-		miniruby$(EXEEXT) $(srcdir)/wince/resource.rb \
+		$(MINIRUBY_WIN) $(srcdir)/win32/resource.rb \
 			-ruby_name=$(RUBY_INSTALL_NAME) \
 			-rubyw_name=$(RUBYW_INSTALL_NAME) \
 			-so_name=$(RUBY_SO_NAME) \
@@ -539,7 +552,7 @@ $(RUBY_INSTALL_NAME).rc $(RUBYW_INSTALL_NAME).rc $(RUBY_SO_NAME).rc: rbconfig.rb
 
 {$(srcdir)}.y.c:
 	$(YACC) $(YFLAGS) $(<:\=/)
-	sed -e "s!^extern char \*getenv();!/* & */!;s/^\(#.*\)y\.tab/\1parse/" y.tab.c > $@
+	sed -e "s!^ *extern char \*getenv();!/* & */!;s/^\(#.*\)y\.tab/\1parse/" y.tab.c > $@
 	@del y.tab.c
 
 {$(srcdir)}parse.c: parse.y
@@ -591,7 +604,7 @@ bignum.obj: {$(srcdir)}bignum.c {$(srcdir)}ruby.h config.h \
 class.obj: {$(srcdir)}class.c {$(srcdir)}ruby.h config.h \
   {$(srcdir)}defines.h {$(srcdir)}intern.h {$(srcdir)}missing.h \
   {$(srcdir)}rubysig.h {$(srcdir)}node.h {$(srcdir)}st.h \
-  {$(srcdir)}version.h {$(srcdir)}/win32/win32.h
+  {$(srcdir)}/win32/win32.h
 compar.obj: {$(srcdir)}compar.c {$(srcdir)}ruby.h config.h \
   {$(srcdir)}defines.h {$(srcdir)}intern.h {$(srcdir)}missing.h \
   {$(srcdir)}/win32/win32.h
@@ -607,8 +620,7 @@ enum.obj: {$(srcdir)}enum.c {$(srcdir)}ruby.h config.h \
   {$(srcdir)}node.h {$(srcdir)}util.h {$(srcdir)}/win32/win32.h
 error.obj: {$(srcdir)}error.c {$(srcdir)}ruby.h config.h \
   {$(srcdir)}defines.h {$(srcdir)}intern.h {$(srcdir)}missing.h \
-  {$(srcdir)}env.h {$(srcdir)}version.h {$(srcdir)}st.h \
-  {$(srcdir)}/win32/win32.h
+  {$(srcdir)}env.h {$(srcdir)}st.h {$(srcdir)}/win32/win32.h
 eval.obj: {$(srcdir)}eval.c {$(srcdir)}ruby.h config.h \
   {$(srcdir)}defines.h {$(srcdir)}intern.h {$(srcdir)}missing.h \
   {$(srcdir)}node.h {$(srcdir)}env.h {$(srcdir)}util.h \
@@ -626,7 +638,7 @@ gc.obj: {$(srcdir)}gc.c {$(srcdir)}ruby.h config.h \
 hash.obj: {$(srcdir)}hash.c {$(srcdir)}ruby.h config.h \
   {$(srcdir)}defines.h {$(srcdir)}intern.h {$(srcdir)}missing.h \
   {$(srcdir)}st.h {$(srcdir)}util.h {$(srcdir)}rubysig.h \
-  {$(srcdir)}version.h {$(srcdir)}/win32/win32.h
+  {$(srcdir)}/win32/win32.h
 inits.obj: {$(srcdir)}inits.c {$(srcdir)}ruby.h config.h \
   {$(srcdir)}defines.h {$(srcdir)}intern.h {$(srcdir)}missing.h \
   {$(srcdir)}/win32/win32.h
@@ -687,8 +699,7 @@ sprintf.obj: {$(srcdir)}sprintf.c {$(srcdir)}ruby.h config.h \
 st.obj: {$(srcdir)}st.c config.h {$(srcdir)}st.h
 string.obj: {$(srcdir)}string.c {$(srcdir)}ruby.h config.h \
   {$(srcdir)}defines.h {$(srcdir)}intern.h {$(srcdir)}missing.h \
-  {$(srcdir)}re.h {$(srcdir)}regex.h {$(srcdir)}version.h \
-  {$(srcdir)}/win32/win32.h
+  {$(srcdir)}re.h {$(srcdir)}regex.h {$(srcdir)}/win32/win32.h
 struct.obj: {$(srcdir)}struct.c {$(srcdir)}ruby.h config.h \
   {$(srcdir)}defines.h {$(srcdir)}intern.h {$(srcdir)}missing.h \
   {$(srcdir)}/win32/win32.h

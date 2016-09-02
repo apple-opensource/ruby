@@ -36,9 +36,9 @@ module REXML
 			elsif first.kind_of? String
 				@element = parent if parent.kind_of? Element
 				self.name = first
-				@value = second
+				@value = second.to_s
 			else
-				raise "illegal argument #{first.type} to Attribute constructor"
+				raise "illegal argument #{first.class.name} to Attribute constructor"
 			end
 		end
 
@@ -145,6 +145,18 @@ module REXML
 
     def node_type
       :attribute
+    end
+
+    def inspect
+      rv = ""
+      write( rv )
+      rv
+    end
+
+    def xpath
+      path = @element.xpath
+      path += "/@#{self.expanded_name}"
+      return path
     end
 	end
 end

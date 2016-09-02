@@ -2,7 +2,7 @@
 
   ruby.h -
 
-  $Author: melville $
+  $Author: nobu $
   created at: Thu Jun 10 14:26:32 JST 1993
 
   Copyright (C) 1993-2003 Yukihiro Matsumoto
@@ -31,21 +31,25 @@ extern "C" {
 # include <strings.h>
 #endif
 
+#ifdef HAVE_INTRINSICS_H
+# include <intrinsics.h>
+#endif
+
 #include <stddef.h>
 #include <stdio.h>
 
 /* need to include <ctype.h> to use these macros */
 #ifndef ISPRINT
-#define ISASCII(c) isascii((unsigned char)(c))
+#define ISASCII(c) isascii((int)(unsigned char)(c))
 #undef ISPRINT
-#define ISPRINT(c) (ISASCII(c) && isprint((unsigned char)(c)))
-#define ISSPACE(c) (ISASCII(c) && isspace((unsigned char)(c)))
-#define ISUPPER(c) (ISASCII(c) && isupper((unsigned char)(c)))
-#define ISLOWER(c) (ISASCII(c) && islower((unsigned char)(c)))
-#define ISALNUM(c) (ISASCII(c) && isalnum((unsigned char)(c)))
-#define ISALPHA(c) (ISASCII(c) && isalpha((unsigned char)(c)))
-#define ISDIGIT(c) (ISASCII(c) && isdigit((unsigned char)(c)))
-#define ISXDIGIT(c) (ISASCII(c) && isxdigit((unsigned char)(c)))
+#define ISPRINT(c) (ISASCII(c) && isprint((int)(unsigned char)(c)))
+#define ISSPACE(c) (ISASCII(c) && isspace((int)(unsigned char)(c)))
+#define ISUPPER(c) (ISASCII(c) && isupper((int)(unsigned char)(c)))
+#define ISLOWER(c) (ISASCII(c) && islower((int)(unsigned char)(c)))
+#define ISALNUM(c) (ISASCII(c) && isalnum((int)(unsigned char)(c)))
+#define ISALPHA(c) (ISASCII(c) && isalpha((int)(unsigned char)(c)))
+#define ISDIGIT(c) (ISASCII(c) && isdigit((int)(unsigned char)(c)))
+#define ISXDIGIT(c) (ISASCII(c) && isxdigit((int)(unsigned char)(c)))
 #endif
 
 #define NORETURN_STYLE_NEW 1
@@ -53,7 +57,7 @@ extern "C" {
 # define NORETURN(x) x
 #endif
 
-#if defined(HAVE_ALLOCA_H) && !defined(__GNUC__)
+#if defined(HAVE_ALLOCA_H)
 #include <alloca.h>
 #endif
 
@@ -239,13 +243,13 @@ unsigned long rb_num2ulong _((VALUE));
 #define NUM2LONG(x) (FIXNUM_P(x)?FIX2LONG(x):rb_num2long((VALUE)x))
 #define NUM2ULONG(x) rb_num2ulong((VALUE)x)
 #if SIZEOF_INT < SIZEOF_LONG
-int rb_num2int _((VALUE));
+long rb_num2int _((VALUE));
 #define NUM2INT(x) (FIXNUM_P(x)?FIX2INT(x):rb_num2int((VALUE)x))
-int rb_fix2int _((VALUE));
+long rb_fix2int _((VALUE));
 #define FIX2INT(x) rb_fix2int((VALUE)x)
-unsigned int rb_num2uint _((VALUE));
+unsigned long rb_num2uint _((VALUE));
 #define NUM2UINT(x) rb_num2uint(x)
-unsigned int rb_fix2uint _((VALUE));
+unsigned long rb_fix2uint _((VALUE));
 #define FIX2UINT(x) rb_fix2uint(x)
 #else
 #define NUM2INT(x) ((int)NUM2LONG(x))
@@ -464,8 +468,8 @@ struct RBignum {
 
 void rb_obj_infect _((VALUE,VALUE));
 
-void rb_glob _((char*,void(*)(const char*,VALUE),VALUE));
-void rb_globi _((char*,void(*)(const char*,VALUE),VALUE));
+void rb_glob _((const char*,void(*)(const char*,VALUE),VALUE));
+void rb_globi _((const char*,void(*)(const char*,VALUE),VALUE));
 
 VALUE rb_define_class _((const char*,VALUE));
 VALUE rb_define_module _((const char*));
@@ -537,6 +541,7 @@ void rb_warn __((const char*, ...));		/* reports always */
 VALUE rb_each _((VALUE));
 VALUE rb_yield _((VALUE));
 VALUE rb_yield_values __((int n, ...));
+VALUE rb_yield_splat _((VALUE));
 int rb_block_given_p _((void));
 VALUE rb_iterate _((VALUE(*)(VALUE),VALUE,VALUE(*)(ANYARGS),VALUE));
 VALUE rb_rescue _((VALUE(*)(ANYARGS),VALUE,VALUE(*)(ANYARGS),VALUE));
@@ -549,7 +554,7 @@ VALUE rb_require _((const char*));
 
 void ruby_init _((void));
 void ruby_options _((int, char**));
-void ruby_run _((void));
+NORETURN(void ruby_run _((void)));
 
 RUBY_EXTERN VALUE rb_mKernel;
 RUBY_EXTERN VALUE rb_mComparable;
@@ -662,12 +667,32 @@ rb_special_const_p(obj)
     return Qfalse;
 }
 
-#include "intern.h"
 #include "missing.h"
+#include "intern.h"
 
 #if defined(EXTLIB) && defined(USE_DLN_A_OUT)
 /* hook for external modules */
 static char *dln_libs_to_be_linked[] = { EXTLIB, 0 };
+#endif
+
+#if defined(HAVE_LIBPTHREAD)
+#ifdef HAVE_PTHREAD_H
+#include <pthread.h>
+#endif
+typedef pthread_t rb_nativethread_t;
+# define NATIVETHREAD_CURRENT() pthread_self()
+# define NATIVETHREAD_EQUAL(t1,t2) pthread_equal((t1),(t2))
+# define HAVE_NATIVETHREAD
+#elif defined(_WIN32) || defined(_WIN32_WCE)
+typedef DWORD rb_nativethread_t;
+# define NATIVETHREAD_CURRENT() GetCurrentThreadId()
+# define NATIVETHREAD_EQUAL(t1,t2) ((t1) == (t2))
+# define HAVE_NATIVETHREAD
+#endif
+#ifdef HAVE_NATIVETHREAD
+RUBY_EXTERN int is_ruby_native_thread();
+#else
+#define is_ruby_native_thread() (1)
 #endif
 
 #if defined(__cplusplus)

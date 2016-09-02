@@ -2,8 +2,8 @@
 
   intern.h -
 
-  $Author: melville $
-  $Date: 2003/10/15 10:11:46 $
+  $Author: nobu $
+  $Date: 2004/12/03 03:25:49 $
   created at: Thu Jun 10 14:22:17 JST 1993
 
   Copyright (C) 1993-2003 Yukihiro Matsumoto
@@ -97,11 +97,12 @@ VALUE rb_big_rand _((VALUE, double*));
 /* class.c */
 VALUE rb_class_boot _((VALUE));
 VALUE rb_class_new _((VALUE));
-VALUE rb_mod_clone _((VALUE));
-VALUE rb_mod_dup _((VALUE));
+VALUE rb_mod_init_copy _((VALUE, VALUE));
+VALUE rb_class_init_copy _((VALUE, VALUE));
 VALUE rb_singleton_class_clone _((VALUE));
 void rb_singleton_class_attached _((VALUE,VALUE));
 VALUE rb_make_metaclass _((VALUE, VALUE));
+void rb_check_inheritable _((VALUE));
 VALUE rb_class_inherited _((VALUE, VALUE));
 VALUE rb_define_class_id _((ID, VALUE));
 VALUE rb_module_new _((void));
@@ -135,8 +136,8 @@ NORETURN(void rb_name_error __((ID, const char*, ...)));
 NORETURN(void rb_invalid_str _((const char*, const char*)));
 void rb_compile_error __((const char*, ...));
 void rb_compile_error_append __((const char*, ...));
-NORETURN(void rb_load_fail _((char*)));
-NORETURN(void rb_error_frozen _((char*)));
+NORETURN(void rb_load_fail _((const char*)));
+NORETURN(void rb_error_frozen _((const char*)));
 void rb_check_frozen _((VALUE));
 /* eval.c */
 RUBY_EXTERN struct RNode *ruby_current_node;
@@ -146,8 +147,8 @@ NORETURN(void rb_exc_fatal _((VALUE)));
 VALUE rb_f_exit _((int,VALUE*));
 VALUE rb_f_abort _((int,VALUE*));
 void rb_remove_method _((VALUE, const char*));
-void rb_disable_super _((VALUE, const char*));
-void rb_enable_super _((VALUE, const char*));
+#define rb_disable_super(klass, name) ((void)0)
+#define rb_enable_super(klass, name) ((void)0)
 #define HAVE_RB_DEFINE_ALLOC_FUNC 1
 void rb_define_alloc_func _((VALUE, VALUE (*)(VALUE)));
 void rb_undef_alloc_func _((VALUE));
@@ -176,6 +177,7 @@ NORETURN(void rb_jump_tag _((int)));
 int rb_provided _((const char*));
 void rb_provide _((const char*));
 VALUE rb_f_require _((VALUE, VALUE));
+VALUE rb_require_safe _((VALUE, int));
 void rb_obj_call_init _((VALUE, int, VALUE*));
 VALUE rb_class_new_instance _((int, VALUE*, VALUE));
 VALUE rb_block_proc _((void));
@@ -186,7 +188,7 @@ void rb_set_end_proc _((void (*)(VALUE), VALUE));
 void rb_mark_end_proc _((void));
 void rb_exec_end_proc _((void));
 void ruby_finalize _((void));
-void ruby_stop _((int));
+NORETURN(void ruby_stop _((int)));
 int ruby_cleanup _((int));
 int ruby_exec _((void));
 void rb_gc_mark_threads _((void));
@@ -206,21 +208,26 @@ VALUE rb_thread_run _((VALUE));
 VALUE rb_thread_kill _((VALUE));
 VALUE rb_thread_create _((VALUE (*)(ANYARGS), void*));
 void rb_thread_interrupt _((void));
-void rb_thread_trap_eval _((VALUE, int));
+void rb_thread_trap_eval _((VALUE, int, int));
 void rb_thread_signal_raise _((char*));
-int rb_thread_select(ANYARGS);
-void rb_thread_wait_for(ANYARGS);
+int rb_thread_select _((int, fd_set *, fd_set *, fd_set *, struct timeval *));
+void rb_thread_wait_for _((struct timeval));
 VALUE rb_thread_current _((void));
 VALUE rb_thread_main _((void));
 VALUE rb_thread_local_aref _((VALUE, ID));
 VALUE rb_thread_local_aset _((VALUE, ID, VALUE));
 void rb_thread_atfork _((void));
+VALUE rb_funcall_rescue __((VALUE, ID, int, ...));
 /* file.c */
 int eaccess _((const char*, int));
 VALUE rb_file_s_expand_path _((int, VALUE *));
 void rb_file_const _((const char*, VALUE));
 int rb_find_file_ext _((VALUE*, const char* const*));
 VALUE rb_find_file _((VALUE));
+char *rb_path_next _((const char *));
+char *rb_path_skip_prefix _((const char *));
+char *rb_path_last_separator _((const char *));
+char *rb_path_end _((const char *));
 /* gc.c */
 NORETURN(void rb_memerror __((void)));
 int ruby_stack_check _((void));
@@ -234,11 +241,14 @@ void rb_gc_mark _((VALUE));
 void rb_gc_force_recycle _((VALUE));
 void rb_gc _((void));
 void rb_gc_copy_finalizer _((VALUE,VALUE));
+void rb_gc_finalize_deferred _((void));
 void rb_gc_call_finalizer_at_exit _((void));
 VALUE rb_gc_enable _((void));
 VALUE rb_gc_disable _((void));
 VALUE rb_gc_start _((void));
 /* hash.c */
+void st_foreach_safe _((struct st_table *, int (*)(ANYARGS), unsigned long));
+void rb_hash_foreach _((VALUE, int (*)(ANYARGS), VALUE));
 VALUE rb_hash _((VALUE));
 VALUE rb_hash_new _((void));
 VALUE rb_hash_freeze _((VALUE));
@@ -299,6 +309,7 @@ VALUE rb_obj_freeze _((VALUE));
 VALUE rb_obj_id _((VALUE));
 VALUE rb_obj_class _((VALUE));
 VALUE rb_class_real _((VALUE));
+VALUE rb_class_inherited_p _((VALUE, VALUE));
 VALUE rb_convert_type _((VALUE,int,const char*,const char*));
 VALUE rb_check_convert_type _((VALUE,int,const char*,const char*));
 VALUE rb_to_int _((VALUE));
@@ -357,8 +368,8 @@ const char* rb_get_kcode _((void));
 /* ruby.c */
 RUBY_EXTERN VALUE rb_argv;
 RUBY_EXTERN VALUE rb_argv0;
-void rb_load_file _((char*));
-void ruby_script _((char*));
+void rb_load_file _((const char*));
+void ruby_script _((const char*));
 void ruby_prog_init _((void));
 void ruby_set_argv _((int, char**));
 void ruby_process_options _((int, char**));
@@ -374,6 +385,7 @@ void posix_signal _((int, RETSIGTYPE (*)(int)));
 #endif
 void rb_trap_exit _((void));
 void rb_trap_exec _((void));
+const char *ruby_signal_name _((int));
 /* sprintf.c */
 VALUE rb_f_sprintf _((int, VALUE*));
 /* string.c */
@@ -392,6 +404,8 @@ VALUE rb_str_buf_cat2 _((VALUE, const char*));
 VALUE rb_obj_as_string _((VALUE));
 VALUE rb_check_string_type _((VALUE));
 VALUE rb_str_dup _((VALUE));
+VALUE rb_str_locktmp _((VALUE));
+VALUE rb_str_unlocktmp _((VALUE));
 VALUE rb_str_dup_frozen _((VALUE));
 VALUE rb_str_plus _((VALUE, VALUE));
 VALUE rb_str_times _((VALUE, VALUE));
@@ -422,14 +436,17 @@ VALUE rb_struct_aref _((VALUE, VALUE));
 VALUE rb_struct_aset _((VALUE, VALUE, VALUE));
 VALUE rb_struct_getmember _((VALUE, ID));
 VALUE rb_struct_iv_get _((VALUE, char*));
+VALUE rb_struct_s_members _((VALUE));
+VALUE rb_struct_members _((VALUE));
 /* time.c */
-VALUE rb_time_new(ANYARGS);
+VALUE rb_time_new _((time_t, time_t));
 /* variable.c */
 VALUE rb_mod_name _((VALUE));
 VALUE rb_class_path _((VALUE));
 void rb_set_class_path _((VALUE, VALUE, const char*));
 VALUE rb_path2class _((const char*));
 void rb_name_class _((VALUE, ID));
+VALUE rb_class_name _((VALUE));
 void rb_autoload _((VALUE, ID, const char*));
 void rb_autoload_load _((VALUE, ID));
 VALUE rb_autoload_p _((VALUE, ID));

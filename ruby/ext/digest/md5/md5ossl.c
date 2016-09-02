@@ -1,4 +1,4 @@
-/* $Id: md5ossl.c,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $ */
+/* $Id: md5ossl.c,v 1.2 2003/01/06 11:47:53 knu Exp $ */
 
 #include "md5ossl.h"
 #include <sys/types.h>

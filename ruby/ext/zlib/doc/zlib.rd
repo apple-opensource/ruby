@@ -4,7 +4,7 @@
 #
 #   Copyright (C) UENO Katsuhiro 2000-2003
 #
-# $Id: zlib.rd,v 1.1.1.1 2003/10/15 10:11:48 melville Exp $
+# $Id: zlib.rd,v 1.1.2.1 2004/03/28 14:10:39 akr Exp $
 #
 
 = Ruby/zlib version 0.6.0
@@ -465,7 +465,7 @@ to duplicate (clone, dup) itself.
 
 == Zlib::GzipFile
 
-The abstruct class for handling a gzip formatted compressed file.
+The abstract class for handling a gzip formatted compressed file.
 The operations are defined in the subclasses,
 ((<Zlib::GzipReader>)) for reading, and ((<Zlib::GzipWriter>))
 for writing.

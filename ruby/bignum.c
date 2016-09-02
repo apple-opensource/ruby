@@ -2,8 +2,8 @@
 
   bignum.c -
 
-  $Author: melville $
-  $Date: 2003/10/15 10:11:45 $
+  $Author: gotoyuzo $
+  $Date: 2004/11/16 19:43:24 $
   created at: Fri Jun 10 00:48:55 JST 1994
 
   Copyright (C) 1993-2003 Yukihiro Matsumoto
@@ -14,6 +14,9 @@
 
 #include <math.h>
 #include <ctype.h>
+#ifdef HAVE_IEEEFP_H
+#include <ieeefp.h>
+#endif
 
 VALUE rb_cBignum;
 
@@ -200,6 +203,8 @@ rb_quad_pack(buf, val)
 	long len = RBIGNUM(val)->len;
 	BDIGIT *ds;
 
+	if (len > SIZEOF_LONG_LONG/SIZEOF_BDIGITS)
+	    rb_raise(rb_eRangeError, "bignum too big to convert into `quad int'");
 	ds = BDIGITS(val);
 	q = 0;
 	while (len--) {
@@ -269,7 +274,9 @@ rb_quad_pack(buf, val)
 	val = rb_int2big(FIX2LONG(val));
     }
     len = RBIGNUM(val)->len * SIZEOF_BDIGITS;
-    if (len > QUAD_SIZE) len = QUAD_SIZE;
+    if (len > QUAD_SIZE) {
+	rb_raise(rb_eRangeError, "bignum too big to convert into `quad int'");
+    }
     memcpy(buf, (char*)BDIGITS(val), len);
     if (!RBIGNUM(val)->sign) {
 	len = QUAD_SIZE;
@@ -455,6 +462,9 @@ rb_cstr_to_inum(str, base, badcheck)
 		nondigit = c;
 	    }
 	    continue;
+	}
+	else if (!ISASCII(c)) {
+	    break;
 	}
 	else if (isdigit(c)) {
 	    c -= '0';
@@ -688,6 +698,20 @@ rb_big2str(x, base)
     return ss;
 }
 
+/*
+ *  call-seq:
+ *     big.to_s(base=10)   =>  string
+ *  
+ *  Returns a string containing the representation of <i>big</i> radix
+ *  <i>base</i> (2 through 36).
+ *     
+ *     12345654321.to_s         #=> "12345654321"
+ *     12345654321.to_s(2)      #=> "1011011111110110111011110000110001"
+ *     12345654321.to_s(8)      #=> "133766736061"
+ *     12345654321.to_s(16)     #=> "2dfdbbc31"
+ *     78546939656932.to_s(36)  #=> "rubyrules"
+ */
+
 static VALUE
 rb_big_to_s(argc, argv, x)
     int argc;
@@ -724,12 +748,28 @@ big2ulong(x, type)
 }
 
 unsigned long
+rb_big2ulong_pack(x)   
+    VALUE x;  
+{   
+    unsigned long num = big2ulong(x, "unsigned long", Qfalse);
+    if (!RBIGNUM(x)->sign) {
+	return -num;
+    }
+    return num;
+}  
+
+unsigned long
 rb_big2ulong(x)
     VALUE x;
 {
     unsigned long num = big2ulong(x, "unsigned long");
 
-    if (!RBIGNUM(x)->sign) return -num;
+    if (!RBIGNUM(x)->sign) {
+	if ((long)num < 0) {
+	    rb_raise(rb_eRangeError, "bignum out of range of unsigned long");
+	}
+	return -num;
+    }
     return num;
 }
 
@@ -737,10 +777,10 @@ long
 rb_big2long(x)
     VALUE x;
 {
-    unsigned long num = big2ulong(x, "int");
+    unsigned long num = big2ulong(x, "long");
 
     if ((long)num < 0 && (RBIGNUM(x)->sign || (long)num != LONG_MIN)) {
-	rb_raise(rb_eRangeError, "bignum too big to convert into `int'");
+	rb_raise(rb_eRangeError, "bignum too big to convert into `long'");
     }
     if (!RBIGNUM(x)->sign) return -(long)num;
     return num;
@@ -853,12 +893,31 @@ rb_big2dbl(x)
     return d;
 }
 
+/*
+ *  call-seq:
+ *     big.to_f -> float
+ *  
+ *  Converts <i>big</i> to a <code>Float</code>. If <i>big</i> doesn't
+ *  fit in a <code>Float</code>, the result is infinity.
+ *     
+ */
+
 static VALUE
 rb_big_to_f(x)
     VALUE x;
 {
     return rb_float_new(rb_big2dbl(x));
 }
+
+/*
+ *  call-seq:
+ *     big <=> numeric   => -1, 0, +1
+ *  
+ *  Comparison---Returns -1, 0, or +1 depending on whether <i>big</i> is
+ *  less than, equal to, or greater than <i>numeric</i>. This is the
+ *  basis for the tests in <code>Comparable</code>.
+ *     
+ */
 
 static VALUE
 rb_big_cmp(x, y)
@@ -895,6 +954,17 @@ rb_big_cmp(x, y)
 	    (RBIGNUM(x)->sign ? INT2FIX(-1) : INT2FIX(1));
 }
 
+/*
+ *  call-seq:
+ *     big == obj  => true or false
+ *  
+ *  Returns <code>true</code> only if <i>obj</i> has the same value
+ *  as <i>big</i>. Contrast this with <code>Bignum#eql?</code>, which
+ *  requires <i>obj</i> to be a <code>Bignum</code>.
+ *     
+ *     68719476736 == 68719476736.0   #=> true
+ */
+
 static VALUE
 rb_big_eq(x, y)
     VALUE x, y;
@@ -906,10 +976,14 @@ rb_big_eq(x, y)
       case T_BIGNUM:
 	break;
       case T_FLOAT:
-	if (rb_big2dbl(x) == RFLOAT(y)->value)
-	    return Qtrue;
-	else
-	    return Qfalse;
+        {
+	    volatile double a, b;
+
+	    a = RFLOAT(y)->value;
+	    b = rb_big2dbl(x);
+	    if (isnan(a) || isnan(b)) return Qfalse;
+	    return (a == b)?Qtrue:Qfalse;
+	}
       default:
 	return rb_equal(y, x);
     }
@@ -918,6 +992,17 @@ rb_big_eq(x, y)
     if (MEMCMP(BDIGITS(x),BDIGITS(y),BDIGIT,RBIGNUM(y)->len) != 0) return Qfalse;
     return Qtrue;
 }
+
+/*
+ *  call-seq:
+ *     big.eql?(obj)   => true or false
+ *  
+ *  Returns <code>true</code> only if <i>obj</i> is a
+ *  <code>Bignum</code> with the same value as <i>big</i>. Contrast this
+ *  with <code>Bignum#==</code>, which performs type conversions.
+ *     
+ *     68719476736.eql?(68719476736.0)   #=> false
+ */
 
 static VALUE
 rb_big_eql(x, y)
@@ -930,6 +1015,13 @@ rb_big_eql(x, y)
     return Qtrue;
 }
 
+/*
+ * call-seq:
+ *    -big   =>  other_big
+ *
+ * Unary minus (returns a new Bignum whose value is 0-big)
+ */
+
 static VALUE
 rb_big_uminus(x)
     VALUE x;
@@ -940,6 +1032,18 @@ rb_big_uminus(x)
 
     return bignorm(z);
 }
+
+/*
+ * call-seq:
+ *     ~big  =>  integer
+ *
+ * Inverts the bits in big. As Bignums are conceptually infinite
+ * length, the result acts as if it had an infinite number of one
+ * bits to the left. In hex representations, this is displayed
+ * as two periods to the left of the digits.
+ *  
+ *   sprintf("%X", ~0x1122334455)    #=> "..FEEDDCCBBAA"
+ */
 
 static VALUE
 rb_big_neg(x)
@@ -1049,6 +1153,13 @@ bigadd(x, y, sign)
     return z;
 }
 
+/*
+ *  call-seq:
+ *     big + other  => Numeric
+ *
+ *  Adds big and other, returning the result.
+ */
+
 VALUE
 rb_big_plus(x, y)
     VALUE x, y;
@@ -1068,6 +1179,13 @@ rb_big_plus(x, y)
     }
 }
 
+/*
+ *  call-seq:
+ *     big - other  => Numeric
+ *
+ *  Subtracts other from big, returning the result.
+ */
+
 VALUE
 rb_big_minus(x, y)
     VALUE x, y;
@@ -1086,6 +1204,13 @@ rb_big_minus(x, y)
 	return rb_num_coerce_bin(x, y);
     }
 }
+
+/*
+ *  call-seq:
+ *     big * other  => Numeric
+ *
+ *  Multiplies big and other, returning the result.
+ */
 
 VALUE
 rb_big_mul(x, y)
@@ -1282,6 +1407,14 @@ bigdivmod(x, y, divp, modp)
     }
 }
 
+/*
+ *  call-seq:
+ *     big / other     => Numeric
+ *     big.div(other)  => Numeric
+ *
+ *  Divides big by other, returning the result.
+ */
+
 static VALUE
 rb_big_div(x, y)
     VALUE x, y;
@@ -1307,6 +1440,15 @@ rb_big_div(x, y)
     return bignorm(z);
 }
 
+/*
+ *  call-seq:
+ *     big % other         => Numeric
+ *     big.modulo(other)   => Numeric
+ *
+ *  Returns big modulo other. See Numeric.divmod for more
+ *  information.
+ */
+
 static VALUE
 rb_big_modulo(x, y)
     VALUE x, y;
@@ -1329,6 +1471,15 @@ rb_big_modulo(x, y)
     return bignorm(z);
 }
 
+/*
+ *  call-seq:
+ *     big.remainder(numeric)    => number
+ *  
+ *  Returns the remainder after dividing <i>big</i> by <i>numeric</i>.
+ *     
+ *     -1234567890987654321.remainder(13731)      #=> -6966
+ *     -1234567890987654321.remainder(13731.24)   #=> -9906.22531493148
+ */
 static VALUE
 rb_big_remainder(x, y)
     VALUE x, y;
@@ -1351,6 +1502,13 @@ rb_big_remainder(x, y)
     return bignorm(z);
 }
 
+/*
+ *  call-seq:
+ *     big.divmod(numeric)   => array
+ *  
+ *  See <code>Numeric#divmod</code>.
+ *     
+ */
 VALUE
 rb_big_divmod(x, y)
     VALUE x, y;
@@ -1372,6 +1530,18 @@ rb_big_divmod(x, y)
 
     return rb_assoc_new(bignorm(div), bignorm(mod));
 }
+
+/*
+ *  call-seq:
+ *     big.quo(numeric) -> float
+ *  
+ *  Returns the floating point result of dividing <i>big</i> by
+ *  <i>numeric</i>.
+ *     
+ *     -1234567890987654321.quo(13731)      #=> -89910996357705.5
+ *     -1234567890987654321.quo(13731.24)   #=> -89909424858035.7
+ *     
+ */
 
 static VALUE
 rb_big_quo(x, y)
@@ -1399,6 +1569,19 @@ rb_big_quo(x, y)
     return rb_float_new(dx / dy);
 }
 
+/*
+ *  call-seq:
+ *     big ** exponent   #=> numeric
+ *
+ *  Raises _big_ to the _exponent_ power (which may be an integer, float,
+ *  or anything that will coerce to a number). The result may be
+ *  a Fixnum, Bignum, or Float
+ *
+ *    123456789 ** 2      #=> 15241578750190521
+ *    123456789 ** 1.2    #=> 5126464716.09932
+ *    123456789 ** -2     #=> 6.5610001194102e-17
+ */
+
 VALUE
 rb_big_pow(x, y)
     VALUE x, y;
@@ -1418,7 +1601,7 @@ rb_big_pow(x, y)
 	break;
 
       case T_FIXNUM:
-	yy = NUM2LONG(y);
+	yy = FIX2LONG(y);
 	if (yy > 0) {
 	    VALUE z = x;
 
@@ -1442,22 +1625,27 @@ rb_big_pow(x, y)
     return rb_float_new(pow(rb_big2dbl(x), d));
 }
 
+/*
+ * call-seq:
+ *     big & numeric   =>  integer
+ *
+ * Performs bitwise +and+ between _big_ and _numeric_.
+ */
+
 VALUE
-rb_big_and(x, y)
-    VALUE x, y;
+rb_big_and(xx, yy)
+    VALUE xx, yy;
 {
-    VALUE z;
+    volatile VALUE x, y, z;
     BDIGIT *ds1, *ds2, *zds;
     long i, l1, l2;
     char sign;
 
+    x = xx;
+    y = rb_to_int(yy);
     if (FIXNUM_P(y)) {
 	y = rb_int2big(FIX2LONG(y));
     }
-    else {
-	Check_Type(y, T_BIGNUM);
-    }
-
     if (!RBIGNUM(y)->sign) {
 	y = rb_big_clone(y);
 	get2comp(y, Qtrue);
@@ -1493,20 +1681,26 @@ rb_big_and(x, y)
     return bignorm(z);
 }
 
+/*
+ * call-seq:
+ *     big | numeric   =>  integer
+ *
+ * Performs bitwise +or+ between _big_ and _numeric_.
+ */
+
 VALUE
-rb_big_or(x, y)
-    VALUE x, y;
+rb_big_or(xx, yy)
+    VALUE xx, yy;
 {
-    VALUE z;
+    volatile VALUE x, y, z;
     BDIGIT *ds1, *ds2, *zds;
     long i, l1, l2;
     char sign;
 
+    x = xx;
+    y = rb_to_int(yy);
     if (FIXNUM_P(y)) {
 	y = rb_int2big(FIX2LONG(y));
-    }
-    else {
-	Check_Type(y, T_BIGNUM);
     }
 
     if (!RBIGNUM(y)->sign) {
@@ -1545,20 +1739,27 @@ rb_big_or(x, y)
     return bignorm(z);
 }
 
+/*
+ * call-seq:
+ *     big ^ numeric   =>  integer
+ *
+ * Performs bitwise +exclusive or+ between _big_ and _numeric_.
+ */
+
 VALUE
-rb_big_xor(x, y)
-    VALUE x, y;
+rb_big_xor(xx, yy)
+    VALUE xx, yy;
 {
+    volatile VALUE x, y;
     VALUE z;
     BDIGIT *ds1, *ds2, *zds;
     long i, l1, l2;
     char sign;
 
+    x = xx;
+    y = rb_to_int(yy);
     if (FIXNUM_P(y)) {
 	y = rb_int2big(FIX2LONG(y));
-    }
-    else {
-	Check_Type(y, T_BIGNUM);
     }
 
     if (!RBIGNUM(y)->sign) {
@@ -1601,6 +1802,13 @@ rb_big_xor(x, y)
 
 static VALUE rb_big_rshift _((VALUE,VALUE));
 
+/*
+ * call-seq:
+ *     big << numeric   =>  integer
+ *
+ * Shifts big left _numeric_ positions (right if _numeric_ is negative).
+ */
+
 VALUE
 rb_big_lshift(x, y)
     VALUE x, y;
@@ -1629,6 +1837,13 @@ rb_big_lshift(x, y)
     *zds = BIGLO(num);
     return bignorm(z);
 }
+
+/*
+ * call-seq:
+ *     big >> numeric   =>  integer
+ *
+ * Shifts big right _numeric_ positions (left if _numeric_ is negative).
+ */
 
 static VALUE
 rb_big_rshift(x, y)
@@ -1672,6 +1887,25 @@ rb_big_rshift(x, y)
     return bignorm(z);
 }
 
+/*
+ *  call-seq:
+ *     big[n] -> 0, 1
+ *  
+ *  Bit Reference---Returns the <em>n</em>th bit in the (assumed) binary
+ *  representation of <i>big</i>, where <i>big</i>[0] is the least
+ *  significant bit.
+ *     
+ *     a = 9**15
+ *     50.downto(0) do |n|
+ *       print a[n]
+ *     end
+ *     
+ *  <em>produces:</em>
+ *     
+ *     000101110110100000111000011110010100111100010111001
+ *     
+ */
+
 static VALUE
 rb_big_aref(x, y)
     VALUE x, y;
@@ -1704,6 +1938,13 @@ rb_big_aref(x, y)
     return INT2FIX(0);
 }
 
+/*
+ * call-seq:
+ *   big.hash   => fixnum
+ *
+ * Compute a hash based on the value of _big_.
+ */
+
 static VALUE
 rb_big_hash(x)
     VALUE x;
@@ -1717,6 +1958,10 @@ rb_big_hash(x)
     }
     return LONG2FIX(key);
 }
+
+/*
+ * MISSING: documentation
+ */
 
 static VALUE
 rb_big_coerce(x, y)
@@ -1732,6 +1977,15 @@ rb_big_coerce(x, y)
     /* not reached */
     return Qnil;
 }
+
+/*
+ *  call-seq:
+ *     big.abs -> aBignum
+ *  
+ *  Returns the absolute value of <i>big</i>.
+ *     
+ *     -1234567890987654321.abs   #=> 1234567890987654321
+ */
 
 static VALUE
 rb_big_abs(x)
@@ -1763,12 +2017,42 @@ rb_big_rand(max, rand_buf)
     return rb_big_modulo((VALUE)v, max);
 }
 
+/*
+ *  call-seq:
+ *     big.size -> integer
+ *  
+ *  Returns the number of bytes in the machine representation of
+ *  <i>big</i>.
+ *     
+ *     (256**10 - 1).size   #=> 12
+ *     (256**20 - 1).size   #=> 20
+ *     (256**40 - 1).size   #=> 40
+ */
+
 static VALUE
 rb_big_size(big)
     VALUE big;
 {
     return LONG2FIX(RBIGNUM(big)->len*SIZEOF_BDIGITS);
 }
+
+/*
+ *  Bignum objects hold integers outside the range of
+ *  Fixnum. Bignum objects are created
+ *  automatically when integer calculations would otherwise overflow a
+ *  Fixnum. When a calculation involving
+ *  Bignum objects returns a result that will fit in a
+ *  Fixnum, the result is automatically converted.
+ *     
+ *  For the purposes of the bitwise operations and <code>[]</code>, a
+ *  Bignum is treated as if it were an infinite-length
+ *  bitstring with 2's complement representation.
+ *     
+ *  While Fixnum values are immediate, Bignum
+ *  objects are not---assignment and parameter passing work with
+ *  references to objects, not the objects themselves.
+ *     
+ */
 
 void
 Init_Bignum()

@@ -1,5 +1,5 @@
 /*
- * $Id: ossl_ns_spki.c,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+ * $Id: ossl_ns_spki.c,v 1.3.2.1 2004/12/15 01:54:39 matz Exp $
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2001-2002  Michal Rokos <m.rokos@sh.cvut.cz>
  * All rights reserved.
@@ -50,7 +50,6 @@ ossl_spki_alloc(VALUE klass)
 	
     return obj;
 }
-DEFINE_ALLOC_WRAPPER(ossl_spki_alloc)
 
 static VALUE
 ossl_spki_initialize(int argc, VALUE *argv, VALUE self)
@@ -81,8 +80,7 @@ ossl_spki_to_pem(VALUE self)
     if (!(data = NETSCAPE_SPKI_b64_encode(spki))) {
 	ossl_raise(eSPKIError, NULL);
     }
-    str = rb_str_new2(data);
-    OPENSSL_free(data);
+    str = ossl_buf2str(data, strlen(data));
 
     return str;
 }
@@ -174,9 +172,9 @@ ossl_spki_sign(VALUE self, VALUE key, VALUE digest)
     EVP_PKEY *pkey;
     const EVP_MD *md;
 
-    GetSPKI(self, spki);
     pkey = GetPrivPKeyPtr(key); /* NO NEED TO DUP */
     md = GetDigestPtr(digest);
+    GetSPKI(self, spki);
     if (!NETSCAPE_SPKI_sign(spki, pkey, md)) {
 	ossl_raise(eSPKIError, NULL);
     }

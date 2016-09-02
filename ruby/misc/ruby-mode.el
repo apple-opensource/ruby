@@ -1,12 +1,12 @@
 ;;;
 ;;;  ruby-mode.el -
 ;;;
-;;;  $Author: melville $
-;;;  $Date: 2003/10/15 10:11:49 $
+;;;  $Author: nobu $
+;;;  $Date: 2004/11/15 02:51:10 $
 ;;;  created at: Fri Feb  4 14:49:13 JST 1994
 ;;;
 
-(defconst ruby-mode-revision "$Revision: 1.1.1.3 $")
+(defconst ruby-mode-revision "$Revision: 1.74.2.6 $")
 
 (defconst ruby-mode-version
   (progn
@@ -47,11 +47,22 @@
 
 (defconst ruby-block-end-re "end")
 
+(defconst ruby-here-doc-beg-re
+  "<<\\(-\\)?\\(\\([a-zA-Z0-9_]+\\)\\|[\"]\\([^\"]+\\)[\"]\\|[']\\([^']+\\)[']\\)")
+
+(defun ruby-here-doc-end-match ()
+  (concat "^"
+	  (if (match-string 1) "[ \t]*" nil)
+	  (regexp-quote
+	   (or (match-string 3)
+	       (match-string 4)
+	       (match-string 5)))))
+
 (defconst ruby-delimiter
   (concat "[?$/%(){}#\"'`.:]\\|<<\\|\\[\\|\\]\\|\\<\\("
 	  ruby-block-beg-re
 	  "\\|" ruby-block-end-re
-	  "\\)\\>\\|^=begin")
+	  "\\)\\>\\|^=begin\\|" ruby-here-doc-beg-re)
   )
 
 (defconst ruby-negative
@@ -211,7 +222,7 @@ Also ignores spaces after parenthesis when 'space."
   (make-variable-buffer-local 'comment-column)
   (setq comment-column ruby-comment-column)
   (make-variable-buffer-local 'comment-start-skip)
-  (setq comment-start-skip "\\(^\\|\\s-\\);?#+ *")
+  (setq comment-start-skip "#+ *")
   (setq indent-tabs-mode ruby-indent-tabs-mode)
   (make-local-variable 'parse-sexp-ignore-comments)
   (setq parse-sexp-ignore-comments t)
@@ -282,10 +293,11 @@ The variable ruby-indent-level controls the amount of indentation.
 	  (move-to-column (+ x shift))))))
 
 (defun ruby-special-char-p (&optional pnt)
-  (let ((c (char-before (or pnt (point)))))
+  (setq pnt (or pnt (point)))
+  (let ((c (char-before pnt)) (b (and (< (point-min) pnt) (char-before (1- pnt)))))
     (cond ((or (eq c ??) (eq c ?$)))
-	  ((eq c ?\\)
-	   (eq (char-before (1- (or pnt (point)))) ??)))))
+	  ((and (eq c ?:) (or (not b) (eq (char-syntax b) ? ))))
+	  ((eq c ?\\) (eq b ??)))))
 
 (defun ruby-expr-beg (&optional option)
   (save-excursion
@@ -310,11 +322,11 @@ The variable ruby-indent-level controls the amount of indentation.
 	    (and (looking-at ruby-symbol-re)
 		 (skip-chars-backward ruby-symbol-chars)
 		 (cond
-		  ((or (looking-at ruby-block-beg-re)
-		       (looking-at ruby-block-op-re)
-		       (looking-at ruby-block-mid-re))
+		  ((or (looking-at (concat "\\<\\(" ruby-block-beg-re
+					   "|" ruby-block-op-re
+					   "|" ruby-block-mid-re "\\)\\>")))
 		   (goto-char (match-end 0))
-		   (looking-at "\\>"))
+                  (not (looking-at "\\s_")))
 		  ((eq option 'expr-qstr)
 		   (looking-at "[a-zA-Z][a-zA-z0-9_]* +%[^ \t]"))
 		  ((eq option 'expr-re)
@@ -440,7 +452,7 @@ The variable ruby-indent-level controls the amount of indentation.
 	  (setq depth (1- depth)))
 	(setq nest (cdr nest))
 	(goto-char pnt))
-       ((looking-at ruby-block-end-re)
+       ((looking-at (concat "\\<\\(" ruby-block-end-re "\\)\\>"))
 	(if (or (and (not (bolp))
 		     (progn
 		       (forward-char -1)
@@ -466,7 +478,7 @@ The variable ruby-indent-level controls the amount of indentation.
 	      (setq nest (cons (cons nil pnt) nest))
 	      (setq depth (1+ depth))))
 	(goto-char (match-end 0)))
-       ((looking-at ruby-block-beg-re)
+       ((looking-at (concat "\\<\\(" ruby-block-beg-re "\\)\\>"))
 	(and
 	 (save-match-data
 	   (or (not (looking-at "do\\>[^_]"))
@@ -492,7 +504,11 @@ The variable ruby-indent-level controls the amount of indentation.
 	 (setq nest (cons (cons nil pnt) nest))
 	 (setq depth (1+ depth)))
 	(goto-char pnt))
-       ((looking-at ":\\([a-zA-Z_][a-zA-Z_0-9]*\\)?")
+       ((looking-at ":\\(['\"]\\)\\(\\\\.\\|[^\\\\]\\)*\\1")
+	(goto-char (match-end 0)))
+       ((looking-at ":\\([-,.+*/%&|^~<>]=?\\|===?\\|<=>\\)")
+	(goto-char (match-end 0)))
+       ((looking-at ":\\([a-zA-Z_][a-zA-Z_0-9]*[!?=]?\\)?")
 	(goto-char (match-end 0)))
        ((or (looking-at "\\.\\.\\.?")
 	    (looking-at "\\.[0-9]+")
@@ -510,14 +526,33 @@ The variable ruby-indent-level controls the amount of indentation.
 	       (looking-at "<<\\(-\\)?\\(\\([\"'`]\\)\\([^\n]+?\\)\\3\\|\\sw+\\)"))
 	  (setq re (regexp-quote (or (match-string 4) (match-string 2))))
 	  (if (match-beginning 1) (setq re (concat "\\s *" re)))
-	  (if (re-search-forward (concat "^" re "$") end 'move)
-	      (forward-line 1)
-	    (setq in-string (match-end 0))
-	    (goto-char end)))
+	  (let* ((id-end (goto-char (match-end 0)))
+		 (line-end-position (save-excursion (end-of-line) (point)))
+		 (state (list in-string nest depth pcol indent)))
+	    ;; parse the rest of the line
+	    (while (and (> line-end-position (point))
+			(setq state (apply 'ruby-parse-partial
+					   line-end-position state))))
+	    (setq in-string (car state)
+		  nest (nth 1 state)
+		  depth (nth 2 state)
+		  pcol (nth 3 state)
+		  indent (nth 4 state))
+	    ;; skip heredoc section
+	    (if (re-search-forward (concat "^" re "$") end 'move)
+		(forward-line 1)
+	      (setq in-string id-end)
+	      (goto-char end))))
 	 (t
 	  (goto-char pnt))))
        ((looking-at "^__END__$")
 	(goto-char pnt))
+       ((looking-at ruby-here-doc-beg-re)
+	(if (re-search-forward (ruby-here-doc-end-match)
+			       indent-point t)
+	    (forward-line 1)
+	  (setq in-string (match-end 0))
+	  (goto-char indent-point)))
        (t
 	(error (format "bad string %s"
 		       (buffer-substring (point) pnt)
@@ -544,178 +579,156 @@ The variable ruby-indent-level controls the amount of indentation.
 (defun ruby-indent-size (pos nest)
   (+ pos (* (or nest 1) ruby-indent-level)))
 
-(defconst ruby-assign-re "\\s *\\(&&\\|||\\|<<\\|>>\\|[-+*/%&|^]\\)?=\\s *")
-
-(defun ruby-beginning-of-arg (start end)
-  (save-restriction
-    (narrow-to-region start (1+ end))
-    (goto-char start)
-    (let ((beg t) arg)
-      (while
-	  (progn
-	    (skip-chars-forward " \t\n")
-	    (and (not (eobp))
-		 (= (ruby-forward-sexp) 0)))
-	(skip-syntax-forward " ")
-	(cond ((looking-at ",")
-	       (forward-char)
-	       (setq arg start beg t))
-	      ((ruby-expr-beg) t)
-	      ((looking-at "=>\\s *")
-	       (goto-char (match-end 0))
-	       (setq arg nil beg nil))
-	      ((looking-at ruby-assign-re)
-	       (goto-char (match-end 0))
-	       (if beg (setq beg nil arg (point))))
-	      ((looking-at ruby-operator-re)
-	       (goto-char (match-end 0))
-	       (if beg (setq beg nil arg (match-end 0))))
-	      ((not (eq (char-syntax (char-after)) ?\())
-	       (setq start (point)))))
-      (goto-char (or arg start)))))
-
 (defun ruby-calculate-indent (&optional parse-start)
   (save-excursion
     (beginning-of-line)
     (let ((indent-point (point))
-	    (case-fold-search nil)
-	    state bol eol begin
-	    (paren (progn (skip-syntax-forward " ")
-			  (and (char-after) (matching-paren (char-after)))))
-	    (indent 0))
-	(if parse-start
-	    (goto-char parse-start)
-	  (ruby-beginning-of-indent)
-	  (setq parse-start (point)))
-	(back-to-indentation)
-	(setq indent (current-column))
-	(setq state (ruby-parse-region parse-start indent-point))
-	(cond
-	 ((nth 0 state)			; within string
-	  (setq indent nil))		;  do nothing
-	 ((car (nth 1 state))		; in paren
-	  (cond
-	   ((and (eq (car (nth 1 state)) ?\{) ; brace block
-		 (save-excursion
-		   (goto-char (1- (cdr (nth 1 state))))
-		   (not (ruby-expr-beg))))
-	    (setq paren nil)
-	    (back-to-indentation)
-	    (setq indent (ruby-indent-size (current-column) (nth 2 state))))
-	   (t
-	    (goto-char (setq begin (cdr (nth 1 state))))
-	    (let ((deep (ruby-deep-indent-paren-p (car (nth 1 state)))))
-	      (if deep
-		  (cond ((and (eq deep t) (eq (car (nth 1 state)) paren))
-			 (skip-syntax-backward " ")
-			 (setq indent (1- (current-column))))
-			((let ((s (ruby-parse-region (point) indent-point)))
-			   (and (nth 2 s) (> (nth 2 s) 0)
-				(or (goto-char (cdr (nth 1 s))) t)))
-			 (forward-word -1)
-			 (setq indent (ruby-indent-size (current-column) (nth 2 state))))
-			(t
-			 (setq indent (current-column))
-			 (cond ((eq deep 'space))
-			       (paren (setq indent (1- indent)))
-			       (t (setq indent (ruby-indent-size (1- indent) 1))))))
-		(if (nth 3 state) (goto-char (nth 3 state))
-		  (goto-char parse-start) (back-to-indentation))
-		(setq indent (ruby-indent-size (current-column) (nth 2 state))))))))
-	 ((and (nth 2 state) (> (nth 2 state) 0)) ; in nest
-	  (if (null (cdr (nth 1 state)))
-	      (error "invalid nest"))
-	  (goto-char (cdr (nth 1 state)))
-	  (forward-word -1)		; skip back a keyword
-	  (setq begin (point))
-	  (cond
-	   ((looking-at "do\\>[^_]")	; iter block is a special case
+	  (case-fold-search nil)
+	  state bol eol begin op-end
+	  (paren (progn (skip-syntax-forward " ")
+			(and (char-after) (matching-paren (char-after)))))
+	  (indent 0))
+      (if parse-start
+	  (goto-char parse-start)
+	(ruby-beginning-of-indent)
+	(setq parse-start (point)))
+      (back-to-indentation)
+      (setq indent (current-column))
+      (setq state (ruby-parse-region parse-start indent-point))
+      (cond
+       ((nth 0 state)			; within string
+	(setq indent nil))		;  do nothing
+       ((car (nth 1 state))		; in paren
+	(goto-char (setq begin (cdr (nth 1 state))))
+	(let ((deep (ruby-deep-indent-paren-p (car (nth 1 state)))))
+	  (if deep
+	      (cond ((and (eq deep t) (eq (car (nth 1 state)) paren))
+		     (skip-syntax-backward " ")
+		     (setq indent (1- (current-column))))
+		    ((let ((s (ruby-parse-region (point) indent-point)))
+		       (and (nth 2 s) (> (nth 2 s) 0)
+			    (or (goto-char (cdr (nth 1 s))) t)))
+		     (forward-word -1)
+		     (setq indent (ruby-indent-size (current-column) (nth 2 state))))
+		    (t
+		     (setq indent (current-column))
+		     (cond ((eq deep 'space))
+			   (paren (setq indent (1- indent)))
+			   (t (setq indent (ruby-indent-size (1- indent) 1))))))
 	    (if (nth 3 state) (goto-char (nth 3 state))
 	      (goto-char parse-start) (back-to-indentation))
-	    (setq indent (ruby-indent-size (current-column) (nth 2 state))))
-	   (t
-	    (setq indent (+ (current-column) ruby-indent-level)))))
-
-	 ((and (nth 2 state) (< (nth 2 state) 0)) ; in negative nest
-	  (setq indent (ruby-indent-size (current-column) (nth 2 state)))))
-
-	(when indent
-	  (goto-char indent-point)
+	    (setq indent (ruby-indent-size (current-column) (nth 2 state))))))
+       ((and (nth 2 state) (> (nth 2 state) 0)) ; in nest
+	(if (null (cdr (nth 1 state)))
+	    (error "invalid nest"))
+	(goto-char (cdr (nth 1 state)))
+	(forward-word -1)		; skip back a keyword
+	(setq begin (point))
+	(cond
+	 ((looking-at "do\\>[^_]")	; iter block is a special case
+	  (if (nth 3 state) (goto-char (nth 3 state))
+	    (goto-char parse-start) (back-to-indentation))
+	  (setq indent (ruby-indent-size (current-column) (nth 2 state))))
+	 (t
+	  (setq indent (+ (current-column) ruby-indent-level)))))
+       
+       ((and (nth 2 state) (< (nth 2 state) 0)) ; in negative nest
+	(setq indent (ruby-indent-size (current-column) (nth 2 state)))))
+      (when indent
+	(goto-char indent-point)
+	(end-of-line)
+	(setq eol (point))
+	(beginning-of-line)
+	(cond
+	 ((and (not (ruby-deep-indent-paren-p paren))
+	       (re-search-forward ruby-negative eol t))
+	  (and (not (eq ?_ (char-after (match-end 0))))
+	       (setq indent (- indent ruby-indent-level))))
+	 ((and
+	   (save-excursion
+	     (beginning-of-line)
+	     (not (bobp)))
+	   (or (ruby-deep-indent-paren-p t)
+	       (null (car (nth 1 state)))))
+	  ;; goto beginning of non-empty no-comment line
+	  (let (end done)
+	    (while (not done)
+	      (skip-chars-backward " \t\n")
+	      (setq end (point))
+	      (beginning-of-line)
+	      (if (re-search-forward "^\\s *#" end t)
+		  (beginning-of-line)
+		(setq done t))))
+	  (setq bol (point))
 	  (end-of-line)
-	  (setq eol (point))
-	  (beginning-of-line)
-	  (cond
-	   ((and (not (ruby-deep-indent-paren-p paren))
-		 (re-search-forward ruby-negative eol t))
-	    (and (not (eq ?_ (char-after (match-end 0))))
-		 (setq indent (- indent ruby-indent-level))))
-	   ;;operator terminated lines
-	   ((and
-	     (save-excursion
-	       (beginning-of-line)
-	       (not (bobp)))
-	     (or (ruby-deep-indent-paren-p t)
-		 (null (car (nth 1 state)))))
-	    ;; goto beginning of non-empty no-comment line
-	    (let (end done)
-	      (while (not done)
-		(skip-chars-backward " \t\n")
-		(setq end (point))
-		(beginning-of-line)
-		(if (re-search-forward "^\\s *#" end t)
-		    (beginning-of-line)
-		  (setq done t))))
-	    (setq bol (point))
-	    (end-of-line)
+	  ;; skip the comment at the end
+	  (skip-chars-backward " \t")
+	  (let (end (pos (point)))
+	    (beginning-of-line)
+	    (while (and (re-search-forward "#" pos t)
+			(setq end (1- (point)))
+			(or (ruby-special-char-p end)
+			    (and (setq state (ruby-parse-region parse-start end))
+				 (nth 0 state))))
+	      (setq end nil))
+	    (goto-char (or end pos))
 	    (skip-chars-backward " \t")
-	    (let ((pos (point)))
-	      (while (and (re-search-backward "#" bol t)
-			  (ruby-special-char-p))
-		(forward-char -1))
-	      (skip-chars-backward " \t")
-	      (and
-	       (setq state (ruby-parse-region parse-start (point)))
-	       (nth 0 state)
-	       (setq begin (nth 1 state))
-	       (goto-char pos)))
-	    (or (bobp) (forward-char -1))
-	    (and
-	     (or (and (looking-at ruby-symbol-re)
-		      (skip-chars-backward ruby-symbol-chars)
-		      (looking-at ruby-block-hanging-re)
-		      (not (eq (point) (nth 3 state)))
-		      (save-excursion
-			(goto-char (match-end 0))
-			(not (looking-at "[a-z_]"))))
-		 (and (looking-at ruby-operator-re)
-		      (not (ruby-special-char-p))
-		      (or (not (eq ?/ (char-after (point))))
-			  (null (nth 0 (ruby-parse-region parse-start (point)))))
-		      (or (not (eq ?| (char-after (point))))
-			  (save-excursion
-			    (or (eolp) (forward-char -1))
-			    (cond
-			     ((search-backward "|" nil t)
-			      (skip-chars-backward " \t\n")
-			      (and (not (eolp))
-				   (progn
-				     (forward-char -1)
-				     (not (looking-at "{")))
-				   (progn
-				     (forward-word -1)
-				     (not (looking-at "do\\>[^_]")))))
-			     (t t))))))
-	     (setq indent
-		   (cond
-		    ((and
-		      (not (looking-at ruby-block-hanging-re))
-		      (eq (ruby-deep-indent-paren-p t) 'space)
-		      (not (bobp)))
-		     (ruby-beginning-of-arg (or begin parse-start) (point))
-		     (current-column))
-		    (t
-		     (+ indent ruby-indent-level))))))))
-	indent)))
+	    (setq begin (if (nth 0 state) pos (cdr (nth 1 state))))
+	    (setq state (ruby-parse-region parse-start (point))))
+	  (or (bobp) (forward-char -1))
+	  (and
+	   (or (and (looking-at ruby-symbol-re)
+		    (skip-chars-backward ruby-symbol-chars)
+		    (looking-at (concat "\\<\\(" ruby-block-hanging-re "\\)\\>"))
+		    (not (eq (point) (nth 3 state)))
+		    (save-excursion
+		      (goto-char (match-end 0))
+		      (not (looking-at "[a-z_]"))))
+	       (and (looking-at ruby-operator-re)
+		    (not (ruby-special-char-p))
+		    ;; operator at the end of line
+		    (let ((c (char-after (point))))
+		      (and
+;; 		       (or (null begin)
+;; 			   (save-excursion
+;; 			     (goto-char begin)
+;; 			     (skip-chars-forward " \t")
+;; 			     (not (or (eolp) (looking-at "#")
+;; 				      (and (eq (car (nth 1 state)) ?{)
+;; 					   (looking-at "|"))))))
+		       (or (not (eq ?/ c))
+			   (null (nth 0 (ruby-parse-region (or begin parse-start) (point)))))
+		       (or (not (eq ?| (char-after (point))))
+			   (save-excursion
+			     (or (eolp) (forward-char -1))
+			     (cond
+			      ((search-backward "|" nil t)
+			       (skip-chars-backward " \t\n")
+			       (and (not (eolp))
+				    (progn
+				      (forward-char -1)
+				      (not (looking-at "{")))
+				    (progn
+				      (forward-word -1)
+				      (not (looking-at "do\\>[^_]")))))
+			      (t t))))
+		       (not (eq ?, c))
+		       (setq op-end t)))))
+	   (setq indent
+		 (cond
+		  ((and
+		    (null op-end)
+		    (not (looking-at (concat "\\<\\(" ruby-block-hanging-re "\\)\\>")))
+		    (eq (ruby-deep-indent-paren-p t) 'space)
+		    (not (bobp)))
+		   (save-excursion
+		     (widen)
+		     (goto-char (or begin parse-start))
+		     (skip-syntax-forward " ")
+		     (current-column)))
+		  (t
+		   (+ indent ruby-indent-level))))))))
+      indent)))
 
 (defun ruby-electric-brace (arg)
   (interactive "P")
@@ -762,7 +775,7 @@ An end of a defun is found by moving forward from the beginning of one."
 (defun ruby-move-to-block (n)
   (let (start pos done down)
     (setq start (ruby-calculate-indent))
-    (setq down (looking-at (if (< n 0) ruby-block-end-re ruby-block-beg-re)))
+    (setq down (looking-at (concat "\\<\\(" (if (< n 0) ruby-block-end-re ruby-block-beg-re) "\\)\\>")))
     (while (and (not done) (not (if (< n 0) (bobp) (eobp))))
       (forward-line n)
       (cond
@@ -782,9 +795,9 @@ An end of a defun is found by moving forward from the beginning of one."
 	 ((> start pos)
 	  (setq done t)))))
       (if done
-	  (progn
+	  (save-excursion
 	    (back-to-indentation)
-	    (if (looking-at ruby-block-mid-re)
+	    (if (looking-at (concat "\\<\\(" ruby-block-mid-re "\\)\\>"))
 		(setq done nil))))))
   (back-to-indentation))
 
@@ -812,7 +825,9 @@ An end of a defun is found by moving forward from the beginning of one."
 		     (skip-chars-forward ",.:;|&^~=!?\\+\\-\\*")
 		     (looking-at "\\s("))
 		   (goto-char (scan-sexps (point) 1)))
-		  ((looking-at ruby-block-beg-re)
+		  ((and (looking-at (concat "\\<\\(" ruby-block-beg-re "\\)\\>"))
+			(not (eq (char-before (point)) ?.))
+			(not (eq (char-before (point)) ?:)))
 		   (ruby-end-of-block)
 		   (forward-word 1))
 		  ((looking-at "\\(\\$\\|@@?\\)?\\sw")
@@ -871,7 +886,7 @@ An end of a defun is found by moving forward from the beginning of one."
 				   (?:
 				    (forward-char -1)
 				    (eq (char-before) :)))))
-		   (if (looking-at ruby-block-end-re)
+		   (if (looking-at (concat "\\<\\(" ruby-block-end-re "\\)\\>"))
 		       (ruby-beginning-of-block))
 		   nil))
 	    (setq i (1- i)))
@@ -944,7 +959,10 @@ balanced expression is found."
 	  ;; get current method (or class/module)
 	  (if (re-search-backward
 	       (concat "^[ \t]*\\(def\\|class\\|module\\)[ \t]+"
-		       "\\(" ruby-symbol-re "+\\)")
+		       "\\(" 
+		       ;; \\. for class method
+			"\\(" ruby-symbol-re "\\|\\." "\\)" 
+			"+\\)")
 	       nil t)
 	      (progn
 		(setq mlist (list (match-string 2)))
@@ -990,10 +1008,6 @@ balanced expression is found."
 	  ("\\(^\\|[=(,~?:;]\\|\\(^\\|\\s \\)\\(if\\|elsif\\|unless\\|while\\|until\\|when\\|and\\|or\\|&&\\|||\\)\\|g?sub!?\\|scan\\|split!?\\)\\s *\\(/\\)[^/\n\\\\]*\\(\\\\.[^/\n\\\\]*\\)*\\(/\\)"
 	   (4 (7 . ?/))
 	   (6 (7 . ?/)))
-	  ;; %Q!...!
-	  ("\\(^\\|[[ \t\n<+(,=]\\)%[xrqQwW]?\\([^<[{(a-zA-Z0-9 \n]\\)[^\n\\\\]*\\(\\\\.[^\n\\\\]*\\)*\\(\\2\\)"
-	   (2 (7 . nil))
-	   (4 (7 . nil)))
 	  ("^\\(=\\)begin\\(\\s \\|$\\)" 1 (7 . nil))
 	  ("^\\(=\\)end\\(\\s \\|$\\)" 1 (7 . nil))))
 
@@ -1046,6 +1060,34 @@ balanced expression is found."
     (let* ((tbl (copy-syntax-table ruby-mode-syntax-table)))
       (modify-syntax-entry ?_ "w" tbl)
       tbl))
+
+  (defun ruby-font-lock-here-docs (limit)
+    (if (re-search-forward ruby-here-doc-beg-re limit t)
+	(let (beg)
+	  (beginning-of-line)
+          (forward-line)
+	  (setq beg (point))
+	  (if (re-search-forward (ruby-here-doc-end-match) nil t)
+	      (progn
+		(set-match-data (list beg (point)))
+		t)))))
+
+  (defun ruby-font-lock-maybe-here-docs (limit)
+    (let (beg)
+      (save-excursion
+	(if (re-search-backward ruby-here-doc-beg-re nil t)
+	    (progn
+	      (beginning-of-line)
+              (forward-line)
+	      (setq beg (point)))))
+      (if (and beg
+	       (let ((end-match (ruby-here-doc-end-match)))
+                 (and (not (re-search-backward end-match beg t))
+		      (re-search-forward end-match nil t))))
+	  (progn
+	    (set-match-data (list beg (point)))
+	    t)
+          nil)))
 
   (defvar ruby-font-lock-keywords
     (list
@@ -1109,6 +1151,16 @@ balanced expression is found."
        0 font-lock-comment-face t)
      '(ruby-font-lock-maybe-docs
        0 font-lock-comment-face t)
+     ;; "here" document
+     '(ruby-font-lock-here-docs
+       0 font-lock-string-face t)
+     '(ruby-font-lock-maybe-here-docs
+       0 font-lock-string-face t)
+     `(,ruby-here-doc-beg-re
+       0 font-lock-string-face t)
+     ;; general delimited string
+     '("\\(^\\|[[ \t\n<+(,=]\\)\\(%[xrqQwW]?\\([^<[{(a-zA-Z0-9 \n]\\)[^\n\\\\]*\\(\\\\.[^\n\\\\]*\\)*\\(\\3\\)\\)"
+       (2 font-lock-string-face))
      ;; constants
      '("\\(^\\|[^_]\\)\\b\\([A-Z]+\\(\\w\\|_\\)*\\)"
        2 font-lock-type-face)

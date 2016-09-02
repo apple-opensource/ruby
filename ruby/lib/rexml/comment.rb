@@ -39,7 +39,10 @@ module REXML
 		#   indentation will be this number of spaces, and children will be
 		#   indented an additional amount.
 		# transitive::
-		#   Who knows?
+		#   If transitive is true and indent is >= 0, then the output will be
+		#   pretty-printed in such a way that the added whitespace does not affect
+		#   the absolute *value* of the document -- that is, it leaves the value
+		#   and number of Text nodes in the document unchanged.
 		# ie_hack::
 		#   Internet Explorer is the worst piece of crap to have ever been
 		#   written, with the possible exception of Windows itself.  Since IE is
@@ -51,6 +54,10 @@ module REXML
 			indent( output, indent )
 			output << START
 			output << @string
+      if indent>-1
+        output << "\n"
+        indent( output, indent )
+      end
 			output << STOP
 		end
 

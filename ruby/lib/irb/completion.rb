@@ -1,8 +1,8 @@
 #
 #   irb/completor.rb - 
 #   	$Release Version: 0.9$
-#   	$Revision: 1.1.1.2 $
-#   	$Date: 2003/10/15 10:11:49 $
+#   	$Revision: 1.8.2.1 $
+#   	$Date: 2004/03/10 08:21:02 $
 #   	by Keiju ISHITSUKA(keiju@ishitsuka.com)
 #       From Original Idea of shugo@ruby-lang.org
 #
@@ -12,7 +12,7 @@ require "readline"
 module IRB
   module InputCompletor
 
-    @RCS_ID='-$Id: completion.rb,v 1.1.1.2 2003/10/15 10:11:49 melville Exp $-'
+    @RCS_ID='-$Id: completion.rb,v 1.8.2.1 2004/03/10 08:21:02 matz Exp $-'
 
     ReservedWords = [
       "BEGIN", "END",
@@ -112,7 +112,7 @@ module IRB
 	select_message(receiver, message, candidates)
 
       when /^(\$[^.]*)$/
-	candidates = global_variables.grep Regexp.new(Regexp.quote($1))
+	candidates = global_variables.grep(Regexp.new(Regexp.quote($1)))
 
 #      when /^(\$?(\.?[^.]+)+)\.([^.]*)$/
       when /^((\.?[^.]+)+)\.([^.]*)$/
@@ -120,9 +120,9 @@ module IRB
 	receiver = $1
 	message = Regexp.quote($3)
 
-	gv = eval "global_variables", bind
-	lv = eval "local_variables", bind
-	cv = eval "self.class.constants", bind
+	gv = eval("global_variables", bind)
+	lv = eval("local_variables", bind)
+	cv = eval("self.class.constants", bind)
 	
 	if (gv | lv | cv).include?(receiver)
 	  # foo.func and foo is local var.
@@ -182,7 +182,7 @@ module IRB
 end
 
 if Readline.respond_to?("basic_word_break_characters=")
-  Readline.basic_word_break_characters= "\t\n\"\\'`><=;|&{("
+  Readline.basic_word_break_characters= " \t\n\"\\'`><=;|&{("
 end
 Readline.completion_append_character = nil
 Readline.completion_proc = IRB::InputCompletor::CompletionProc

@@ -1,5 +1,5 @@
 /*
- * $Id: ossl_bn.c,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+ * $Id: ossl_bn.c,v 1.5.2.1 2004/12/15 01:54:39 matz Exp $
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2001-2002  Technorama team <oss-ruby@technorama.net>
  * All rights reserved.
@@ -99,7 +99,6 @@ ossl_bn_alloc(VALUE klass)
 
     return obj;
 }
-DEFINE_ALLOC_WRAPPER(ossl_bn_alloc)
 
 static VALUE
 ossl_bn_initialize(int argc, VALUE *argv, VALUE self)
@@ -108,11 +107,11 @@ ossl_bn_initialize(int argc, VALUE *argv, VALUE self)
     VALUE str, bs;
     int base = 10;
 
-    GetBN(self, bn);
-
     if (rb_scan_args(argc, argv, "11", &str, &bs) == 2) {
 	base = NUM2INT(bs);
     }
+    StringValue(str);
+    GetBN(self, bn);
     if (RTEST(rb_obj_is_kind_of(str, cBN))) {
 	BIGNUM *other;
 
@@ -122,8 +121,6 @@ ossl_bn_initialize(int argc, VALUE *argv, VALUE self)
 	}
 	return self;
     }
-    str = rb_String(str);
-    StringValue(str);
 
     switch (base) {
     case 0:
@@ -160,49 +157,34 @@ ossl_bn_to_s(int argc, VALUE *argv, VALUE self)
     int base = 10, len;
     char *buf;
 
-    GetBN(self, bn);
-	
     if (rb_scan_args(argc, argv, "01", &bs) == 1) {
 	base = NUM2INT(bs);
     }
+    GetBN(self, bn);
     switch (base) {
     case 0:
 	len = BN_bn2mpi(bn, NULL);
-	if (!(buf = OPENSSL_malloc(len))) {
-	    ossl_raise(eBNError, "Cannot allocate mem for BN");
-	}
-	if (BN_bn2mpi(bn, buf) != len) {
-	    OPENSSL_free(buf);
+        str = rb_str_new(0, len);
+	if (BN_bn2mpi(bn, RSTRING(str)->ptr) != len)
 	    ossl_raise(eBNError, NULL);
-	}
 	break;
     case 2:
 	len = BN_num_bytes(bn);
-	if (!(buf = OPENSSL_malloc(len))) {
-	    ossl_raise(eBNError, "Cannot allocate mem for BN");
-	}
-	if (BN_bn2bin(bn, buf) != len) {
-	    OPENSSL_free(buf);
+        str = rb_str_new(0, len);
+	if (BN_bn2bin(bn, RSTRING(str)->ptr) != len)
 	    ossl_raise(eBNError, NULL);
-	}
 	break;
     case 10:
-	if (!(buf = BN_bn2dec(bn))) {
-	    ossl_raise(eBNError, NULL);
-	}
-	len = strlen(buf);
+	if (!(buf = BN_bn2dec(bn))) ossl_raise(eBNError, NULL);
+	str = ossl_buf2str(buf, strlen(buf));
 	break;
     case 16:
-	if (!(buf = BN_bn2hex(bn))) {
-	    ossl_raise(eBNError, NULL);
-	}
-	len = strlen(buf);
+	if (!(buf = BN_bn2hex(bn))) ossl_raise(eBNError, NULL);
+	str = ossl_buf2str(buf, strlen(buf));
 	break;
     default:
 	ossl_raise(rb_eArgError, "illegal radix %d", base);
     }
-    str = rb_str_new(buf, len);
-    OPENSSL_free(buf);
 
     return str;
 }
@@ -395,11 +377,12 @@ BIGNUM_BIT(mask_bits);
 static VALUE
 ossl_bn_is_bit_set(VALUE self, VALUE bit)
 {
+    int b;
     BIGNUM *bn;
 
+    b = NUM2INT(bit);
     GetBN(self, bn);
-
-    if (BN_is_bit_set(bn, NUM2INT(bit))) {
+    if (BN_is_bit_set(bn, b)) {
 	return Qtrue;
     }
     return Qfalse;
@@ -412,8 +395,8 @@ ossl_bn_is_bit_set(VALUE self, VALUE bit)
 	BIGNUM *bn, *result;				\
 	int b;						\
 	VALUE obj;					\
-	GetBN(self, bn);				\
 	b = NUM2INT(bits);				\
+	GetBN(self, bn);				\
 	if (!(result = BN_new())) {			\
 		ossl_raise(eBNError, NULL);		\
 	}						\
@@ -472,25 +455,8 @@ BIGNUM_RAND(pseudo_rand);
 	WrapBN(klass, obj, result);				\
 	return obj;						\
     }
-
-#define BIGNUM_RAND_RANGE_NOT_IMPL(func)			\
-    static VALUE						\
-    ossl_bn_s_##func##_range(VALUE klass, VALUE range)		\
-    {								\
-	rb_notimplement();					\
-    }
-
-#if defined(HAVE_BN_RAND_RANGE)
 BIGNUM_RAND_RANGE(rand);
-#else
-BIGNUM_RAND_RANGE_NOT_IMPL(rand);
-#endif
-
-#if defined(HAVE_BN_PSEUDO_RAND_RANGE)
 BIGNUM_RAND_RANGE(pseudo_rand);
-#else
-BIGNUM_RAND_RANGE_NOT_IMPL(pseudo_rand);
-#endif
 
 static VALUE
 ossl_bn_s_generate_prime(int argc, VALUE *argv, VALUE klass)
@@ -582,11 +548,10 @@ ossl_bn_is_prime(int argc, VALUE *argv, VALUE self)
     VALUE vchecks;
     int checks = BN_prime_checks;
 
-    GetBN(self, bn);
-	
     if (rb_scan_args(argc, argv, "01", &vchecks) == 0) {
 	checks = NUM2INT(vchecks);
     }
+    GetBN(self, bn);
     switch (BN_is_prime(bn, checks, NULL, ossl_bn_ctx, NULL)) {
     case 1:
 	return Qtrue;
@@ -606,13 +571,12 @@ ossl_bn_is_prime_fasttest(int argc, VALUE *argv, VALUE self)
     VALUE vchecks, vtrivdiv;
     int checks = BN_prime_checks, do_trial_division = 1;
 
-    GetBN(self, bn);
-	
     rb_scan_args(argc, argv, "02", &vchecks, &vtrivdiv);
 
     if (!NIL_P(vchecks)) {
 	checks = NUM2INT(vchecks);
     }
+    GetBN(self, bn);
     /* handle true/false */
     if (vtrivdiv == Qfalse) {
 	do_trial_division = 0;

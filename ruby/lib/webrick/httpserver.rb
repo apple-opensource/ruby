@@ -31,41 +31,53 @@ module WEBrick
       end
 
       unless @config[:AccessLog]
-        basic_log = BasicLog::new
         @config[:AccessLog] = [
-          [ basic_log, AccessLog::COMMON_LOG_FORMAT ],
-          [ basic_log, AccessLog::REFERER_LOG_FORMAT ]
+          [ $stderr, AccessLog::COMMON_LOG_FORMAT ],
+          [ $stderr, AccessLog::REFERER_LOG_FORMAT ]
         ]
       end
+ 
+      @virtual_hosts = Array.new
     end
 
     def run(sock)
       while true 
         res = HTTPResponse.new(@config)
         req = HTTPRequest.new(@config)
+        server = self
         begin
+          timeout = @config[:RequestTimeout]
+          while timeout > 0
+            break if IO.select([sock], nil, nil, 0.5)
+            timeout = 0 if @status != :Running
+            timeout -= 0.5
+          end
+          raise HTTPStatus::EOFError if timeout <= 0
           req.parse(sock)
           res.request_method = req.request_method
           res.request_uri = req.request_uri
           res.request_http_version = req.http_version
-          if handler = @config[:RequestHandler]
-            handler.call(req, res)
+          res.keep_alive = req.keep_alive?
+          server = lookup_server(req) || self
+          if callback = server[:RequestCallback] || server[:RequestHandler]
+            callback.call(req, res)
           end
-          service(req, res)
+          server.service(req, res)
         rescue HTTPStatus::EOFError, HTTPStatus::RequestTimeout => ex
           res.set_error(ex)
         rescue HTTPStatus::Error => ex
+          @logger.error(ex.message)
           res.set_error(ex)
         rescue HTTPStatus::Status => ex
           res.status = ex.code
-        rescue StandardError, NameError => ex # for Ruby 1.6
+        rescue StandardError => ex
           @logger.error(ex)
           res.set_error(ex, true)
         ensure
           if req.request_line
             req.fixup()
             res.send_response(sock)
-            access_log(@config, req, res)
+            server.access_log(@config, req, res)
           end
         end
         break if @http_version < "1.1"
@@ -121,11 +133,30 @@ module WEBrick
       end
     end
 
+    def virtual_host(server)
+      @virtual_hosts << server
+      @virtual_hosts = @virtual_hosts.sort_by{|s|
+        num = 0
+        num -= 4 if s[:BindAddress]
+        num -= 2 if s[:Port]
+        num -= 1 if s[:ServerName]
+        num
+      }
+    end
+
+    def lookup_server(req)
+      @virtual_hosts.find{|s|
+        (s[:BindAddress].nil? || req.addr[3] == s[:BindAddress]) &&
+        (s[:Port].nil?        || req.port == s[:Port])           &&
+        ((s[:ServerName].nil?  || req.host == s[:ServerName]) ||
+         (!s[:ServerAlias].nil? && s[:ServerAlias].find{|h| h === req.host}))
+      }
+    end
+
     def access_log(config, req, res)
       param = AccessLog::setup_params(config, req, res)
-      level = Log::INFO
       @config[:AccessLog].each{|logger, fmt|
-        logger.log(level, AccessLog::format(fmt, param))
+        logger << AccessLog::format(fmt+"\n", param)
       }
     end
 

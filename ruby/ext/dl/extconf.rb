@@ -20,18 +20,16 @@ EOF
   exit(0)
 end
 
-($CPPFLAGS || $CFLAGS) << " -I."
+$CFLAGS << " -I."
+$CPPFLAGS << " -I."
 
 if (Config::CONFIG['CC'] =~ /gcc/)  # from Win32API
   $CFLAGS << " -fno-defer-pop -fno-omit-frame-pointer"
+  $CPPFLAGS << " -fno-defer-pop -fno-omit-frame-pointer"
 end
 
-if (Config::CONFIG['CC'] =~ /gcc/) && (Config::CONFIG['arch'] =~ /i.86/)
-  $with_asm = true
-else
-  $with_asm = false
-end
-$with_dlstack = ! $with_asm
+$with_dlstack ||= true
+$with_asm = ! $with_dlstack
 
 $with_type_int = try_cpp(<<EOF)
 #include "config.h"
@@ -131,6 +129,13 @@ if( $with_type_voidp )
   $dlconfig_h << "#define WITH_TYPE_VOIDP\n"
 end
 
+if( have_header("windows.h") )
+  have_library("kernel32")
+  have_func("GetLastError", "windows.h")
+  dlc_define("HAVE_WINDOWS_H")
+  have_windows_h = true
+end
+
 if( have_header("dlfcn.h") )
   dlc_define("HAVE_DLFCN_H")
   have_library("dl")
@@ -140,8 +145,7 @@ if( have_header("dlfcn.h") )
   if( have_func("dlerror") )
     dlc_define("HAVE_DLERROR")
   end
-elsif( have_header("windows.h") )
-  dlc_define("HAVE_WINDOWS_H")
+elsif ( have_windows_h )
   have_func("LoadLibrary")
   have_func("FreeLibrary")
   have_func("GetProcAddress")
@@ -181,6 +185,9 @@ $INSTALLFILES = [
   ["./dlconfig.h", "$(archdir)$(target_prefix)", "."],
   ["dl.h", "$(archdir)$(target_prefix)", ""],
 ]
+$cleanfiles = %w[test/test.o]
+$distcleanfiles = %w[call.func callback.func cbtable.func dlconfig.rb
+./dlconfig.h test/libtest.so test/*~ *~ mkmf.log]
 
 create_makefile('dl')
 rescue SystemExit

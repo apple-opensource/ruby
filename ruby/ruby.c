@@ -2,8 +2,8 @@
 
   ruby.c -
 
-  $Author: melville $
-  $Date: 2003/10/15 10:11:46 $
+  $Author: matz $
+  $Date: 2004/07/23 07:52:38 $
   created at: Tue Aug 10 12:47:31 JST 1993
 
   Copyright (C) 1993-2003 Yukihiro Matsumoto
@@ -55,7 +55,7 @@ extern int ruby_yydebug;
 char *ruby_inplace_mode = Qfalse;
 
 static void load_stdin _((void));
-static void load_file _((char *, int));
+static void load_file _((const char *, int));
 static void forbid_setid _((const char *));
 
 static VALUE do_loop = Qfalse, do_print = Qfalse;
@@ -212,7 +212,7 @@ ruby_incpush(path)
 #define LOAD_RELATIVE 1
 #endif
 
-#ifdef DOSISH
+#if defined DOSISH || defined __CYGWIN__
 static inline void translate_char _((char *, int, int));
 
 static inline void
@@ -260,7 +260,7 @@ ruby_init_loadpath()
 #endif
 
     libpath[FILENAME_MAX] = '\0';
-#ifdef DOSISH
+#if defined DOSISH || defined __CYGWIN__
     translate_char(libpath, '\\', '/');
 #endif
     p = strrchr(libpath, '/');
@@ -340,11 +340,14 @@ require_libraries()
     struct req_list *list = req_list_head.next;
     struct req_list *tmp;
 
-    Init_ext();		/* should be called here for some reason :-( */
     save[0] = ruby_eval_tree;
     save[1] = ruby_eval_tree_begin;
     save[2] = NEW_NEWLINE(0);
     ruby_eval_tree = ruby_eval_tree_begin = 0;
+    ruby_current_node = 0;
+    Init_ext();		/* should be called here for some reason :-( */
+    ruby_current_node = save[2];
+    ruby_set_current_source();
     req_list_last = 0;
     while (list) {
 	ruby_current_node = 0;
@@ -429,6 +432,7 @@ proc_options(argc, argv)
     char *argv0 = argv[0];
     int do_search;
     char *s;
+    NODE *volatile script_node = 0;
 
     int version = 0;
     int copyright = 0;
@@ -751,8 +755,10 @@ proc_options(argc, argv)
 		    script = dln_find_file(argv[0], getenv(PATH_ENV));
 		}
 		if (!script) script = argv[0];
+		script = ruby_sourcefile = rb_source_filename(script);
+		script_node = NEW_NEWLINE(0);
 	    }
-#ifdef DOSISH
+#if defined DOSISH || defined __CYGWIN__
 	    translate_char(script, '\\', '/');
 #endif
 	    argc--; argv++;
@@ -789,7 +795,7 @@ extern int ruby__end__seen;
 
 static void
 load_file(fname, script)
-    char *fname;
+    const char *fname;
     int script;
 {
     extern VALUE rb_stdin;
@@ -912,7 +918,7 @@ load_file(fname, script)
 
 void
 rb_load_file(fname)
-    char *fname;
+    const char *fname;
 {
     load_file(fname, 0);
 }
@@ -998,7 +1004,7 @@ set_arg0(val, id)
 
 void
 ruby_script(name)
-    char *name;
+    const char *name;
 {
     if (name) {
 	rb_progname = rb_tainted_str_new2(name);
@@ -1060,6 +1066,7 @@ ruby_prog_init()
     rb_define_readonly_variable("$-l", &do_line);
 
     rb_define_hooked_variable("$0", &rb_progname, 0, set_arg0);
+    rb_define_hooked_variable("$PROGRAM_NAME", &rb_progname, 0, set_arg0);
 
     rb_argv = rb_ary_new();
     rb_define_readonly_variable("$*", &rb_argv);

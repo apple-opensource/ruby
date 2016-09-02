@@ -1,30 +1,29 @@
-=begin
-
-= net/protocol.rb
-
-Copyright (c) 1999-2003 Yukihiro Matsumoto
-Copyright (c) 1999-2003 Minero Aoki
-
-written and maintained by Minero Aoki <aamine@loveruby.net>
-
-This program is free software. You can re-distribute and/or
-modify this program under the same terms as Ruby itself,
-Ruby Distribute License or GNU General Public License.
-
-$Id: protocol.rb,v 1.1.1.3 2003/10/15 10:11:49 melville Exp $
-
-WARNING: This file is going to remove.
-Do not rely on the implementation written in this file.
-
-=end
+#
+# = net/protocol.rb
+#
+#--
+# Copyright (c) 1999-2004 Yukihiro Matsumoto
+# Copyright (c) 1999-2004 Minero Aoki
+#
+# written and maintained by Minero Aoki <aamine@loveruby.net>
+#
+# This program is free software. You can re-distribute and/or
+# modify this program under the same terms as Ruby itself,
+# Ruby Distribute License or GNU General Public License.
+#
+# $Id: protocol.rb,v 1.73.2.1 2004/08/18 14:42:04 aamine Exp $
+#++
+#
+# WARNING: This file is going to remove.
+# Do not rely on the implementation written in this file.
+#
 
 require 'socket'
 require 'timeout'
 
+module Net # :nodoc:
 
-module Net
-
-  class Protocol
+  class Protocol   #:nodoc: internal use only
     private
     def Protocol.protocol_param( name, val )
       module_eval(<<-End, __FILE__, __LINE__ + 1)
@@ -46,7 +45,7 @@ module Net
   ProtocRetryError = ProtoRetriableError
 
 
-  class InternetMessageIO
+  class InternetMessageIO   #:nodoc: internal use only
 
     class << self
       alias open new
@@ -121,7 +120,7 @@ module Net
 
     def read( len, dest = '', ignore_eof = false )
       LOG "reading #{len} bytes..."
-      LOG_off()
+      # LOG_off()   # experimental: [ruby-list:38800]
       read_bytes = 0
       begin
         while read_bytes + @rbuf.size < len
@@ -132,14 +131,14 @@ module Net
       rescue EOFError
         raise unless ignore_eof
       end
-      LOG_on()
+      # LOG_on()
       LOG "read #{read_bytes} bytes"
       dest
     end
 
     def read_all( dest = '' )
       LOG 'reading all...'
-      LOG_off()
+      # LOG_off()   # experimental: [ruby-list:38800]
       read_bytes = 0
       begin
         while true
@@ -149,7 +148,7 @@ module Net
       rescue EOFError
         ;
       end
-      LOG_on()
+      # LOG_on()
       LOG "read #{read_bytes} bytes"
       dest
     end
@@ -194,10 +193,9 @@ module Net
     private
 
     def rbuf_fill
-      until IO.select([@socket], nil, nil, @read_timeout)
-        raise TimeoutError, "socket read timeout (#{@read_timeout} sec)"
-      end
-      @rbuf << @socket.sysread(1024)
+      timeout(@read_timeout) {
+        @rbuf << @socket.sysread(1024)
+      }
     end
 
     def rbuf_moveto( dest, len )
@@ -415,10 +413,7 @@ module Net
   end
 
 
-  #
-  # The reader adapter class for internal use only.
-  #
-  class ReadAdapter
+  class ReadAdapter   #:nodoc: internal use only
 
     def initialize( block )
       @block = block
@@ -446,8 +441,7 @@ module Net
   end
 
 
-  # For backward compatibility
-  module NetPrivate
+  module NetPrivate   #:nodoc: obsolete
     Socket = ::Net::InternetMessageIO
   end
 

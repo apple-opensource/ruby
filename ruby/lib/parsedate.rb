@@ -1,5 +1,5 @@
 # parsedate.rb: Written by Tadayoshi Funaba 2001, 2002
-# $Id: parsedate.rb,v 1.1.1.3 2003/10/15 10:11:48 melville Exp $
+# $Id: parsedate.rb,v 2.6 2002-05-14 07:43:18+09 tadf Exp $
 
 require 'date/format'
 

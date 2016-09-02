@@ -1,5 +1,5 @@
 /* -*- C -*-
- * $Id: dl.h,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+ * $Id: dl.h,v 1.9 2003/12/01 23:02:44 ttate Exp $
  */
 
 #ifndef RUBY_DL_H
@@ -170,6 +170,7 @@
 # endif
 #elif defined(USE_DLSTACK)
 # define DLSTACK
+# define DLSTACK_GUARD
 # define DLSTACK_METHOD "dl"
 # define DLSTACK_PROTO long,long,long,long,long,\
                        long,long,long,long,long,\

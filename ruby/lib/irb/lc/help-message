@@ -1,8 +1,8 @@
 #
 #   irb/lc/help-message.rb - 
 #   	$Release Version: 0.9$
-#   	$Revision: 1.1.1.2 $
-#   	$Date: 2003/10/15 10:11:49 $
+#   	$Revision: 1.4.2.1 $
+#   	$Date: 2004/03/10 08:21:06 $
 #   	by Keiju ISHITSUKA(keiju@ishitsuka.com)
 #
 # --
@@ -14,6 +14,7 @@ Usage:  irb.rb [options] [programfile] [arguments]
   -m		    Bc mode (load mathn, fraction or matrix are available)
   -d                Set $DEBUG to true (same as `ruby -d')
   -r load-module    Same as `ruby -r'
+  -I path           Specify $LOAD_PATH directory
   --inspect	    Use `inspect' for output (default except for bc mode)
   --noinspect	    Don't use inspect for output
   --readline	    Use Readline extension module

@@ -90,7 +90,8 @@ class String
   end
 
   def succ
-    (str = self.dup).succ! or str
+    str = self.dup
+    str.succ! or str
   end
 
   private

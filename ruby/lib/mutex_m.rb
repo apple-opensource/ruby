@@ -1,8 +1,8 @@
 #
 #   mutex_m.rb - 
 #   	$Release Version: 3.0$
-#   	$Revision: 1.1.1.2 $
-#   	$Date: 2003/10/15 10:11:48 $
+#   	$Revision: 1.7 $
+#   	$Date: 1998/02/27 04:28:57 $
 #       Original from mutex.rb
 #   	by Keiju ISHITSUKA(keiju@ishitsuka.com)
 #       modified by matz

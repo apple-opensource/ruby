@@ -1,5 +1,5 @@
 /*
- * $Id: ossl_pkey_dsa.c,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+ * $Id: ossl_pkey_dsa.c,v 1.5.2.2 2004/06/30 18:34:59 gotoyuzo Exp $
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2001-2002  Michal Rokos <m.rokos@sh.cvut.cz>
  * All rights reserved.
@@ -19,7 +19,14 @@
     } \
 } while (0)
 
-#define DSA_PRIVATE(dsa) ((dsa)->priv_key)
+#define DSA_HAS_PRIVATE(dsa) ((dsa)->priv_key)
+
+#ifdef OSSL_ENGINE_ENABLED
+#  define DSA_PRIVATE(dsa) (DSA_HAS_PRIVATE(dsa) || (dsa)->engine)
+#else
+#  define DSA_PRIVATE(dsa) DSA_HAS_PRIVATE(dsa)
+#endif
+
 
 /*
  * Classes
@@ -74,21 +81,6 @@ ossl_dsa_new(EVP_PKEY *pkey)
 /*
  * Private
  */
-/*
- * CB for yielding when generating DSA params
- */
-static void
-ossl_dsa_generate_cb(int p, int n, void *arg)
-{
-    VALUE ary;
-
-    ary = rb_ary_new2(2);
-    rb_ary_store(ary, 0, INT2NUM(p));
-    rb_ary_store(ary, 1, INT2NUM(n));
-	
-    rb_yield(ary);
-}
-
 static DSA *
 dsa_generate(int size)
 {
@@ -96,18 +88,15 @@ dsa_generate(int size)
     unsigned char seed[20];
     int seed_len = 20, counter;
     unsigned long h;
-    void (*cb)(int, int, void *) = NULL;
 
     if (!RAND_bytes(seed, seed_len)) {
 	return 0;
     }
-    if (rb_block_given_p()) {
-	cb = ossl_dsa_generate_cb;
-    }
-    dsa = DSA_generate_parameters(size, seed, seed_len, &counter, &h, cb, NULL);
-    if(!dsa) { /* arg to cb = NULL */
-	return 0;
-    }
+    dsa = DSA_generate_parameters(size, seed, seed_len, &counter, &h,
+	    rb_block_given_p() ? ossl_generate_cb : NULL,
+	    NULL);
+    if(!dsa) return 0;
+
     if (!DSA_generate_key(dsa)) {
 	DSA_free(dsa);
 	return 0;
@@ -137,40 +126,40 @@ ossl_dsa_initialize(int argc, VALUE *argv, VALUE self)
     DSA *dsa;
     BIO *in;
     char *passwd = NULL;
-    VALUE buffer, pass;
+    VALUE arg, pass;
 	
     GetPKey(self, pkey);
-    rb_scan_args(argc, argv, "11", &buffer, &pass);
-    if (FIXNUM_P(buffer)) {
-	if (!(dsa = dsa_generate(FIX2INT(buffer)))) {
+    if(rb_scan_args(argc, argv, "02", &arg, &pass) == 0) {
+        dsa = DSA_new();
+    }
+    else if (FIXNUM_P(arg)) {
+	if (!(dsa = dsa_generate(FIX2INT(arg)))) {
 	    ossl_raise(eDSAError, NULL);
 	}
-    } else {
-	StringValue(buffer);
-	if (!NIL_P(pass)) {
-	    passwd = StringValuePtr(pass);
-	}
-	in = BIO_new_mem_buf(RSTRING(buffer)->ptr, RSTRING(buffer)->len);
-	if (!in){
-	    ossl_raise(eDSAError, NULL);
-	}
-
+    }
+    else {
+	if (!NIL_P(pass)) passwd = StringValuePtr(pass);
+	arg = ossl_to_der_if_possible(arg);
+	in = ossl_obj2bio(arg);
 	dsa = PEM_read_bio_DSAPrivateKey(in, NULL, ossl_pem_passwd_cb, passwd);
 	if (!dsa) {
 	    BIO_reset(in);
-
 	    dsa = PEM_read_bio_DSAPublicKey(in, NULL, NULL, NULL);
 	}
 	if (!dsa) {
 	    BIO_reset(in);
-
 	    dsa = PEM_read_bio_DSA_PUBKEY(in, NULL, NULL, NULL);
 	}
 	if (!dsa) {
-	    BIO_free(in);
-	    ossl_raise(eDSAError, "Neither PUB key nor PRIV key:");
+	    BIO_reset(in);
+	    dsa = d2i_DSAPrivateKey_bio(in, NULL);
+	}
+	if (!dsa) {
+	    BIO_reset(in);
+	    dsa = d2i_DSA_PUBKEY_bio(in, NULL);
 	}
 	BIO_free(in);
+	if (!dsa) ossl_raise(eDSAError, "Neither PUB key nor PRIV key:");
     }
     if (!EVP_PKEY_assign_DSA(pkey, dsa)) {
 	DSA_free(dsa);
@@ -209,7 +198,6 @@ ossl_dsa_export(int argc, VALUE *argv, VALUE self)
 {
     EVP_PKEY *pkey;
     BIO *out;
-    BUF_MEM *buf;
     const EVP_CIPHER *ciph = NULL;
     char *passwd = NULL;
     VALUE cipher, pass, str;
@@ -225,7 +213,7 @@ ossl_dsa_export(int argc, VALUE *argv, VALUE self)
     if (!(out = BIO_new(BIO_s_mem()))) {
 	ossl_raise(eDSAError, NULL);
     }
-    if (DSA_PRIVATE(pkey->pkey.dsa)) {
+    if (DSA_HAS_PRIVATE(pkey->pkey.dsa)) {
 	if (!PEM_write_bio_DSAPrivateKey(out, pkey->pkey.dsa, ciph,
 					 NULL, 0, ossl_pem_passwd_cb, passwd)){
 	    BIO_free(out);
@@ -237,9 +225,32 @@ ossl_dsa_export(int argc, VALUE *argv, VALUE self)
 	    ossl_raise(eDSAError, NULL);
 	}
     }
-    BIO_get_mem_ptr(out, &buf);
-    str = rb_str_new(buf->data, buf->length);
-    BIO_free(out);
+    str = ossl_membio2str(out);
+
+    return str;
+}
+
+static VALUE
+ossl_dsa_to_der(VALUE self)
+{
+    EVP_PKEY *pkey;
+    int (*i2d_func)_((DSA*, unsigned char**));
+    unsigned char *p;
+    long len;
+    VALUE str;
+
+    GetPKeyDSA(self, pkey);
+    if(DSA_HAS_PRIVATE(pkey->pkey.dsa))
+	i2d_func = (int(*)_((DSA*,unsigned char**)))i2d_DSAPrivateKey;
+    else
+	i2d_func = i2d_DSA_PUBKEY;
+    if((len = i2d_func(pkey->pkey.dsa, NULL)) <= 0)
+	ossl_raise(eDSAError, NULL);
+    str = rb_str_new(0, len);
+    p = RSTRING(str)->ptr;
+    if(i2d_func(pkey->pkey.dsa, &p) < 0)
+	ossl_raise(eDSAError, NULL);
+    ossl_str_adjust(str, p);
 
     return str;
 }
@@ -278,20 +289,17 @@ ossl_dsa_to_text(VALUE self)
 {
     EVP_PKEY *pkey;
     BIO *out;
-    BUF_MEM *buf;
     VALUE str;
 
     GetPKeyDSA(self, pkey);
     if (!(out = BIO_new(BIO_s_mem()))) {
 	ossl_raise(eDSAError, NULL);
     }
-    if (!DSA_print(out, pkey->pkey.dsa, 0)) { //offset = 0
+    if (!DSA_print(out, pkey->pkey.dsa, 0)) { /* offset = 0 */
 	BIO_free(out);
 	ossl_raise(eDSAError, NULL);
     }
-    BIO_get_mem_ptr(out, &buf);
-    str = rb_str_new(buf->data, buf->length);
-    BIO_free(out);
+    str = ossl_membio2str(out);
 
     return str;
 }
@@ -317,11 +325,12 @@ ossl_dsa_to_public_key(VALUE self)
     return obj;
 }
 
+#define ossl_dsa_buf_size(pkey) (DSA_size((pkey)->pkey.dsa)+16)
+
 static VALUE
 ossl_dsa_sign(VALUE self, VALUE data)
 {
     EVP_PKEY *pkey;
-    char *buf;
     int buf_len;
     VALUE str;
 
@@ -330,16 +339,13 @@ ossl_dsa_sign(VALUE self, VALUE data)
     if (!DSA_PRIVATE(pkey->pkey.dsa)) {
 	ossl_raise(eDSAError, "Private DSA key needed!");
     }
-    if (!(buf = OPENSSL_malloc(DSA_size(pkey->pkey.dsa) + 16))) {
-	ossl_raise(eDSAError, NULL);
-    }
-    if (!DSA_sign(0, RSTRING(data)->ptr, RSTRING(data)->len, buf,
+    str = rb_str_new(0, ossl_dsa_buf_size(pkey));
+    if (!DSA_sign(0, RSTRING(data)->ptr, RSTRING(data)->len, RSTRING(str)->ptr,
 		  &buf_len, pkey->pkey.dsa)) { /* type is ignored (0) */
-	OPENSSL_free(buf);
 	ossl_raise(eDSAError, NULL);
     }
-    str = rb_str_new(buf, buf_len);
-    OPENSSL_free(buf);
+    RSTRING(str)->len = buf_len;
+    RSTRING(str)->ptr[buf_len] = 0;
 
     return str;
 }
@@ -366,6 +372,12 @@ ossl_dsa_verify(VALUE self, VALUE digest, VALUE sig)
     return Qfalse;
 }
 
+OSSL_PKEY_BN(dsa, p);
+OSSL_PKEY_BN(dsa, q);
+OSSL_PKEY_BN(dsa, g);
+OSSL_PKEY_BN(dsa, pub_key);
+OSSL_PKEY_BN(dsa, priv_key);
+
 /*
  * INIT
  */
@@ -385,9 +397,16 @@ Init_ossl_dsa()
     rb_define_method(cDSA, "export", ossl_dsa_export, -1);
     rb_define_alias(cDSA, "to_pem", "export");
     rb_define_alias(cDSA, "to_s", "export");
+    rb_define_method(cDSA, "to_der", ossl_dsa_to_der, 0);
     rb_define_method(cDSA, "public_key", ossl_dsa_to_public_key, 0);
     rb_define_method(cDSA, "syssign", ossl_dsa_sign, 1);
     rb_define_method(cDSA, "sysverify", ossl_dsa_verify, 2);
+
+    DEF_OSSL_PKEY_BN(cDSA, dsa, p);
+    DEF_OSSL_PKEY_BN(cDSA, dsa, q);
+    DEF_OSSL_PKEY_BN(cDSA, dsa, g);
+    DEF_OSSL_PKEY_BN(cDSA, dsa, pub_key);
+    DEF_OSSL_PKEY_BN(cDSA, dsa, priv_key);
 
     rb_define_method(cDSA, "params", ossl_dsa_get_params, 0);
 }

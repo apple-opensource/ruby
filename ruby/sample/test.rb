@@ -71,10 +71,10 @@ a = *[*[1,2]]; test_ok(a == [1,2])
 *a = [1]; test_ok(a == [[1]])
 *a = [nil]; test_ok(a == [[nil]])
 *a = [[]]; test_ok(a == [[[]]])
-*a = [1,2]; test_ok(a == [1,2])
+*a = [1,2]; test_ok(a == [[1,2]])
 *a = [*[]]; test_ok(a == [[]])
 *a = [*[1]]; test_ok(a == [[1]])
-*a = [*[1,2]]; test_ok(a == [1,2])
+*a = [*[1,2]]; test_ok(a == [[1,2]])
 
 *a = *nil; test_ok(a == [nil])
 *a = *1; test_ok(a == [1])
@@ -103,7 +103,7 @@ a,b,*c = *1; test_ok([a,b,c] == [1,nil,[]])
 a,b,*c = *[]; test_ok([a,b,c] == [nil,nil,[]])
 a,b,*c = *[1]; test_ok([a,b,c] == [1,nil,[]])
 a,b,*c = *[nil]; test_ok([a,b,c] == [nil,nil,[]])
-a,b,*c = *[[]]; test_ok([a,b,c] == [nil,nil,[]])
+a,b,*c = *[[]]; test_ok([a,b,c] == [[],nil,[]])
 a,b,*c = *[1,2]; test_ok([a,b,c] == [1,2,[]])
 a,b,*c = *[*[]]; test_ok([a,b,c] == [nil,nil,[]])
 a,b,*c = *[*[1]]; test_ok([a,b,c] == [1,nil,[]])
@@ -133,10 +133,10 @@ def f; yield []; end; f {|*a| test_ok(a == [[]])}
 def f; yield [1]; end; f {|*a| test_ok(a == [[1]])}
 def f; yield [nil]; end; f {|*a| test_ok(a == [[nil]])}
 def f; yield [[]]; end; f {|*a| test_ok(a == [[[]]])}
-def f; yield [1,2]; end; f {|*a| test_ok(a == [1,2])}
+def f; yield [1,2]; end; f {|*a| test_ok(a == [[1,2]])}
 def f; yield [*[]]; end; f {|*a| test_ok(a == [[]])}
 def f; yield [*[1]]; end; f {|*a| test_ok(a == [[1]])}
-def f; yield [*[1,2]]; end; f {|*a| test_ok(a == [1,2])}
+def f; yield [*[1,2]]; end; f {|*a| test_ok(a == [[1,2]])}
 
 def f; yield *nil; end; f {|*a| test_ok(a == [nil])}
 def f; yield *1; end; f {|*a| test_ok(a == [1])}
@@ -164,7 +164,7 @@ def f; yield *1; end; f {|a,b,*c| test_ok([a,b,c] == [1,nil,[]])}
 def f; yield *[]; end; f {|a,b,*c| test_ok([a,b,c] == [nil,nil,[]])}
 def f; yield *[1]; end; f {|a,b,*c| test_ok([a,b,c] == [1,nil,[]])}
 def f; yield *[nil]; end; f {|a,b,*c| test_ok([a,b,c] == [nil,nil,[]])}
-def f; yield *[[]]; end; f {|a,b,*c| test_ok([a,b,c] == [nil,nil,[]])}
+def f; yield *[[]]; end; f {|a,b,*c| test_ok([a,b,c] == [[],nil,[]])}
 def f; yield *[*[]]; end; f {|a,b,*c| test_ok([a,b,c] == [nil,nil,[]])}
 def f; yield *[*[1]]; end; f {|a,b,*c| test_ok([a,b,c] == [1,nil,[]])}
 def f; yield *[*[1,2]]; end; f {|a,b,*c| test_ok([a,b,c] == [1,2,[]])}
@@ -190,6 +190,16 @@ def r; return *[*[]]; end; a = r(); test_ok(a == nil)
 def r; return *[*[1]]; end; a = r(); test_ok(a == 1)
 def r; return *[*[1,2]]; end; a = r(); test_ok(a == [1,2])
 
+def r; return *nil; end; a = *r(); test_ok(a == nil)
+def r; return *1; end; a = *r(); test_ok(a == 1)
+def r; return *[]; end; a = *r(); test_ok(a == nil)
+def r; return *[1]; end; a = *r(); test_ok(a == 1)
+def r; return *[nil]; end; a = *r(); test_ok(a == nil)
+def r; return *[[]]; end; a = *r(); test_ok(a == nil)
+def r; return *[*[]]; end; a = *r(); test_ok(a == nil)
+def r; return *[*[1]]; end; a = *r(); test_ok(a == 1)
+def r; return *[*[1,2]]; end; a = *r(); test_ok(a == [1,2])
+
 def r; return; end; *a = r(); test_ok(a == [nil])
 def r; return nil; end; *a = r(); test_ok(a == [nil])
 def r; return 1; end; *a = r(); test_ok(a == [1])
@@ -197,10 +207,10 @@ def r; return []; end; *a = r(); test_ok(a == [[]])
 def r; return [1]; end; *a = r(); test_ok(a == [[1]])
 def r; return [nil]; end; *a = r(); test_ok(a == [[nil]])
 def r; return [[]]; end; *a = r(); test_ok(a == [[[]]])
-def r; return [1,2]; end; *a = r(); test_ok(a == [1,2])
+def r; return [1,2]; end; *a = r(); test_ok(a == [[1,2]])
 def r; return [*[]]; end; *a = r(); test_ok(a == [[]])
 def r; return [*[1]]; end; *a = r(); test_ok(a == [[1]])
-def r; return [*[1,2]]; end; *a = r(); test_ok(a == [1,2])
+def r; return [*[1,2]]; end; *a = r(); test_ok(a == [[1,2]])
 
 def r; return *nil; end; *a = r(); test_ok(a == [nil])
 def r; return *1; end; *a = r(); test_ok(a == [1])
@@ -208,10 +218,21 @@ def r; return *[]; end; *a = r(); test_ok(a == [nil])
 def r; return *[1]; end; *a = r(); test_ok(a == [1])
 def r; return *[nil]; end; *a = r(); test_ok(a == [nil])
 def r; return *[[]]; end; *a = r(); test_ok(a == [[]])
-def r; return *[1,2]; end; *a = r(); test_ok(a == [1,2])
+def r; return *[1,2]; end; *a = r(); test_ok(a == [[1,2]])
 def r; return *[*[]]; end; *a = r(); test_ok(a == [nil])
 def r; return *[*[1]]; end; *a = r(); test_ok(a == [1])
-def r; return *[*[1,2]]; end; *a = r(); test_ok(a == [1,2])
+def r; return *[*[1,2]]; end; *a = r(); test_ok(a == [[1,2]])
+
+def r; return *nil; end; *a = *r(); test_ok(a == [nil])
+def r; return *1; end; *a = *r(); test_ok(a == [1])
+def r; return *[]; end; *a = *r(); test_ok(a == [nil])
+def r; return *[1]; end; *a = *r(); test_ok(a == [1])
+def r; return *[nil]; end; *a = *r(); test_ok(a == [nil])
+def r; return *[[]]; end; *a = *r(); test_ok(a == [])
+def r; return *[1,2]; end; *a = *r(); test_ok(a == [1,2])
+def r; return *[*[]]; end; *a = *r(); test_ok(a == [nil])
+def r; return *[*[1]]; end; *a = *r(); test_ok(a == [1])
+def r; return *[*[1,2]]; end; *a = *r(); test_ok(a == [1,2])
 
 def r; return; end; a,b,*c = r(); test_ok([a,b,c] == [nil,nil,[]])
 def r; return nil; end; a,b,*c = r(); test_ok([a,b,c] == [nil,nil,[]])
@@ -264,9 +285,9 @@ test_ok(f.call(42,55) == [42,55])
 a,=*[1]
 test_ok(a == 1)
 a,=*[[1]]
-test_ok(a == 1)
-a,=*[[[1]]]
 test_ok(a == [1])
+a,=*[[[1]]]
+test_ok(a == [[1]])
 
 x, (y, z) = 1, 2, 3
 test_ok([1,2,nil] == [x,y,z])
@@ -303,10 +324,10 @@ a = loop do break *[*[1,2]]; end; test_ok(a == [1,2])
 *a = loop do break [1]; end; test_ok(a == [[1]])
 *a = loop do break [nil]; end; test_ok(a == [[nil]])
 *a = loop do break [[]]; end; test_ok(a == [[[]]])
-*a = loop do break [1,2]; end; test_ok(a == [1,2])
+*a = loop do break [1,2]; end; test_ok(a == [[1,2]])
 *a = loop do break [*[]]; end; test_ok(a == [[]])
 *a = loop do break [*[1]]; end; test_ok(a == [[1]])
-*a = loop do break [*[1,2]]; end; test_ok(a == [1,2])
+*a = loop do break [*[1,2]]; end; test_ok(a == [[1,2]])
 
 *a = loop do break *nil; end; test_ok(a == [nil])
 *a = loop do break *1; end; test_ok(a == [1])
@@ -314,10 +335,21 @@ a = loop do break *[*[1,2]]; end; test_ok(a == [1,2])
 *a = loop do break *[1]; end; test_ok(a == [1])
 *a = loop do break *[nil]; end; test_ok(a == [nil])
 *a = loop do break *[[]]; end; test_ok(a == [[]])
-*a = loop do break *[1,2]; end; test_ok(a == [1,2])
+*a = loop do break *[1,2]; end; test_ok(a == [[1,2]])
 *a = loop do break *[*[]]; end; test_ok(a == [nil])
 *a = loop do break *[*[1]]; end; test_ok(a == [1])
-*a = loop do break *[*[1,2]]; end; test_ok(a == [1,2])
+*a = loop do break *[*[1,2]]; end; test_ok(a == [[1,2]])
+
+*a = *loop do break *nil; end; test_ok(a == [nil])
+*a = *loop do break *1; end; test_ok(a == [1])
+*a = *loop do break *[]; end; test_ok(a == [nil])
+*a = *loop do break *[1]; end; test_ok(a == [1])
+*a = *loop do break *[nil]; end; test_ok(a == [nil])
+*a = *loop do break *[[]]; end; test_ok(a == [])
+*a = *loop do break *[1,2]; end; test_ok(a == [1,2])
+*a = *loop do break *[*[]]; end; test_ok(a == [nil])
+*a = *loop do break *[*[1]]; end; test_ok(a == [1])
+*a = *loop do break *[*[1,2]]; end; test_ok(a == [1,2])
 
 a,b,*c = loop do break; end; test_ok([a,b,c] == [nil,nil,[]])
 a,b,*c = loop do break nil; end; test_ok([a,b,c] == [nil,nil,[]])
@@ -342,7 +374,7 @@ a,b,*c = loop do break *[*[]]; end; test_ok([a,b,c] == [nil,nil,[]])
 a,b,*c = loop do break *[*[1]]; end; test_ok([a,b,c] == [1,nil,[]])
 a,b,*c = loop do break *[*[1,2]]; end; test_ok([a,b,c] == [1,2,[]])
 
-def r(val); a = yield(); test_ok(a == val); end
+def r(val); a = yield(); test_ok(a == val, 2); end
 r(nil){next}
 r(nil){next nil}
 r(1){next 1}
@@ -364,7 +396,7 @@ r(nil){next *[*[]]}
 r(1){next *[*[1]]}
 r([1,2]){next *[*[1,2]]}
 
-def r(val); *a = yield(); test_ok(a == val); end
+def r(val); *a = yield(); test_ok(a == val, 2); end
 r([nil]){next}
 r([nil]){next nil}
 r([1]){next 1}
@@ -372,23 +404,24 @@ r([[]]){next []}
 r([[1]]){next [1]}
 r([[nil]]){next [nil]}
 r([[[]]]){next [[]]}
-r([1,2]){next [1,2]}
+r([[1,2]]){next [1,2]}
 r([[]]){next [*[]]}
 r([[1]]){next [*[1]]}
-r([1,2]){next [*[1,2]]}
+r([[1,2]]){next [*[1,2]]}
 
+def r(val); *a = *yield(); test_ok(a == val, 2); end
 r([nil]){next *nil}
 r([1]){next *1}
 r([nil]){next *[]}
 r([1]){next *[1]}
 r([nil]){next *[nil]}
-r([[]]){next *[[]]}
+r([]){next *[[]]}
 r([1,2]){next *[1,2]}
 r([nil]){next *[*[]]}
 r([1]){next *[*[1]]}
 r([1,2]){next *[*[1,2]]}
 
-def r(val); a,b,*c = yield(); test_ok([a,b,c] == val); end
+def r(val); a,b,*c = yield(); test_ok([a,b,c] == val, 2); end
 r([nil,nil,[]]){next}
 r([nil,nil,[]]){next nil}
 r([1,nil,[]]){next 1}
@@ -401,6 +434,7 @@ r([nil,nil,[]]){next [*[]]}
 r([1,nil,[]]){next [*[1]]}
 r([1,2,[]]){next [*[1,2]]}
 
+def r(val); a,b,*c = *yield(); test_ok([a,b,c] == val, 2); end
 r([nil,nil,[]]){next *nil}
 r([1,nil,[]]){next *1}
 r([nil,nil,[]]){next *[]}
@@ -698,7 +732,7 @@ $x.sort!{|a,b| b-a}		# reverse sort
 test_ok($x == [7,5,3,2,1])
 
 # split test
-$x = "The Botest_ok of Mormon"
+$x = "The Book of Mormon"
 test_ok($x.split(//).reverse!.join == $x.reverse)
 test_ok($x.reverse == $x.reverse!)
 test_ok("1 byte string".split(//).reverse.join(":") == "g:n:i:r:t:s: :e:t:y:b: :1")
@@ -716,7 +750,7 @@ test_ok(($x * 5).join(":") == '1:1:1:1:1')
 test_ok(($x * 1).join(":") == '1')
 test_ok(($x * 0).join(":") == '')
 
-*$x = (1..7).to_a
+*$x = *(1..7).to_a
 test_ok($x.size == 7)
 test_ok($x == [1, 2, 3, 4, 5, 6, 7])
 
@@ -844,6 +878,18 @@ end
 $x = false
 begin
   tt3{}
+rescue ArgumentError
+  $x = true
+rescue Exception
+end
+test_ok($x)
+
+def tt4 &block
+  tt2(raise(ArgumentError,""),&block)
+end
+$x = false
+begin
+  tt4{}
 rescue ArgumentError
   $x = true
 rescue Exception
@@ -1033,6 +1079,34 @@ test_ok(get_block(&lambda).class == Proc)
 test_ok(Proc.new{|a,| a}.call(1,2,3) == 1)
 argument_test(true, Proc.new{|a,|}, 1,2)
 
+def test_return1
+  Proc.new {
+    return 55
+  }.call + 5
+end
+test_ok(test_return1() == 55)
+def test_return2
+  lambda {
+    return 55
+  }.call + 5
+end
+test_ok(test_return2() == 60)
+
+def proc_call(&b)
+  b.call
+end
+def proc_yield()
+  yield
+end
+def proc_return1
+  proc_call{return 42}+1
+end
+test_ok(proc_return1() == 42)
+def proc_return2
+  proc_yield{return 42}+1
+end
+test_ok(proc_return2() == 42)
+
 def ljump_test(state, proc, *args)
   x = state
   begin
@@ -1078,6 +1152,22 @@ class ITER_TEST2 < ITER_TEST1
 end
 test_ok(ITER_TEST2.new.a {})
 
+class ITER_TEST3
+  def foo x
+    return yield if block_given?
+    x
+  end
+end
+
+class ITER_TEST4 < ITER_TEST3
+  def foo x
+    test_ok(super == yield)
+    test_ok(super(x, &nil) == x)
+  end
+end
+
+ITER_TEST4.new.foo(44){55}   
+
 test_check "float"
 test_ok(2.6.floor == 2)
 test_ok((-2.6).floor == -3)
@@ -1089,27 +1179,27 @@ test_ok(2.6.round == 3)
 test_ok((-2.4).truncate == -2)
 test_ok((13.4 % 1 - 0.4).abs < 0.0001)
 nan = 0.0/0
-def nan.test(v)
-  test_ok(self != v)
-  test_ok((self < v) == false)
-  test_ok((self > v) == false)
-  test_ok((self <= v) == false)
-  test_ok((self >= v) == false)
+def nan_test(x,y)
+  test_ok(x != y)
+  test_ok((x < y) == false)
+  test_ok((x > y) == false)
+  test_ok((x <= y) == false)
+  test_ok((x >= y) == false)
 end
-nan.test(nan)
-nan.test(0)
-nan.test(1)
-nan.test(-1)
-nan.test(1000)
-nan.test(-1000)
-nan.test(1_000_000_000_000)
-nan.test(-1_000_000_000_000)
-nan.test(100.0);
-nan.test(-100.0);
-nan.test(0.001);
-nan.test(-0.001);
-nan.test(1.0/0);
-nan.test(-1.0/0);
+nan_test(nan, nan)
+nan_test(nan, 0)
+nan_test(nan, 1)
+nan_test(nan, -1)
+nan_test(nan, 1000)
+nan_test(nan, -1000)
+nan_test(nan, 1_000_000_000_000)
+nan_test(nan, -1_000_000_000_000)
+nan_test(nan, 100.0);
+nan_test(nan, -100.0);
+nan_test(nan, 0.001);
+nan_test(nan, -0.001);
+nan_test(nan, 1.0/0);
+nan_test(nan, -1.0/0);
 
 #s = "3.7517675036461267e+17"
 #test_ok(s == sprintf("%.16e", s.to_f))
@@ -1143,14 +1233,14 @@ test_ok(2**32 - 5 == (2**32-3)-2)
 
 $good = true;
 for i in 1000..1014
-  $good = false if ((1<<i) != (2**i))
+  $good = false if ((1 << i) != (2**i))
 end
 test_ok($good)
 
 $good = true;
-n1=1<<1000
+n1= 1 << 1000
 for i in 1000..1014
-  $good = false if ((1<<i) != n1)
+  $good = false if ((1 << i) != n1)
   n1 *= 2
 end
 test_ok($good)

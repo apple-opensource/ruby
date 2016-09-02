@@ -1,8 +1,8 @@
 #
 #   rational.rb - 
 #   	$Release Version: 0.5 $
-#   	$Revision: 1.1.1.3 $
-#   	$Date: 2003/10/15 10:11:48 $
+#   	$Revision: 1.7 $
+#   	$Date: 1999/08/24 12:49:28 $
 #   	by Keiju ISHITSUKA(SHL Japan Inc.)
 #
 # --
@@ -45,10 +45,10 @@ def Rational(a, b = 1)
 end
   
 class Rational < Numeric
-  @RCS_ID='-$Id: rational.rb,v 1.1.1.3 2003/10/15 10:11:48 melville Exp $-'
+  @RCS_ID='-$Id: rational.rb,v 1.7 1999/08/24 12:49:28 keiju Exp keiju $-'
 
   def Rational.reduce(num, den = 1)
-    raise ZeroDivisionError, "denominator is 0" if den == 0
+    raise ZeroDivisionError, "denominator is zero" if den == 0
 
     if den < 0
       num = -num
@@ -135,7 +135,7 @@ class Rational < Numeric
       den = @denominator * a.numerator
       Rational(num, den)
     elsif a.kind_of?(Integer)
-      raise ZeroDivisionError, "divided by 0" if a == 0
+      raise ZeroDivisionError, "division by zero" if a == 0
       self / Rational.new!(a, 1)
     elsif a.kind_of?(Float)
       Float(self) / a

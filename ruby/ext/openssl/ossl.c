@@ -1,5 +1,5 @@
 /*
- * $Id: ossl.c,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+ * $Id: ossl.c,v 1.11.2.3 2004/12/16 09:39:54 gotoyuzo Exp $
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2001-2002  Michal Rokos <m.rokos@sh.cvut.cz>
  * All rights reserved.
@@ -10,142 +10,6 @@
  */
 #include "ossl.h"
 #include <stdarg.h> /* for ossl_raise */
-
-#if defined(HAVE_SYS_TIME_H)
-#  include <sys/time.h>
-#elif !defined(NT) && !defined(_WIN32)
-struct timeval {
-    long tv_sec;	/* seconds */
-    long tv_usec;	/* and microseconds */
-};
-#endif
-
-/*
- * DATE conversion
- */
-VALUE
-asn1time_to_time(ASN1_TIME *time)
-{
-    struct tm tm;
-    VALUE argv[6];
-    
-    if (!time) {
-	ossl_raise(rb_eTypeError, "ASN1_TIME is NULL!");
-    }
-    memset(&tm, 0, sizeof(struct tm));
-	
-    switch (time->type) {
-    case V_ASN1_UTCTIME:
-	if (sscanf(time->data, "%2d%2d%2d%2d%2d%2dZ", &tm.tm_year, &tm.tm_mon,
-    		&tm.tm_mday, &tm.tm_hour, &tm.tm_min, &tm.tm_sec) != 6) {
-	    ossl_raise(rb_eTypeError, "bad UTCTIME format");
-	} 
-	if (tm.tm_year < 69) {
-	    tm.tm_year += 2000;
-	} else {
-	    tm.tm_year += 1900;
-	}
-	tm.tm_mon -= 1;
-	break;
-    case V_ASN1_GENERALIZEDTIME:
-	if (sscanf(time->data, "%4d%2d%2d%2d%2d%2dZ", &tm.tm_year, &tm.tm_mon,
-    		&tm.tm_mday, &tm.tm_hour, &tm.tm_min, &tm.tm_sec) != 6) {
-	    ossl_raise(rb_eTypeError, "bad GENERALIZEDTIME format" );
-	} 
-	tm.tm_mon -= 1;
-	break;
-    default:
-	rb_warning("unknown time format");
-        return Qnil;
-    }
-    argv[0] = INT2NUM(tm.tm_year);
-    argv[1] = INT2NUM(tm.tm_mon+1);
-    argv[2] = INT2NUM(tm.tm_mday);
-    argv[3] = INT2NUM(tm.tm_hour);
-    argv[4] = INT2NUM(tm.tm_min);
-    argv[5] = INT2NUM(tm.tm_sec);
-
-    return rb_funcall2(rb_cTime, rb_intern("utc"), 6, argv);
-}
-
-/*
- * This function is not exported in Ruby's *.h
- */
-extern struct timeval rb_time_timeval(VALUE);
-
-time_t
-time_to_time_t(VALUE time)
-{
-    struct timeval t = rb_time_timeval(time);
-    return t.tv_sec;
-}
-
-/*
- * ASN1_INTEGER conversions
- * TODO: Make a decision what's the right way to do this.
- */
-#define DO_IT_VIA_RUBY 0
-VALUE
-asn1integer_to_num(ASN1_INTEGER *ai)
-{
-    BIGNUM *bn;
-#if DO_IT_VIA_RUBY
-    char *txt;
-#endif
-    VALUE num;
-
-    if (!ai) {
-	ossl_raise(rb_eTypeError, "ASN1_INTEGER is NULL!");
-    }
-    if (!(bn = ASN1_INTEGER_to_BN(ai, NULL))) {
-	ossl_raise(eOSSLError, NULL);
-    }
-#if DO_IT_VIA_RUBY
-    if (!(txt = BN_bn2dec(bn))) {
-	BN_free(bn);
-	ossl_raise(eOSSLError, NULL);
-    }
-    num = rb_cstr_to_inum(txt, 10, Qtrue);
-    OPENSSL_free(txt);
-#else
-    num = ossl_bn_new(bn);
-#endif
-    BN_free(bn);
-
-    return num;
-}
-
-#if DO_IT_VIA_RUBY
-ASN1_INTEGER *num_to_asn1integer(VALUE obj, ASN1_INTEGER *ai)
-{
-    BIGNUM *bn = NULL;
-
-    if (RTEST(rb_obj_is_kind_of(obj, cBN))) {
-	bn = GetBNPtr(obj);
-    } else {
-	obj = rb_String(obj);
-	if (!BN_dec2bn(&bn, StringValuePtr(obj))) {
-	    ossl_raise(eOSSLError, NULL);
-	}
-    }
-    if (!(ai = BN_to_ASN1_INTEGER(bn, ai))) {
-	BN_free(bn);
-	ossl_raise(eOSSLError, NULL);
-    }
-    BN_free(bn);
-    return ai;
-}
-#else
-ASN1_INTEGER *num_to_asn1integer(VALUE obj, ASN1_INTEGER *ai)
-{
-    BIGNUM *bn = GetBNPtr(obj);
-    
-    if (!(ai = BN_to_ASN1_INTEGER(bn, ai))) {
-	ossl_raise(eOSSLError, NULL);
-    }
-    return ai;
-}
-#endif
 
 /*
  * String to HEXString conversion
@@ -183,54 +47,8 @@ string2hex(char *buf, int buf_len, char **hexbuf, int *hexbuf_len)
 /*
  * Data Conversion
  */
-BIO *
-ossl_obj2bio(VALUE obj)
-{
-    BIO *bio;
-
-    if (TYPE(obj) == T_FILE) {
-	OpenFile *fptr;
-	GetOpenFile(obj, fptr);
-	rb_io_check_readable(fptr);
-	bio = BIO_new_fp(fptr->f, BIO_NOCLOSE);
-    }       
-    else {
-	StringValue(obj);
-	bio = BIO_new_mem_buf(RSTRING(obj)->ptr, RSTRING(obj)->len);
-    }
-    if (!bio) ossl_raise(eOSSLError, NULL);
-
-    return bio;
-}
-
-BIO *
-ossl_protect_obj2bio(VALUE obj, int *status)
-{
-     BIO *ret = NULL;
-     ret = (BIO*)rb_protect((VALUE(*)_((VALUE)))ossl_obj2bio, obj, status);
-     return ret;
-}
-
-VALUE 
-ossl_membio2str(BIO *bio)
-{
-    VALUE ret;
-    BUF_MEM *buf;
-
-    BIO_get_mem_ptr(bio, &buf);
-    ret = rb_str_new(buf->data, buf->length);
-
-    return ret;
-}
-
-VALUE
-ossl_protect_membio2str(BIO *bio, int *status)
-{
-    return rb_protect((VALUE(*)_((VALUE)))ossl_membio2str, (VALUE)bio, status);
-}
-
 STACK_OF(X509) *
-ossl_x509_ary2sk(VALUE ary)  
+ossl_x509_ary2sk0(VALUE ary)  
 {
     STACK_OF(X509) *sk;
     VALUE val;
@@ -245,7 +63,7 @@ ossl_x509_ary2sk(VALUE ary)
         val = rb_ary_entry(ary, i);
         if (!rb_obj_is_kind_of(val, cX509Cert)) {
             sk_X509_pop_free(sk, X509_free);
-            ossl_raise(eOSSLError, "object except X509 cert is in array"); 
+            ossl_raise(eOSSLError, "object not X509 cert in array"); 
         }
         x509 = DupX509CertPtr(val); /* NEED TO DUP */
         sk_X509_push(sk, x509);
@@ -256,11 +74,23 @@ ossl_x509_ary2sk(VALUE ary)
 STACK_OF(X509) *
 ossl_protect_x509_ary2sk(VALUE ary, int *status)
 {
-    return (STACK_OF(X509)*)rb_protect((VALUE(*)_((VALUE)))ossl_x509_ary2sk, ary, status);
+    return (STACK_OF(X509)*)rb_protect((VALUE(*)_((VALUE)))ossl_x509_ary2sk0,
+				       ary, status);
 }
 
-#if 0
-#define OSSL_SK2ARY(name, type)			\
+STACK_OF(X509) *
+ossl_x509_ary2sk(VALUE ary)
+{
+    STACK_OF(X509) *sk;
+    int status = 0;
+
+    sk = ossl_protect_x509_ary2sk(ary, &status);
+    if(status) rb_jump_tag(status);
+
+    return sk;
+}
+
+#define OSSL_IMPL_SK2ARY(name, type)	        \
 VALUE						\
 ossl_##name##_sk2ary(STACK *sk)			\
 {						\
@@ -270,7 +100,7 @@ ossl_##name##_sk2ary(STACK *sk)			\
 						\
     if (!sk) {					\
 	OSSL_Debug("empty sk!");		\
-	return rb_ary_new();			\
+	return Qnil;				\
     }						\
     num = sk_num(sk);				\
     if (num < 0) {				\
@@ -285,9 +115,28 @@ ossl_##name##_sk2ary(STACK *sk)			\
     }						\
     return ary;					\
 }
-OSSL_SK2ARY(x509, X509)
-OSSL_SK2ARY(x509crl, X509_CRL)
-#endif
+OSSL_IMPL_SK2ARY(x509, X509)
+OSSL_IMPL_SK2ARY(x509crl, X509_CRL)
+
+static VALUE
+ossl_str_new(int size)
+{
+    return rb_str_new(0, size);
+}
+
+VALUE
+ossl_buf2str(char *buf, int len)
+{
+    VALUE str;
+    int status = 0;
+
+    str = rb_protect((VALUE(*)_((VALUE)))ossl_str_new, len, &status);
+    if(!NIL_P(str)) memcpy(RSTRING(str)->ptr, buf, len);
+    OPENSSL_free(buf);
+    if(status) rb_jump_tag(status);
+
+    return str;
+}
 
 /*
  * our default PEM callback
@@ -397,6 +246,30 @@ VALUE mOSSL;
 VALUE eOSSLError;
 
 /*
+ * Convert to DER string
+ */
+ID ossl_s_to_der;
+
+VALUE
+ossl_to_der(VALUE obj)
+{
+    VALUE tmp;
+
+    tmp = rb_funcall(obj, ossl_s_to_der, 0);
+    StringValue(tmp);
+
+    return tmp;
+}
+
+VALUE
+ossl_to_der_if_possible(VALUE obj)
+{
+    if(rb_respond_to(obj, ossl_s_to_der))
+	return ossl_to_der(obj);
+    return obj;
+}
+
+/*
  * Errors
  */
 void
@@ -412,17 +285,18 @@ ossl_raise(VALUE exc, const char *fmt, ...)
 	va_start(args, fmt);
 	len = vsnprintf(buf, BUFSIZ, fmt, args);
 	va_end(args);
-	len += snprintf(buf+len, BUFSIZ-len, ": ");
     }
-    if (e) {
+    if (len < BUFSIZ && e) {
 	if (dOSSL == Qtrue) /* FULL INFO */
 	    msg = ERR_error_string(e, NULL);
 	else
 	    msg = ERR_reason_error_string(e);
 	ERR_clear_error();
-	len += snprintf(buf+len, BUFSIZ-len, "%s", msg);
+	fmt = len ? ": %s" : "%s";
+	len += snprintf(buf+len, BUFSIZ-len, fmt, msg);
     }
 
+    if(len > BUFSIZ) len = strlen(buf);
     rb_exc_raise(rb_exc_new(exc, buf, len));
 }
 
@@ -539,6 +413,11 @@ Init_openssl()
     rb_define_module_function(mOSSL, "debug=", ossl_debug_set, 1);
 
     /*
+     * Get ID of to_der
+     */
+    ossl_s_to_der = rb_intern("to_der");
+
+    /*
      * Init components
      */
     Init_ossl_bn();
@@ -547,12 +426,15 @@ Init_openssl()
     Init_ossl_digest();
     Init_ossl_hmac();
     Init_ossl_ns_spki();
+    Init_ossl_pkcs12();
     Init_ossl_pkcs7();
     Init_ossl_pkey();
     Init_ossl_rand();
     Init_ossl_ssl();
     Init_ossl_x509();
     Init_ossl_ocsp();
+    Init_ossl_engine();
+    Init_ossl_asn1();
 }
 
 #if defined(OSSL_DEBUG)

@@ -2,14 +2,14 @@
 
   digest.c -
 
-  $Author: melville $
+  $Author: matz $
   created at: Fri May 25 08:57:27 JST 2001
 
   Copyright (C) 1995-2001 Yukihiro Matsumoto
   Copyright (C) 2001 Akinori MUSHA
 
   $RoughId: digest.c,v 1.16 2001/07/13 15:38:27 knu Exp $
-  $Id: digest.c,v 1.1.1.2 2003/10/15 10:11:47 melville Exp $
+  $Id: digest.c,v 1.14.2.1 2004/09/18 06:56:36 matz Exp $
 
 ************************************************/
 
@@ -73,7 +73,8 @@ rb_digest_base_alloc(klass)
 
     algo = get_digest_base_metadata(klass);
 
-    pctx = xmalloc(algo->ctx_size);
+    /* XXX: An uninitialized buffer leads ALGO_Equal() to fail */
+    pctx = xcalloc(algo->ctx_size, 1);
     algo->init_func(pctx);
 
     obj = Data_Wrap_Struct(klass, 0, free, pctx);
@@ -148,8 +149,8 @@ rb_digest_base_copy(copy, obj)
 
     if (copy == obj) return copy;
     rb_check_frozen(copy);
-    algo = get_digest_base_metadata(CLASS_OF(copy));
-    if (algo != get_digest_base_metadata(CLASS_OF(obj))) {
+    algo = get_digest_base_metadata(rb_obj_class(copy));
+    if (algo != get_digest_base_metadata(rb_obj_class(obj))) {
 	rb_raise(rb_eTypeError, "wrong argument class");
     }
     Data_Get_Struct(obj, void, pctx1);
@@ -167,7 +168,7 @@ rb_digest_base_update(self, str)
     void *pctx;
 
     StringValue(str);
-    algo = get_digest_base_metadata(CLASS_OF(self));
+    algo = get_digest_base_metadata(rb_obj_class(self));
     Data_Get_Struct(self, void, pctx);
 
     algo->update_func(pctx, RSTRING(str)->ptr, RSTRING(str)->len);
@@ -200,7 +201,7 @@ rb_digest_base_digest(self)
     size_t len;
     VALUE str;
 
-    algo = get_digest_base_metadata(CLASS_OF(self));
+    algo = get_digest_base_metadata(rb_obj_class(self));
     Data_Get_Struct(self, void, pctx1);
 
     len = algo->ctx_size;
@@ -231,7 +232,7 @@ rb_digest_base_hexdigest(self)
     size_t len;
     VALUE str;
 
-    algo = get_digest_base_metadata(CLASS_OF(self));
+    algo = get_digest_base_metadata(rb_obj_class(self));
     Data_Get_Struct(self, void, pctx1);
 
     len = algo->ctx_size;
@@ -260,10 +261,10 @@ rb_digest_base_equal(self, other)
     VALUE klass;
     VALUE str1, str2;
 
-    klass = CLASS_OF(self);
+    klass = rb_obj_class(self);
     algo = get_digest_base_metadata(klass);
 
-    if (CLASS_OF(other) == klass) {
+    if (rb_obj_class(other) == klass) {
 	void *pctx1, *pctx2;
 
 	Data_Get_Struct(self, void, pctx1);
@@ -303,7 +304,7 @@ Init_digest()
     rb_define_singleton_method(cDigest_Base, "hexdigest", rb_digest_base_s_hexdigest, 1);
 
     rb_define_method(cDigest_Base, "initialize", rb_digest_base_init, -1);
-    rb_define_method(cDigest_Base, "copy_object",  rb_digest_base_copy, 1);
+    rb_define_method(cDigest_Base, "initialize_copy",  rb_digest_base_copy, 1);
     rb_define_method(cDigest_Base, "update", rb_digest_base_update, 1);
     rb_define_method(cDigest_Base, "<<", rb_digest_base_update, 1);
     rb_define_method(cDigest_Base, "digest", rb_digest_base_digest, 0);

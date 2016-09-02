@@ -1,5 +1,5 @@
 /*
- * $Id: ossl_hmac.c,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+ * $Id: ossl_hmac.c,v 1.4.2.2 2004/12/15 01:54:39 matz Exp $
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2001-2002  Michal Rokos <m.rokos@sh.cvut.cz>
  * All rights reserved.
@@ -41,8 +41,8 @@ VALUE eHMACError;
 static void
 ossl_hmac_free(HMAC_CTX *ctx)
 {
-	HMAC_CTX_cleanup(ctx);
-	free(ctx);
+    HMAC_CTX_cleanup(ctx);
+    free(ctx);
 }
 
 static VALUE
@@ -52,20 +52,20 @@ ossl_hmac_alloc(VALUE klass)
     VALUE obj;
 
     MakeHMAC(obj, klass, ctx);
+    HMAC_CTX_init(ctx);
 	
     return obj;
 }
-DEFINE_ALLOC_WRAPPER(ossl_hmac_alloc)
 
 static VALUE
 ossl_hmac_initialize(VALUE self, VALUE key, VALUE digest)
 {
     HMAC_CTX *ctx;
 
-    GetHMAC(self, ctx);
     StringValue(key);
-    HMAC_CTX_init(ctx);
-    HMAC_Init(ctx, RSTRING(key)->ptr, RSTRING(key)->len, GetDigestPtr(digest));
+    GetHMAC(self, ctx);
+    HMAC_Init_ex(ctx, RSTRING(key)->ptr, RSTRING(key)->len,
+		 GetDigestPtr(digest), NULL);
 
     return self;
 }
@@ -92,8 +92,8 @@ ossl_hmac_update(VALUE self, VALUE data)
 {
     HMAC_CTX *ctx;
 
-    GetHMAC(self, ctx);
     StringValue(data);
+    GetHMAC(self, ctx);
     HMAC_Update(ctx, RSTRING(data)->ptr, RSTRING(data)->len);
 
     return self;
@@ -108,6 +108,7 @@ hmac_final(HMAC_CTX *ctx, char **buf, int *buf_len)
 	ossl_raise(eHMACError, NULL);
     }
     if (!(*buf = OPENSSL_malloc(HMAC_size(&final)))) {
+	HMAC_CTX_cleanup(&final);
 	OSSL_Debug("Allocating %d mem", HMAC_size(&final));
 	ossl_raise(eHMACError, "Cannot allocate memory for hmac");
     }
@@ -125,8 +126,7 @@ ossl_hmac_digest(VALUE self)
 	
     GetHMAC(self, ctx);
     hmac_final(ctx, &buf, &buf_len);
-    digest = rb_str_new(buf, buf_len);
-    OPENSSL_free(buf);
+    digest = ossl_buf2str(buf, buf_len);
     
     return digest;
 }
@@ -145,9 +145,8 @@ ossl_hmac_hexdigest(VALUE self)
 	OPENSSL_free(buf);
 	ossl_raise(eHMACError, "Memory alloc error");
     }
-    hexdigest = rb_str_new(hexbuf, 2 * buf_len);
     OPENSSL_free(buf);
-    OPENSSL_free(hexbuf);
+    hexdigest = ossl_buf2str(hexbuf, 2 * buf_len);
 
     return hexdigest;
 }
@@ -181,9 +180,8 @@ ossl_hmac_s_hexdigest(VALUE klass, VALUE digest, VALUE key, VALUE data)
     if (string2hex(buf, buf_len, &hexbuf, NULL) != 2 * buf_len) {
 	ossl_raise(eHMACError, "Cannot convert buf to hexbuf");
     }
-    hexdigest = rb_str_new(hexbuf, 2 * buf_len);
-    OPENSSL_free(hexbuf);
-	
+    hexdigest = ossl_buf2str(hexbuf, 2 * buf_len);
+
     return hexdigest;
 }
 

@@ -25,7 +25,8 @@ module WEBrick
 
     attr_accessor :request_method, :request_uri, :request_http_version
     attr_accessor :filename
-    attr_reader :config, :keep_alive, :sent_size
+    attr_accessor :keep_alive
+    attr_reader :config, :sent_size
 
     def initialize(config)
       @config = config
@@ -62,6 +63,24 @@ module WEBrick
       @header[field.downcase] = value.to_s
     end
 
+    def content_length
+      if len = self['content-length']
+        return Integer(len)
+      end
+    end
+
+    def content_length=(len)
+      self['content-length'] = len.to_s
+    end
+
+    def content_type
+      self['content-type']
+    end
+
+    def content_type=(type)
+      self['content-type'] = type
+    end
+
     def each
       @header.each{|k, v|  yield(k, v) }
     end
@@ -83,10 +102,10 @@ module WEBrick
         setup_header()
         send_header(socket)
         send_body(socket)
-      rescue Errno::EPIPE
-        @logger.error("HTTPResponse#send_response: EPIPE occured.")
+      rescue Errno::EPIPE, Errno::ECONNRESET, Errno::ENOTCONN => ex
+        @logger.debug(ex)
         @keep_alive = false
-      rescue => ex
+      rescue Exception => ex
         @logger.error(ex)
         @keep_alive = false
       end
@@ -131,11 +150,12 @@ module WEBrick
       # Keep-Alive connection.
       if @header['connection'] == "close"
          @keep_alive = false
-      end
-      if keep_alive?
+      elsif keep_alive?
         if chunked? || @header['content-length']
           @header['connection'] = "Keep-Alive"
         end
+      else
+        @header['connection'] = "close"
       end
 
       # Location is a single absoluteURI.
@@ -234,24 +254,27 @@ module WEBrick
     private
 
     def send_body_io(socket)
-      if @request_method == "HEAD"
-        # do nothing
-      elsif chunked?
-        while buf = @body.read(BUFSIZE)
-          next if buf.empty?
-          data = ""
-          data << format("%x", buf.size) << CRLF
-          data << buf << CRLF
-          _write_data(socket, data)
-          @sent_size += buf.size
+      begin
+        if @request_method == "HEAD"
+          # do nothing
+        elsif chunked?
+          while buf = @body.read(BUFSIZE)
+            next if buf.empty?
+            data = ""
+            data << format("%x", buf.size) << CRLF
+            data << buf << CRLF
+            _write_data(socket, data)
+            @sent_size += buf.size
+          end
+          _write_data(socket, "0#{CRLF}#{CRLF}")
+        else
+          size = @header['content-length'].to_i
+          _send_file(socket, @body, 0, size)
+          @sent_size = size
         end
-        _write_data(socket, "0#{CRLF}#{CRLF}")
-      else
-        size = @header['content-length'].to_i
-        _send_file(socket, @body, 0, size.to_i)
-        @sent_size = size
+      ensure
+        @body.close
       end
-      @body.close
     end
 
     def send_body_string(socket)

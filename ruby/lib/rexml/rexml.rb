@@ -1,26 +1,26 @@
-# REXML is an XML parser for Ruby, in Ruby.
-# 
-# URL: http://www.germane-software.com/software/rexml
-# Author: Sean Russell <ser@germane-software.com>
-# Version: 2.5.6
-# Date: +2003/054
-
-
-
-# 
-# Short Description:
-# Why did I write REXML?   At the time of this writing, there were already
-# two XML parsers for Ruby. The first is a Ruby binding to a native XML
-# parser.  This is a fast parser, using proven technology. However,
-# it isn't very portable. The second is a native Ruby implementation, but
-# I didn't like its API very much.  I wrote REXML for myself, so that I'd
-# have an XML parser that had an intuitive API.
+# REXML is an XML toolkit for Ruby[http://www.ruby-lang.org], in Ruby.
 #
-# API documentation can be downloaded from the REXML home page, or can
-# be accessed online at http://www.germane-software.com/software/rexml_doc
-# A tutorial is available in docs/tutorial.html
+# REXML is a _pure_ Ruby, XML 1.0 conforming,
+# non-validating[http://www.w3.org/TR/2004/REC-xml-20040204/#sec-conformance]
+# toolkit with an intuitive API.  REXML passes 100% of the non-validating Oasis
+# tests[http://www.oasis-open.org/committees/xml-conformance/xml-test-suite.shtml],
+# and provides tree, stream, SAX2, pull, and lightweight APIs.  REXML also 
+# includes a full XPath[http://www.w3c.org/tr/xpath] 1.0 implementation. Since 
+# Ruby 1.8, REXML is included in the standard Ruby distribution.
+#
+# Main page:: http://www.germane-software.com/software/rexml
+# Author:: Sean Russell <serATgermaneHYPHENsoftwareDOTcom>
+# Date:: +2004/200
+# Version:: 3.1.2.1
+# 
+# This API documentation can be downloaded from the REXML home page, or can
+# be accessed online[http://www.germane-software.com/software/rexml_doc]
+#
+# A tutorial is available in the REXML distribution in docs/tutorial.html,
+# or can be accessed 
+# online[http://www.germane-software.com/software/rexml/docs/tutorial.html]
 module REXML
-	Copyright = "Copyright #{Time.now.year} Sean Russell <ser@germane-software.com>"
-	Date = "+2003/110"
-	Version = "2.7.1"
+	Copyright = "Copyright © 2001, 2002, 2003, 2004 Sean Russell <ser@germane-software.com>"
+	Date = "+2004/200"
+	Version = "3.1.2.1"
 end

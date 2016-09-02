@@ -2,8 +2,8 @@
 
   env.h -
 
-  $Author: melville $
-  $Date: 2003/10/15 10:11:46 $
+  $Author: matz $
+  $Date: 2003/10/20 08:33:48 $
   created at: Mon Jul 11 11:53:03 JST 1994
 
   Copyright (C) 1993-2003 Yukihiro Matsumoto
@@ -20,12 +20,12 @@ extern struct FRAME {
     ID last_func;
     ID orig_func;
     VALUE last_class;
-    VALUE cbase;
     struct FRAME *prev;
     struct FRAME *tmp;
     struct RNode *node;
     int iter;
     int flags;
+    unsigned long uniq;
 } *ruby_frame;
 
 void rb_gc_mark_frame _((struct FRAME *));

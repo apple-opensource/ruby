@@ -115,10 +115,9 @@ module WEBrick
     module_function :load_mime_types
 
     def mime_type(filename, mime_tab)
-      if suffix = (/\.(\w+)$/ =~ filename && $1)
-        mtype = mime_tab[suffix.downcase]
-      end
-      mtype || "application/octet-stream"
+      suffix1 = (/\.(\w+)$/ =~ filename && $1.downcase)
+      suffix2 = (/\.(\w+)\.[\w\-]+$/ =~ filename && $1.downcase)
+      mime_tab[suffix1] || mime_tab[suffix2] || "application/octet-stream"
     end
     module_function :mime_type
 
@@ -129,7 +128,7 @@ module WEBrick
       field = nil
       raw.each{|line|
         case line
-        when /^([A-Za-z0-9_\-]+):\s*(.*?)\s*\z/om
+        when /^([A-Za-z0-9!\#$%&'*+\-.^_`|~]+):\s*(.*?)\s*\z/om
           field, value = $1, $2
           field.downcase!
           header[field] = [] unless header.has_key?(field)
@@ -167,13 +166,31 @@ module WEBrick
           case range_spec
           when /^(\d+)-(\d+)/ then $1.to_i .. $2.to_i
           when /^(\d+)-/      then $1.to_i .. -1
-          when /^(\d+)/       then -($1.to_i) .. -1
+          when /^-(\d+)/      then -($1.to_i) .. -1
           else return nil
           end
         }
       end
     end
     module_function :parse_range_header
+
+    def parse_qvalues(value)
+      tmp = []
+      if value
+        parts = value.split(/,\s*/)
+        parts.each {|part|
+          if m = %r{^([^\s,]+?)(?:;\s*q=([\d]+(?:\.[\d]+)))?$}.match(part)
+            lang = m[1]
+            q = (m[2] or 1).to_f
+            tmp.push([lang, q])
+          end
+        }
+        tmp = tmp.sort_by{|lang, q| -q}
+        tmp.collect!{|lang, q| lang}
+      end
+      return tmp
+    end
+    module_function :parse_qvalues
 
     #####
 
@@ -261,8 +278,7 @@ module WEBrick
       def list
         ret = []
         each_data{|data|
-          data.next_data = nil
-          ret << data
+          ret << data.to_s
         }
         ret
       end
@@ -297,6 +313,7 @@ module WEBrick
     def parse_form_data(io, boundary)
       boundary_regexp = /\A--#{boundary}(--)?#{CRLF}\z/
       form_data = Hash.new
+      return form_data unless io
       data = nil
       io.each{|line|
         if boundary_regexp =~ line
@@ -340,7 +357,7 @@ module WEBrick
     def _unescape(str, regex) str.gsub(regex){ $1.hex.chr } end
     module_function :_make_regex, :_escape, :_unescape
 
-    UNESCAPED = _make_regex(control+delims+unwise+nonascii)
+    UNESCAPED = _make_regex(control+space+delims+unwise+nonascii)
     UNESCAPED_FORM = _make_regex(reserved+control+delims+unwise+nonascii)
     NONASCII  = _make_regex(nonascii)
     ESCAPED   = /%([0-9a-fA-F]{2})/

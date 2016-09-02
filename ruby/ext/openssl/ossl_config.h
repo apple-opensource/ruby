@@ -1,5 +1,5 @@
 /*
- * $Id: ossl_config.h,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+ * $Id: ossl_config.h,v 1.2 2003/09/08 10:31:38 gotoyuzo Exp $
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2001-2002  Michal Rokos <m.rokos@sh.cvut.cz>
  * All rights reserved.
@@ -14,6 +14,8 @@
 extern VALUE cConfig;
 extern VALUE eConfigError;
 
+CONF* GetConfigPtr(VALUE obj);
+CONF* DupConfigPtr(VALUE obj);
 void Init_ossl_config(void);
 
 #endif /* _OSSL_CONFIG_H_ */

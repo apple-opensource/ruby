@@ -2,8 +2,8 @@
 
   acosh.c -
 
-  $Author: melville $
-  $Date: 2003/10/15 10:11:49 $
+  $Author: eban $
+  $Date: 2003/10/18 14:04:18 $
   created at: Fri Apr 12 00:34:17 JST 2002
 
   public domain rewrite of acosh(3), asinh(3) and atanh(3)
@@ -15,7 +15,7 @@
 #include <math.h>
 
 /* DBL_MANT_DIG must be less than 4 times of bits of int */
-#ifdef DBL_MANT_DIG
+#ifndef DBL_MANT_DIG
 #define DBL_MANT_DIG 53		/* in this case, at least 12 digit precision */
 #endif
 #define BIG_CRITERIA_BIT (1<<DBL_MANT_DIG/2)

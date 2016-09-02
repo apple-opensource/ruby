@@ -1,7 +1,5 @@
-# :nodoc:
-#
 # Author:: Nathaniel Talbott.
-# Copyright:: Copyright (c) 2000-2002 Nathaniel Talbott. All rights reserved.
+# Copyright:: Copyright (c) 2000-2003 Nathaniel Talbott. All rights reserved.
 # License:: Ruby license.
 
 require 'test/unit/assertions'
@@ -9,6 +7,7 @@ require 'test/unit/failure'
 require 'test/unit/error'
 require 'test/unit/testsuite'
 require 'test/unit/assertionfailederror'
+require 'test/unit/util/backtracefilter'
 
 module Test
   module Unit
@@ -20,6 +19,7 @@ module Test
     # collecting its results into a Test::Unit::TestResult object.
     class TestCase
       include Assertions
+      include Util::BacktraceFilter
       
       attr_reader :method_name
       
@@ -29,7 +29,9 @@ module Test
       # Creates a new instance of the fixture for running the
       # test represented by test_method_name.
       def initialize(test_method_name)
-        if ((!respond_to?(test_method_name)) || (method(test_method_name).arity != 0))
+        unless(respond_to?(test_method_name) and
+               (method(test_method_name).arity == 0 ||
+                method(test_method_name).arity == -1))
           throw :invalid_test
         end
         @method_name = test_method_name
@@ -41,9 +43,9 @@ module Test
       # each method.
       def self.suite
         method_names = public_instance_methods(true)
-        tests = method_names.delete_if { |method_name| method_name !~ /^test.+/ }
+        tests = method_names.delete_if {|method_name| method_name !~ /^test./}
         suite = TestSuite.new(name)
-        tests.each do
+        tests.sort.each do
           |test|
           catch(:invalid_test) do
             suite << new(test)
@@ -65,7 +67,7 @@ module Test
         @_result = result
         begin
           setup
-          send(@method_name)
+          __send__(@method_name)
         rescue AssertionFailedError => e
           add_failure(e.message, e.backtrace)
         rescue StandardError, ScriptError
@@ -105,33 +107,22 @@ module Test
       end
       private :passed?
 
-      def size # :nodoc:
+      def size
         1
       end
 
-      def add_assertion # :nodoc:
+      def add_assertion
         @_result.add_assertion
       end
       private :add_assertion
 
-      def add_failure(message, all_locations=caller()) # :nodoc:
+      def add_failure(message, all_locations=caller())
         @test_passed = false
-        assertions_pattern = /[^A-Za-z_]assertions\.rb:/
-        if (all_locations.detect { |entry| entry =~ assertions_pattern })
-          all_locations.shift
-          until (all_locations[0] =~ assertions_pattern || all_locations.empty?)
-            all_locations.shift
-          end
-          location = all_locations.detect { |entry| entry !~ assertions_pattern }
-        else
-          location = all_locations[0]
-        end
-        location = location[/^.+:\d+/]
-        @_result.add_failure(Failure.new("#{name} [#{location}]", message))
+        @_result.add_failure(Failure.new(name, filter_backtrace(all_locations), message))
       end
       private :add_failure
 
-      def add_error(exception) # :nodoc:
+      def add_error(exception)
         @test_passed = false
         @_result.add_error(Error.new(name, exception))
       end
@@ -143,9 +134,16 @@ module Test
         "#{@method_name}(#{self.class.name})"
       end
 
-      # Overriden to return #name.
+      # Overridden to return #name.
       def to_s
         name
+      end
+      
+      # It's handy to be able to compare TestCase instances.
+      def ==(other)
+        return false unless(other.kind_of?(self.class))
+        return false unless(@method_name == other.method_name)
+        self.class == other.class
       end
     end
   end

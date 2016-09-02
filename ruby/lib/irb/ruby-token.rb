@@ -1,8 +1,8 @@
 #
 #   irb/ruby-token.rb - ruby tokens 
 #   	$Release Version: 0.9$
-#   	$Revision: 1.1.1.2 $
-#   	$Date: 2003/10/15 10:11:49 $
+#   	$Revision: 1.5 $
+#   	$Date: 2003/08/05 03:08:16 $
 #   	by Keiju ISHITSUKA(keiju@ishitsuka.com)
 #
 # --
@@ -164,6 +164,7 @@ module RubyToken
     [:TkSTRING,     TkVal],
     [:TkXSTRING,    TkVal],
     [:TkREGEXP,     TkVal],
+    [:TkSYMBOL,     TkVal],
 
     [:TkDSTRING,    TkNode],
     [:TkDXSTRING,   TkNode],

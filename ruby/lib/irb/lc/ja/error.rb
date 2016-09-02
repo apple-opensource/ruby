@@ -1,8 +1,8 @@
 #
 #   irb/lc/ja/error.rb - 
 #   	$Release Version: 0.9$
-#   	$Revision: 1.1.1.2 $
-#   	$Date: 2003/10/15 10:11:49 $
+#   	$Revision: 1.5 $
+#   	$Date: 2003/03/23 17:58:50 $
 #   	by Keiju ISHITSUKA(keiju@ishitsuka.com)
 #
 # --

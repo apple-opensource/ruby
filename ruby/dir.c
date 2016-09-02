@@ -2,8 +2,8 @@
 
   dir.c -
 
-  $Author: melville $
-  $Date: 2003/10/15 10:11:46 $
+  $Author: matz $
+  $Date: 2004/12/18 02:07:30 $
   created at: Wed Jan  5 09:51:01 JST 1994
 
   Copyright (C) 1993-2003 Yukihiro Matsumoto
@@ -29,7 +29,12 @@
 # define NAMLEN(dirent) strlen((dirent)->d_name)
 #else
 # define dirent direct
-# define NAMLEN(dirent) (dirent)->d_namlen
+# if !defined __NeXT__
+#  define NAMLEN(dirent) (dirent)->d_namlen
+# else
+#  /* On some versions of NextStep, d_namlen is always zero, so avoid it. */
+#  define NAMLEN(dirent) strlen((dirent)->d_name)
+# endif
 # if HAVE_SYS_NDIR_H
 #  include <sys/ndir.h>
 # endif
@@ -82,26 +87,14 @@ char *strchr _((char*,char));
 
 #if defined DOSISH
 #define isdirsep(c) ((c) == '/' || (c) == '\\')
-static const char *
-find_dirsep(s)
-    const char *s;
-{
-    while (*s) {
-	if (isdirsep(*s))
-	    return s;
-	s = CharNext(s);
-    }
-    return 0;
-}
 #else
 #define isdirsep(c) ((c) == '/')
-#define find_dirsep(s) strchr(s, '/')
 #endif
 
 static char *
 range(pat, test, flags)
-    char *pat;
-    char test;
+    const char *pat;
+    int test;
     int flags;
 {
     int not, ok = 0;
@@ -114,25 +107,25 @@ range(pat, test, flags)
 
     test = downcase(test);
 
-    while (*pat) {
+    while (*pat != ']') {
 	int cstart, cend;
+        if (escape && *pat == '\\')
+	    pat++;
 	cstart = cend = *pat++;
-	if (cstart == ']')
-	    return ok == not ? 0 : pat;
-        else if (escape && cstart == '\\')
-	    cstart = cend = *pat++;
+	if (!cstart)
+	    return NULL;
 	if (*pat == '-' && pat[1] != ']') {
-	    if (escape && pat[1] == '\\')
+	    pat++;
+	    if (escape && *pat == '\\')
 		pat++;
-	    cend = pat[1];
+	    cend = *pat++;
 	    if (!cend)
-		return 0;
-	    pat += 2;
+		return NULL;
 	}
 	if (downcase(cstart) <= test && test <= downcase(cend))
 	    ok = 1;
     }
-    return 0;
+    return ok == not ? NULL : (char *)pat + 1;
 }
 
 #define ISDIRSEP(c) (pathname && isdirsep(c))
@@ -152,6 +145,8 @@ fnmatch(pat, string, flags)
     int period = !(flags & FNM_DOTMATCH);
     int nocase = flags & FNM_CASEFOLD;
 
+    if (!pat) pat = "";
+    if (!string) string = "";
     while (c = *pat++) {
 	switch (c) {
 	case '?':
@@ -167,14 +162,14 @@ fnmatch(pat, string, flags)
 		return FNM_NOMATCH;
 
 	    if (!c) {
-		if (pathname && find_dirsep(s))
+		if (pathname && *rb_path_next(s))
 		    return FNM_NOMATCH;
 		else
 		    return 0;
 	    }
 	    else if (ISDIRSEP(c)) {
-		s = find_dirsep(s);
-		if (s) {
+		s = rb_path_next(s);
+		if (*s) {
                     s++;
 		    break;
                 }
@@ -185,7 +180,7 @@ fnmatch(pat, string, flags)
 	    test = downcase(test);
 	    pat--;
 	    while (*s) {
-		if ((c == '[' || downcase(*s) == test) &&
+		if ((c == '?' || c == '[' || downcase(*s) == test) &&
 		    !fnmatch(pat, s, flags | FNM_DOTMATCH))
 		    return 0;
 		else if (ISDIRSEP(*s))
@@ -193,12 +188,12 @@ fnmatch(pat, string, flags)
 		s++;
 	    }
 	    return FNM_NOMATCH;
-      
+
 	case '[':
 	    if (!*s || ISDIRSEP(*s) || PERIOD(s))
 		return FNM_NOMATCH;
 	    pat = range(pat, *s, flags);
-	    if (!pat)
+	    if (pat == NULL)
 		return FNM_NOMATCH;
 	    s++;
 	    break;
@@ -206,7 +201,7 @@ fnmatch(pat, string, flags)
 	case '\\':
 	    if (escape
 #if defined DOSISH
-		&& *pat && strchr("*?[\\", *pat)
+		&& *pat && strchr("*?[]\\", *pat)
 #endif
 		) {
 		c = *pat;
@@ -243,7 +238,11 @@ static void
 free_dir(dir)
     struct dir_data *dir;
 {
-    if (dir && dir->dir) closedir(dir->dir);
+    if (dir) {
+	if (dir->dir) closedir(dir->dir);
+	if (dir->path) free(dir->path);
+    }
+    free(dir);
 }
 
 static VALUE dir_close _((VALUE));
@@ -262,6 +261,12 @@ dir_s_alloc(klass)
     return obj;
 }
 
+/*
+ *  call-seq:
+ *     Dir.new( string ) -> aDir
+ *
+ *  Returns a new directory object for the named directory.
+ */
 static VALUE
 dir_initialize(dir, dirname)
     VALUE dir, dirname;
@@ -289,6 +294,18 @@ dir_initialize(dir, dirname)
     return dir;
 }
 
+/*
+ *  call-seq:
+ *     Dir.open( string ) => aDir
+ *     Dir.open( string ) {| aDir | block } => anObject
+ *
+ *  With no block, <code>open</code> is a synonym for
+ *  <code>Dir::new</code>. If a block is present, it is passed
+ *  <i>aDir</i> as a parameter. The directory is closed at the end of
+ *  the block, and <code>Dir::open</code> returns the value of the
+ *  block.
+ */
+
 static VALUE
 dir_s_open(klass, dirname)
     VALUE klass, dirname;
@@ -315,6 +332,15 @@ dir_closed()
     if (dirp->dir == NULL) dir_closed();\
 } while (0)
 
+/*
+ *  call-seq:
+ *     dir.path => string or nil
+ *
+ *  Returns the path parameter passed to <em>dir</em>'s constructor.
+ *
+ *     d = Dir.new("..")
+ *     d.path   #=> ".."
+ */
 static VALUE
 dir_path(dir)
     VALUE dir;
@@ -326,6 +352,18 @@ dir_path(dir)
     return rb_str_new2(dirp->path);
 }
 
+/*
+ *  call-seq:
+ *     dir.read => string or nil
+ *
+ *  Reads the next entry from <em>dir</em> and returns it as a string.
+ *  Returns <code>nil</code> at the end of the stream.
+ *
+ *     d = Dir.new("testdir")
+ *     d.read   #=> "."
+ *     d.read   #=> ".."
+ *     d.read   #=> "config.h"
+ */
 static VALUE
 dir_read(dir)
     VALUE dir;
@@ -348,6 +386,23 @@ dir_read(dir)
     return Qnil;		/* not reached */
 }
 
+/*
+ *  call-seq:
+ *     dir.each { |filename| block }  => dir
+ *
+ *  Calls the block once for each entry in this directory, passing the
+ *  filename of each entry as a parameter to the block.
+ *
+ *     d = Dir.new("testdir")
+ *     d.each  {|x| puts "Got #{x}" }
+ *
+ *  <em>produces:</em>
+ *
+ *     Got .
+ *     Got ..
+ *     Got config.h
+ *     Got main.rb
+ */
 static VALUE
 dir_each(dir)
     VALUE dir;
@@ -363,6 +418,19 @@ dir_each(dir)
     return dir;
 }
 
+/*
+ *  call-seq:
+ *     dir.pos => integer
+ *     dir.tell => integer
+ *
+ *  Returns the current position in <em>dir</em>. See also
+ *  <code>Dir#seek</code>.
+ *
+ *     d = Dir.new("testdir")
+ *     d.tell   #=> 0
+ *     d.read   #=> "."
+ *     d.tell   #=> 12
+ */
 static VALUE
 dir_tell(dir)
     VALUE dir;
@@ -379,21 +447,50 @@ dir_tell(dir)
 #endif
 }
 
+/*
+ *  call-seq:
+ *     dir.seek( integer ) => dir
+ *
+ *  Seeks to a particular location in <em>dir</em>. <i>integer</i>
+ *  must be a value returned by <code>Dir#tell</code>.
+ *
+ *     d = Dir.new("testdir")   #=> #<Dir:0x401b3c40>
+ *     d.read                   #=> "."
+ *     i = d.tell               #=> 12
+ *     d.read                   #=> ".."
+ *     d.seek(i)                #=> #<Dir:0x401b3c40>
+ *     d.read                   #=> ".."
+ */
 static VALUE
 dir_seek(dir, pos)
     VALUE dir, pos;
 {
     struct dir_data *dirp;
+    off_t p = NUM2OFFT(pos);
 
-#ifdef HAVE_SEEKDIR
     GetDIR(dir, dirp);
-    seekdir(dirp->dir, NUM2INT(pos));
+#ifdef HAVE_SEEKDIR
+    seekdir(dirp->dir, p);
     return dir;
 #else
     rb_notimplement();
 #endif
 }
 
+/*
+ *  call-seq:
+ *     dir.pos( integer ) => integer
+ *
+ *  Synonym for <code>Dir#seek</code>, but returns the position
+ *  parameter.
+ *
+ *     d = Dir.new("testdir")   #=> #<Dir:0x401b3c40>
+ *     d.read                   #=> "."
+ *     i = d.pos                #=> 12
+ *     d.read                   #=> ".."
+ *     d.pos = i                #=> 12
+ *     d.read                   #=> ".."
+ */
 static VALUE
 dir_set_pos(dir, pos)
     VALUE dir, pos;
@@ -402,6 +499,17 @@ dir_set_pos(dir, pos)
     return pos;
 }
 
+/*
+ *  call-seq:
+ *     dir.rewind => dir
+ *
+ *  Repositions <em>dir</em> to the first entry.
+ *
+ *     d = Dir.new("testdir")
+ *     d.read     #=> "."
+ *     d.rewind   #=> #<Dir:0x401b3fb0>
+ *     d.read     #=> "."
+ */
 static VALUE
 dir_rewind(dir)
     VALUE dir;
@@ -413,6 +521,16 @@ dir_rewind(dir)
     return dir;
 }
 
+/*
+ *  call-seq:
+ *     dir.close => nil
+ *
+ *  Closes the directory stream. Any further attempts to access
+ *  <em>dir</em> will raise an <code>IOError</code>.
+ *
+ *     d = Dir.new("testdir")
+ *     d.close   #=> nil
+ */
 static VALUE
 dir_close(dir)
     VALUE dir;
@@ -428,27 +546,84 @@ dir_close(dir)
 
 static void
 dir_chdir(path)
-    const char *path;
+    VALUE path;
 {
-    if (chdir(path) < 0)
-	rb_sys_fail(path);
+    if (chdir(RSTRING(path)->ptr) < 0)
+	rb_sys_fail(RSTRING(path)->ptr);
 }
 
 static int chdir_blocking = 0;
 static VALUE chdir_thread = Qnil;
 
+struct chdir_data {
+    VALUE old_path, new_path;
+    int done;
+};
+
 static VALUE
-chdir_restore(path)
-    char *path;
+chdir_yield(args)
+    struct chdir_data *args;
 {
-    chdir_blocking--;
-    if (chdir_blocking == 0)
-	chdir_thread = Qnil;
-    dir_chdir(path);
-    free(path);
+    dir_chdir(args->new_path);
+    args->done = Qtrue;
+    chdir_blocking++;
+    if (chdir_thread == Qnil)
+	chdir_thread = rb_thread_current();
+    return rb_yield(args->new_path);
+}
+
+static VALUE
+chdir_restore(args)
+    struct chdir_data *args;
+{
+    if (args->done) {
+	chdir_blocking--;
+	if (chdir_blocking == 0)
+	    chdir_thread = Qnil;
+	dir_chdir(args->old_path);
+    }
     return Qnil;
 }
 
+/*
+ *  call-seq:
+ *     Dir.chdir( [ string] ) => 0
+ *     Dir.chdir( [ string] ) {| path | block }  => anObject
+ *
+ *  Changes the current working directory of the process to the given
+ *  string. When called without an argument, changes the directory to
+ *  the value of the environment variable <code>HOME</code>, or
+ *  <code>LOGDIR</code>. <code>SystemCallError</code> (probably
+ *  <code>Errno::ENOENT</code>) if the target directory does not exist.
+ *
+ *  If a block is given, it is passed the name of the new current
+ *  directory, and the block is executed with that as the current
+ *  directory. The original working directory is restored when the block
+ *  exits. The return value of <code>chdir</code> is the value of the
+ *  block. <code>chdir</code> blocks can be nested, but in a
+ *  multi-threaded program an error will be raised if a thread attempts
+ *  to open a <code>chdir</code> block while another thread has one
+ *  open.
+ *
+ *     Dir.chdir("/var/spool/mail")
+ *     puts Dir.pwd
+ *     Dir.chdir("/tmp") do
+ *       puts Dir.pwd
+ *       Dir.chdir("/usr") do
+ *         puts Dir.pwd
+ *       end
+ *       puts Dir.pwd
+ *     end
+ *     puts Dir.pwd
+ *
+ *  <em>produces:</em>
+ *
+ *     /var/spool/mail
+ *     /tmp
+ *     /usr
+ *     /tmp
+ *     /var/spool/mail
+ */
 static VALUE
 dir_s_chdir(argc, argv, obj)
     int argc;
@@ -456,19 +631,18 @@ dir_s_chdir(argc, argv, obj)
     VALUE obj;
 {
     VALUE path = Qnil;
-    char *dist = "";
 
     rb_secure(2);
     if (rb_scan_args(argc, argv, "01", &path) == 1) {
 	SafeStringValue(path);
-	dist = RSTRING(path)->ptr;
     }
     else {
-	dist = getenv("HOME");
+	const char *dist = getenv("HOME");
 	if (!dist) {
 	    dist = getenv("LOGDIR");
 	    if (!dist) rb_raise(rb_eArgError, "HOME/LOGDIR not set");
 	}
+	path = rb_str_new2(dist);
     }
 
     if (chdir_blocking > 0) {
@@ -477,18 +651,30 @@ dir_s_chdir(argc, argv, obj)
     }
 
     if (rb_block_given_p()) {
+	struct chdir_data args;
 	char *cwd = my_getcwd();
-	chdir_blocking++;
-	if (chdir_thread == Qnil)
-	    chdir_thread = rb_thread_current();
-	dir_chdir(dist);
-	return rb_ensure(rb_yield, path, chdir_restore, (VALUE)cwd);
+
+	args.old_path = rb_tainted_str_new2(cwd); free(cwd);
+	args.new_path = path;
+	args.done = Qfalse;
+	return rb_ensure(chdir_yield, (VALUE)&args, chdir_restore, (VALUE)&args);
     }
-    dir_chdir(dist);
+    dir_chdir(path);
 
     return INT2FIX(0);
 }
 
+/*
+ *  call-seq:
+ *     Dir.getwd => string
+ *     Dir.pwd => string
+ *
+ *  Returns the path to the current working directory of this process as
+ *  a string.
+ *
+ *     Dir.chdir("/tmp")   #=> 0
+ *     Dir.getwd           #=> "/tmp"
+ */
 static VALUE
 dir_s_getwd(dir)
     VALUE dir;
@@ -504,13 +690,36 @@ dir_s_getwd(dir)
     return cwd;
 }
 
+static void check_dirname _((volatile VALUE *));
+static void
+check_dirname(dir)
+    volatile VALUE *dir;
+{
+    char *path, *pend;
+
+    SafeStringValue(*dir);
+    rb_secure(2);
+    path = RSTRING(*dir)->ptr;
+    if (path && *(pend = rb_path_end(rb_path_skip_prefix(path)))) {
+	*dir = rb_str_new(path, pend - path);
+    }
+}
+
+/*
+ *  call-seq:
+ *     Dir.chroot( string ) => 0
+ *
+ *  Changes this process's idea of the file system root. Only a
+ *  privileged process may make this call. Not available on all
+ *  platforms. On Unix systems, see <code>chroot(2)</code> for more
+ *  information.
+ */
 static VALUE
 dir_s_chroot(dir, path)
     VALUE dir, path;
 {
 #if defined(HAVE_CHROOT) && !defined(__CHECKER__)
-    rb_secure(2);
-    SafeStringValue(path);
+    check_dirname(&path);
 
     if (chroot(RSTRING(path)->ptr) == -1)
 	rb_sys_fail(RSTRING(path)->ptr);
@@ -522,6 +731,19 @@ dir_s_chroot(dir, path)
 #endif
 }
 
+/*
+ *  call-seq:
+ *     Dir.mkdir( string [, integer] ) => 0
+ *
+ *  Makes a new directory named by <i>string</i>, with permissions
+ *  specified by the optional parameter <i>anInteger</i>. The
+ *  permissions may be modified by the value of
+ *  <code>File::umask</code>, and are ignored on NT. Raises a
+ *  <code>SystemCallError</code> if the directory cannot be created. See
+ *  also the discussion of permissions in the class documentation for
+ *  <code>File</code>.
+ *
+ */
 static VALUE
 dir_s_mkdir(argc, argv, obj)
     int argc;
@@ -538,8 +760,7 @@ dir_s_mkdir(argc, argv, obj)
 	mode = 0777;
     }
 
-    SafeStringValue(path);
-    rb_secure(2);
+    check_dirname(&path);
 #ifndef _WIN32
     if (mkdir(RSTRING(path)->ptr, mode) == -1)
 	rb_sys_fail(RSTRING(path)->ptr);
@@ -551,12 +772,20 @@ dir_s_mkdir(argc, argv, obj)
     return INT2FIX(0);
 }
 
+/*
+ *  call-seq:
+ *     Dir.delete( string ) => 0
+ *     Dir.rmdir( string ) => 0
+ *     Dir.unlink( string ) => 0
+ *
+ *  Deletes the named directory. Raises a subclass of
+ *  <code>SystemCallError</code> if the directory isn't empty.
+ */
 static VALUE
 dir_s_rmdir(obj, dir)
     VALUE obj, dir;
 {
-    SafeStringValue(dir);
-    rb_secure(2);
+    check_dirname(&dir);
     if (rmdir(RSTRING(dir)->ptr) < 0)
 	rb_sys_fail(RSTRING(dir)->ptr);
 
@@ -566,10 +795,10 @@ dir_s_rmdir(obj, dir)
 /* Return nonzero if S has any special globbing chars in it.  */
 static int
 has_magic(s, send, flags)
-     char *s, *send;
-     int flags;
+    const char *s, *send;
+    int flags;
 {
-    register char *p = s;
+    register const char *p = s;
     register char c;
     int open = 0;
     int escape = !(flags & FNM_NOESCAPE);
@@ -600,7 +829,7 @@ has_magic(s, send, flags)
 
 static char*
 extract_path(p, pend)
-    char *p, *pend;
+    const char *p, *pend;
 {
     char *alloc;
     int len;
@@ -624,9 +853,9 @@ extract_path(p, pend)
 
 static char*
 extract_elem(path)
-    char *path;
+    const char *path;
 {
-    char *pend;
+    const char *pend;
 
     pend = strchr(path, '/');
     if (!pend) pend = path + strlen(path);
@@ -655,8 +884,8 @@ remove_backslashes(p)
 #endif
 
 struct glob_args {
-    void (*func) _((const char*, VALUE));
-    const char *c;
+    void (*func) _((VALUE, VALUE));
+    VALUE c;
     VALUE v;
 };
 
@@ -667,14 +896,18 @@ glob_func_caller(val)
     VALUE val;
 {
     struct glob_args *args = (struct glob_args *)val;
-    (*args->func)(args->c, args->v);
+    VALUE path = args->c;
+
+    OBJ_TAINT(path);
+    RSTRING(path)->len = strlen(RSTRING(path)->ptr);
+    (*args->func)(path, args->v);
     return Qnil;
 }
 
 static int
 glob_call_func(func, path, arg)
-    void (*func) _((const char*, VALUE));
-    const char *path;
+    void (*func) _((VALUE, VALUE));
+    VALUE path;
     VALUE arg;
 {
     int status;
@@ -688,18 +921,22 @@ glob_call_func(func, path, arg)
     return status;
 }
 
+static int glob_helper(VALUE path, char *sub, int flags, void (*func)(VALUE,VALUE), VALUE arg);
+
 static int
-glob_helper(path, sub, flags, func, arg)
-    char *path;
+glob_helper(pv, sub, flags, func, arg)
+    VALUE pv;
     char *sub;
     int flags;
-    void (*func) _((const char*, VALUE));
+    void (*func) _((VALUE, VALUE));
     VALUE arg;
 {
     struct stat st;
-    char *p, *m;
+    char *p, *m, *path;
     int status = 0;
 
+    StringValue(pv);
+    path = RSTRING(pv)->ptr;
     p = sub ? sub : path;
     if (!has_magic(p, 0, flags)) {
 #if defined DOSISH
@@ -708,7 +945,7 @@ glob_helper(path, sub, flags, func, arg)
 	if (!(flags & FNM_NOESCAPE)) remove_backslashes(p);
 #endif
 	if (lstat(path, &st) == 0) {
-	    status = glob_call_func(func, path, arg);
+	    status = glob_call_func(func, pv, arg);
 	    if (status) return status;
 	}
 	else if (errno != ENOENT) {
@@ -723,7 +960,8 @@ glob_helper(path, sub, flags, func, arg)
 	if (*p == '/') p++;
 	m = strchr(p, '/');
 	if (has_magic(p, m, flags)) {
-	    char *dir, *base, *magic, *buf;
+	    char *dir, *base, *magic;
+	    VALUE buf;
 	    DIR *dirp;
 	    struct dirent *dp;
 	    int recursive = 0;
@@ -731,7 +969,7 @@ glob_helper(path, sub, flags, func, arg)
 	    struct d_link {
 		char *path;
 		struct d_link *next;
-	    } *tmp, *link = 0;
+	    } *tmp, *link, **tail = &link;
 
 	    base = extract_path(path, p);
 	    if (path == p) dir = ".";
@@ -748,10 +986,9 @@ glob_helper(path, sub, flags, func, arg)
 		if (m && strcmp(magic, "**") == 0) {
 		    int n = strlen(base);
 		    recursive = 1;
-		    buf = ALLOC_N(char, n+strlen(m)+3);
-		    sprintf(buf, "%s%s", base, *base ? m : m+1);
-		    status = glob_helper(buf, buf+n, flags, func, arg);
-		    free(buf);
+		    buf = rb_str_new(0, n+strlen(m)+3);
+		    sprintf(RSTRING(buf)->ptr, "%s%s", base, *base ? m : m+1);
+		    status = glob_helper(buf, RSTRING(buf)->ptr+n, flags, func, arg);
 		    if (status) goto finalize;
 		}
 		dirp = opendir(dir);
@@ -778,42 +1015,41 @@ glob_helper(path, sub, flags, func, arg)
 		if (recursive) {
 		    if (strcmp(".", dp->d_name) == 0 || strcmp("..", dp->d_name) == 0)
 			continue;
-		    buf = ALLOC_N(char, strlen(base)+NAMLEN(dp)+strlen(m)+6);
-		    sprintf(buf, "%s%s%s", base, (BASE) ? "/" : "", dp->d_name);
-		    if (lstat(buf, &st) < 0) {
-			if (errno != ENOENT) rb_sys_warning(buf);
-			free(buf);
+		    if (fnmatch("*", dp->d_name, flags) != 0)
+			continue;
+		    buf = rb_str_new(0, strlen(base)+NAMLEN(dp)+strlen(m)+6);
+		    sprintf(RSTRING(buf)->ptr, "%s%s%s", base, (BASE) ? "/" : "", dp->d_name);
+		    if (lstat(RSTRING(buf)->ptr, &st) < 0) {
+			if (errno != ENOENT) rb_sys_warning(RSTRING(buf)->ptr);
 			continue;
 		    }
 		    if (S_ISDIR(st.st_mode)) {
-			char *t = buf+strlen(buf);
+			char *t = RSTRING(buf)->ptr+strlen(RSTRING(buf)->ptr);
 		        strcpy(t, "/**");
 			strcpy(t+3, m);
 			status = glob_helper(buf, t, flags, func, arg);
-			free(buf);
 			if (status) break;
 			continue;
 		    }
-		    free(buf);
 		    continue;
 		}
 		if (fnmatch(magic, dp->d_name, flags) == 0) {
-		    buf = ALLOC_N(char, strlen(base)+NAMLEN(dp)+2);
-		    sprintf(buf, "%s%s%s", base, (BASE) ? "/" : "", dp->d_name);
+		    buf = rb_str_new(0, strlen(base)+NAMLEN(dp)+2);
+		    sprintf(RSTRING(buf)->ptr, "%s%s%s", base, (BASE) ? "/" : "", dp->d_name);
 		    if (!m) {
 			status = glob_call_func(func, buf, arg);
-			free(buf);
 			if (status) break;
 			continue;
 		    }
 		    tmp = ALLOC(struct d_link);
-		    tmp->path = buf;
-		    tmp->next = link;
-		    link = tmp;
+		    tmp->path = strdup(RSTRING(buf)->ptr);
+		    *tail = tmp;
+		    tail = &tmp->next;
 		}
 	    }
 	    closedir(dirp);
 	  finalize:
+	    *tail = 0;
 	    free(base);
 	    free(magic);
 	    if (link) {
@@ -823,11 +1059,10 @@ glob_helper(path, sub, flags, func, arg)
 			    if (S_ISDIR(st.st_mode)) {
 				int len = strlen(link->path);
 				int mlen = strlen(m);
-				char *t = ALLOC_N(char, len+mlen+1);
 
-				sprintf(t, "%s%s", link->path, m);
-				status = glob_helper(t, t+len, flags, func, arg);
-				free(t);
+				buf = rb_str_new(0, len+mlen+1);
+				sprintf(RSTRING(buf)->ptr, "%s%s", link->path, m);
+				status = glob_helper(buf, RSTRING(buf)->ptr+len, flags, func, arg);
 			    }
 			}
 			else {
@@ -847,71 +1082,94 @@ glob_helper(path, sub, flags, func, arg)
     return status;
 }
 
-static void
+static int
 rb_glob2(path, flags, func, arg)
-    char *path;
+    VALUE path;
     int flags;
-    void (*func) _((const char*, VALUE));
+    void (*func) _((VALUE, VALUE));
     VALUE arg;
 {
-    int status = glob_helper(path, 0, flags, func, arg);
-    if (status) rb_jump_tag(status);
+    int status;
+
+    status = glob_helper(path, 0, flags, func, arg);
+    return status;
+}
+
+struct rb_glob_args {
+    void (*func) _((const char*, VALUE));
+    VALUE arg;
+};
+
+static void
+rb_glob_caller(path, a)
+    VALUE path, a;
+{
+    struct rb_glob_args *args = (struct rb_glob_args *)a;
+    (*args->func)(RSTRING(path)->ptr, args->arg);
 }
 
 void
 rb_glob(path, func, arg)
-    char *path;
+    const char *path;
     void (*func) _((const char*, VALUE));
     VALUE arg;
 {
-    rb_glob2(path, 0, func, arg);
+    struct rb_glob_args args;
+    int status;
+
+    args.func = func;
+    args.arg = arg;
+    status = rb_glob2(rb_str_new2(path), 0, rb_glob_caller, (VALUE)&args);
+
+    if (status) rb_jump_tag(status);
 }
 
 void
 rb_globi(path, func, arg)
-    char *path;
+    const char *path;
     void (*func) _((const char*, VALUE));
     VALUE arg;
 {
-    rb_glob2(path, FNM_CASEFOLD, func, arg);
+    struct rb_glob_args args;
+    int status;
+
+    args.func = func;
+    args.arg = arg;
+    status = rb_glob2(rb_str_new2(path), FNM_CASEFOLD, rb_glob_caller, (VALUE)&args);
+
+    if (status) rb_jump_tag(status);
 }
 
 static void
 push_pattern(path, ary)
-    const char *path;
+    VALUE path;
     VALUE ary;
 {
-    VALUE str = rb_tainted_str_new2(path);
-
-    if (ary) {
-	rb_ary_push(ary, str);
-    }
-    else {
-	rb_yield(str);
-    }
+    rb_ary_push(ary, path);
 }
 
-static void
+static int
 push_globs(ary, s, flags)
     VALUE ary;
-    char *s;
+    VALUE s;
     int flags;
 {
-    rb_glob2(s, flags, push_pattern, ary);
+    return rb_glob2(s, flags, push_pattern, ary);
 }
 
-static void
-push_braces(ary, s, flags)
-    VALUE ary;
-    char *s;
+static int
+push_braces(ary, str, flags)
+    VALUE ary, str;
     int flags;
 {
-    char *buf;
-    char *p, *t, *b;
-    char *lbrace, *rbrace;
+    VALUE buf;
+    char *b;
+    const char *s, *p, *t;
+    const char *lbrace, *rbrace;
     int nest = 0;
+    int status = 0;
 
-    p = s;
+    s = p = RSTRING(str)->ptr;
     lbrace = rbrace = 0;
     while (*p) {
 	if (*p == '{') {
@@ -931,9 +1189,6 @@ push_braces(ary, s, flags)
 
     if (lbrace && rbrace) {
 	int len = strlen(s);
-	buf = xmalloc(len + 1);
-	memcpy(buf, s, lbrace-s);
-	b = buf + (lbrace-s);
 	p = lbrace;
 	while (*p != '}') {
 	    t = p + 1;
@@ -941,15 +1196,20 @@ push_braces(ary, s, flags)
 		/* skip inner braces */
 		if (*p == '{') while (*p!='}') p++;
 	    }
+	    buf = rb_str_new(0, len+1);
+	    memcpy(RSTRING(buf)->ptr, s, lbrace-s);
+	    b = RSTRING(buf)->ptr + (lbrace-s);
 	    memcpy(b, t, p-t);
 	    strcpy(b+(p-t), rbrace+1);
-	    push_braces(ary, buf, flags);
+	    status = push_braces(ary, buf, flags);
+	    if (status) break;
 	}
-	free(buf);
     }
     else {
-	push_globs(ary, s, flags);
+	status = push_globs(ary, str, flags);
     }
+
+    return status;
 }
 
 #define isdelim(c) ((c)=='\0')
@@ -959,26 +1219,22 @@ rb_push_glob(str, flags)
     VALUE str;
     int flags;
 {
-    char *p, *pend;
-    char *buf;
+    const char *p, *pend;
+    volatile VALUE buf;
     char *t;
     int nest, maxnest;
+    int status = 0;
     int noescape = flags & FNM_NOESCAPE;
     VALUE ary;
 
-    if (rb_block_given_p())
-	ary = 0;
-    else
-	ary = rb_ary_new();
-
+    ary = rb_ary_new();
     SafeStringValue(str);
-    buf = xmalloc(RSTRING(str)->len + 1);
-
+    buf = rb_str_new(0, RSTRING(str)->len + 1);
     p = RSTRING(str)->ptr;
     pend = p + RSTRING(str)->len;
 
     while (p < pend) {
-	t = buf;
+	t = RSTRING(buf)->ptr;
 	nest = maxnest = 0;
 	while (p < pend && isdelim(*p)) p++;
 	while (p < pend && !isdelim(*p)) {
@@ -992,18 +1248,31 @@ rb_push_glob(str, flags)
 	}
 	*t = '\0';
 	if (maxnest == 0) {
-	    push_globs(ary, buf, flags);
+	    status = push_globs(ary, buf, flags);
+	    if (status) break;
 	}
 	else if (nest == 0) {
-	    push_braces(ary, buf, flags);
+	    status = push_braces(ary, buf, flags);
+	    if (status) break;
 	}
 	/* else unmatched braces */
     }
-    free(buf);
-
+    if (status) rb_jump_tag(status);
+    if (rb_block_given_p()) {
+	rb_ary_each(ary);
+	return Qnil;
+    }
     return ary;
 }
 
+/*
+ *  call-seq:
+ *     Dir[ string ] => array
+ *
+ *  Equivalent to calling
+ *  <em>dir</em>.<code>glob(</code><i>string,</i><code>0)</code>.
+ *
+ */
 static VALUE
 dir_s_aref(obj, str)
     VALUE obj, str;
@@ -1011,6 +1280,27 @@ dir_s_aref(obj, str)
     return rb_push_glob(str, 0);
 }
 
+/*
+ *  call-seq:
+ *     Dir.glob( string, [flags] ) => array
+ *     Dir.glob( string, [flags] ) {| filename | block }  => false
+ *
+ *  Returns the filenames found by expanding the pattern given in
+ *  <i>string</i>, either as an <i>array</i> or as parameters to the
+ *  block. Note that this pattern is not a regexp (it's closer to a
+ *  shell glob). See <code>File::fnmatch</code> for
+ *  details of file name matching and the meaning of the <i>flags</i>
+ *  parameter.
+ *
+ *     Dir["config.?"]                     #=> ["config.h"]
+ *     Dir.glob("config.?")                #=> ["config.h"]
+ *     Dir.glob("*.[a-z][a-z]")            #=> ["main.rb"]
+ *     Dir.glob("*.[^r]*")                 #=> ["config.h"]
+ *     Dir.glob("*.{rb,h}")                #=> ["main.rb", "config.h"]
+ *     Dir.glob("*")                       #=> ["config.h", "main.rb"]
+ *     Dir.glob("*", File::FNM_DOTMATCH)   #=> [".", "..", "config.h", "main.rb"]
+ *
+ */
 static VALUE
 dir_s_glob(argc, argv, obj)
     int argc;
@@ -1029,26 +1319,109 @@ dir_s_glob(argc, argv, obj)
 }
 
 static VALUE
+dir_open_dir(path)
+    VALUE path;
+{
+    struct dir_data *dp;
+    VALUE dir = rb_funcall(rb_cDir, rb_intern("open"), 1, path);
+
+    if (TYPE(dir) != T_DATA ||
+	RDATA(dir)->dfree != (RUBY_DATA_FUNC)free_dir) {
+	rb_raise(rb_eTypeError, "wrong argument type %s (expected Dir)",
+		 rb_obj_classname(dir));
+    }
+    return dir;
+}
+
+
+/*
+ *  call-seq:
+ *     Dir.foreach( dirname ) {| filename | block }  => nil
+ *
+ *  Calls the block once for each entry in the named directory, passing
+ *  the filename of each entry as a parameter to the block.
+ *
+ *     Dir.foreach("testdir") {|x| puts "Got #{x}" }
+ *
+ *  <em>produces:</em>
+ *
+ *     Got .
+ *     Got ..
+ *     Got config.h
+ *     Got main.rb
+ *
+ */
+static VALUE
 dir_foreach(io, dirname)
     VALUE io, dirname;
 {
     VALUE dir;
 
-    dir = rb_funcall(rb_cDir, rb_intern("open"), 1, dirname);
+    dir = dir_open_dir(dirname);
     rb_ensure(dir_each, dir, dir_close, dir);
     return Qnil;
 }
 
+/*
+ *  call-seq:
+ *     Dir.entries( dirname ) => array
+ *
+ *  Returns an array containing all of the filenames in the given
+ *  directory. Will raise a <code>SystemCallError</code> if the named
+ *  directory doesn't exist.
+ *
+ *     Dir.entries("testdir")   #=> [".", "..", "config.h", "main.rb"]
+ *
+ */
 static VALUE
 dir_entries(io, dirname)
     VALUE io, dirname;
 {
     VALUE dir;
 
-    dir = rb_funcall(rb_cDir, rb_intern("open"), 1, dirname);
+    dir = dir_open_dir(dirname);
     return rb_ensure(rb_Array, dir, dir_close, dir);
 }
 
+/*
+ *  call-seq:
+ *     File.fnmatch( pattern, path, [flags] ) => (true or false)
+ *     File.fnmatch?( pattern, path, [flags] ) => (true or false)
+ *
+ *  Returns true if <i>path</i> matches against <i>pattern</i> The
+ *  pattern is not a regular expression; instead it follows rules
+ *  similar to shell filename globbing. It may contain the following
+ *  metacharacters:
+ *
+ *  <i>flags</i> is a bitwise OR of the <code>FNM_xxx</code> parameters.
+ *  The same glob pattern and flags are used by <code>Dir::glob</code>.
+ *
+ *     File.fnmatch('cat',       'cat')        #=> true
+ *     File.fnmatch('cat',       'category')   #=> false
+ *     File.fnmatch('c{at,ub}s', 'cats')       #=> false
+ *     File.fnmatch('c{at,ub}s', 'cubs')       #=> false
+ *     File.fnmatch('c{at,ub}s', 'cat')        #=> false
+ *
+ *     File.fnmatch('c?t',    'cat')                       #=> true
+ *     File.fnmatch('c\?t',   'cat')                       #=> false
+ *     File.fnmatch('c??t',   'cat')                       #=> false
+ *     File.fnmatch('c*',     'cats')                      #=> true
+ *     File.fnmatch('c/ * FIXME * /t', 'c/a/b/c/t')                 #=> true
+ *     File.fnmatch('c*t',    'cat')                       #=> true
+ *     File.fnmatch('c\at',   'cat')                       #=> true
+ *     File.fnmatch('c\at',   'cat', File::FNM_NOESCAPE)   #=> false
+ *     File.fnmatch('a?b',    'a/b')                       #=> true
+ *     File.fnmatch('a?b',    'a/b', File::FNM_PATHNAME)   #=> false
+ *
+ *     File.fnmatch('*',   '.profile')                            #=> false
+ *     File.fnmatch('*',   '.profile', File::FNM_DOTMATCH)        #=> true
+ *     File.fnmatch('*',   'dave/.profile')                       #=> true
+ *     File.fnmatch('*',   'dave/.profile', File::FNM_DOTMATCH)   #=> true
+ *     File.fnmatch('*',   'dave/.profile', File::FNM_PATHNAME)   #=> false
+ *     File.fnmatch('* / FIXME *', 'dave/.profile', File::FNM_PATHNAME)   #=> false
+ *     STRICT = File::FNM_PATHNAME | File::FNM_DOTMATCH
+ *     File.fnmatch('* / FIXME *', 'dave/.profile', STRICT)               #=> true
+ */
 static VALUE
 file_s_fnmatch(argc, argv, obj)
     int argc;
@@ -1073,6 +1446,17 @@ file_s_fnmatch(argc, argv, obj)
     return Qfalse;
 }
 
+/*
+ *  Objects of class <code>Dir</code> are directory streams representing
+ *  directories in the underlying file system. They provide a variety of
+ *  ways to list directories and their contents. See also
+ *  <code>File</code>.
+ *
+ *  The directory used in these examples contains the two regular files
+ *  (<code>config.h</code> and <code>main.rb</code>), the parent
+ *  directory (<code>..</code>), and the directory itself
+ *  (<code>.</code>).
+ */
 void
 Init_Dir()
 {

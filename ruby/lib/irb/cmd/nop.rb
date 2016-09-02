@@ -1,8 +1,8 @@
 #
 #   nop.rb - 
 #   	$Release Version: 0.9$
-#   	$Revision: 1.1.1.1 $
-#   	$Date: 2003/10/15 10:11:49 $
+#   	$Revision: 1.1 $
+#   	$Date: 2002/07/09 11:17:17 $
 #   	by Keiju ISHITSUKA(Nihon Rational Software Co.,Ltd)
 #
 # --
@@ -13,7 +13,7 @@ module IRB
   module ExtendCommand
     class Nop
       
-      @RCS_ID='-$Id: nop.rb,v 1.1.1.1 2003/10/15 10:11:49 melville Exp $-'
+      @RCS_ID='-$Id: nop.rb,v 1.1 2002/07/09 11:17:17 keiju Exp $-'
 
       def self.execute(conf, *opts)
 	command = new(conf)

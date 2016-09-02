@@ -3,7 +3,7 @@
 # 
 # Copyright (C) 2001, 2002, 2003 by Michael Neumann (mneumann@ntecs.de)
 #
-# $Id: parser.rb,v 1.1.1.1 2003/10/15 10:11:49 melville Exp $
+# $Id: parser.rb,v 1.3.2.1 2004/04/05 07:45:32 matz Exp $
 #
 
 
@@ -111,7 +111,7 @@ module XMLRPC
       else
         begin
           mod = Module
-          klass.split("::").each {|const| mod = mod.const_get const.strip }
+          klass.split("::").each {|const| mod = mod.const_get(const.strip)}
           
           Thread.critical = true
           # let initialize take 0 parameters
@@ -467,7 +467,7 @@ module XMLRPC
         else
           # is a normal return value
           raise "Missing return value!" if parser.params.size == 0
-          raise "To many return values. Only one allowed!" if parser.params.size > 1
+          raise "Too many return values. Only one allowed!" if parser.params.size > 1
           [true, parser.params[0]]
         end
       end
@@ -712,6 +712,7 @@ module XMLRPC
         alias :tag_start :startElement
         alias :tag_end :endElement
         alias :text :character
+        alias :cdata :character
 
         def method_missing(*a)
           # ignore
@@ -757,6 +758,10 @@ module XMLRPC
         end
        
         def on_chardata(str)
+          character(str)
+        end
+
+        def on_cdata(str)
           character(str)
         end
 

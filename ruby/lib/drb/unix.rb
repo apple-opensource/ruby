@@ -2,6 +2,8 @@ require 'socket'
 require 'drb/drb'
 require 'tmpdir'
 
+raise(LoadError, "UNIXServer is required") unless defined?(UNIXServer)
+
 module DRb
 
   class DRbUNIXSocket < DRbTCPSocket
@@ -97,7 +99,6 @@ module DRb
     end
 
     def set_sockopt(soc)
-      soc.fcntl(Fcntl::F_SETFL, Fcntl::O_NONBLOCK) if defined? Fcntl::O_NONBLOCK
       soc.fcntl(Fcntl::F_SETFL, Fcntl::FD_CLOEXEC) if defined? Fcntl::FD_CLOEXEC
     end
   end

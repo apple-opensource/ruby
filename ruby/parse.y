@@ -2,8 +2,8 @@
 
   parse.y -
 
-  $Author: melville $
-  $Date: 2003/10/15 10:11:46 $
+  $Author: matz $
+  $Date: 2004/11/29 06:13:51 $
   created at: Fri May 28 18:02:42 JST 1993
 
   Copyright (C) 1993-2003 Yukihiro Matsumoto
@@ -83,35 +83,28 @@ typedef unsigned LONG_LONG stack_type;
 typedef unsigned long stack_type;
 #endif
 
+#define BITSTACK_PUSH(stack, n)	(stack = (stack<<1)|((n)&1))
+#define BITSTACK_POP(stack)	(stack >>= 1)
+#define BITSTACK_LEXPOP(stack)	(stack = (stack >> 1) | (stack & 1))
+#define BITSTACK_SET_P(stack)	(stack&1)
+
 static stack_type cond_stack = 0;
-#define COND_PUSH(n) (cond_stack = (cond_stack<<1)|((n)&1))
-#define COND_POP() (cond_stack >>= 1)
-#define COND_LEXPOP() do {\
-    int last = COND_P();\
-    cond_stack >>= 1;\
-    if (last) cond_stack |= 1;\
-} while (0)
-#define COND_P() (cond_stack&1)
+#define COND_PUSH(n)	BITSTACK_PUSH(cond_stack, n)
+#define COND_POP()	BITSTACK_POP(cond_stack)
+#define COND_LEXPOP()	BITSTACK_LEXPOP(cond_stack)
+#define COND_P()	BITSTACK_SET_P(cond_stack)
 
 static stack_type cmdarg_stack = 0;
-#define CMDARG_PUSH(n) (cmdarg_stack = (cmdarg_stack<<1)|((n)&1))
-#define CMDARG_POP() (cmdarg_stack >>= 1)
-#define CMDARG_LEXPOP() do {\
-    int last = CMDARG_P();\
-    cmdarg_stack >>= 1;\
-    if (last) cmdarg_stack |= 1;\
-} while (0)
-#define CMDARG_P() (cmdarg_stack&1)
+#define CMDARG_PUSH(n)	BITSTACK_PUSH(cmdarg_stack, n)
+#define CMDARG_POP()	BITSTACK_POP(cmdarg_stack)
+#define CMDARG_LEXPOP()	BITSTACK_LEXPOP(cmdarg_stack)
+#define CMDARG_P()	BITSTACK_SET_P(cmdarg_stack)
 
 static int class_nest = 0;
 static int in_single = 0;
 static int in_def = 0;
 static int compile_for_eval = 0;
 static ID cur_mid = 0;
-static int quoted_term;
-#define quoted_term_char ((unsigned char)quoted_term)
-#define WHEN_QUOTED_TERM(x) ((quoted_term >= 0) && (x))
-#define QUOTED_TERM_P(c) WHEN_QUOTED_TERM((c) == quoted_term_char)
 
 static NODE *cond();
 static NODE *logop();
@@ -174,8 +167,7 @@ static void top_local_setup();
 
 #define NODE_STRTERM NODE_ZARRAY	/* nothing to gc */
 #define NODE_HEREDOC NODE_ARRAY 	/* 1, 3 to gc */
-#define ESCAPED_TERM (1 << CHAR_BIT)
-#define SIGN_EXTEND(x,n) (((1<<(n))-1-((x)&~(~0<<(n))))^~(~0<<(n)))
+#define SIGN_EXTEND(x,n) (((1<<(n)-1)^((x)&~(~0<<(n))))-(1<<(n)-1))
 #define nd_func u1.id
 #if SIZEOF_SHORT == 2
 #define nd_term(node) ((signed short)(node)->u2.id)
@@ -184,6 +176,15 @@ static void top_local_setup();
 #endif
 #define nd_paren(node) (char)((node)->u2.id >> CHAR_BIT*2)
 #define nd_nest u3.id
+
+/* Older versions of Yacc set YYMAXDEPTH to a very low value by default (150,
+   for instance).  This is too low for Ruby to parse some files, such as
+   date/format.rb, therefore bump the value up to at least Bison's default. */
+#ifdef OLD_YACC
+#ifndef YYMAXDEPTH
+#define YYMAXDEPTH 10000
+#endif
+#endif
 
 %}
 
@@ -263,7 +264,7 @@ static void top_local_setup();
 %type <node> mlhs mlhs_head mlhs_basic mlhs_entry mlhs_item mlhs_node
 %type <id>   fitem variable sym symbol operation operation2 operation3
 %type <id>   cname fname op f_rest_arg
-%type <num>  f_norm_arg f_arg term_push
+%type <num>  f_norm_arg f_arg
 %token tUPLUS 		/* unary+ */
 %token tUMINUS 		/* unary- */
 %token tPOW		/* ** */
@@ -327,7 +328,7 @@ static void top_local_setup();
 program		:  {
 			lex_state = EXPR_BEG;
                         top_local_init();
-			if ((VALUE)ruby_class == rb_cObject) class_nest = 0;
+			if (ruby_class == rb_cObject) class_nest = 0;
 			else class_nest = 1;
 		    }
 		  compstmt
@@ -477,21 +478,20 @@ stmt		: kALIAS fitem {lex_state = EXPR_FNAME;} fitem
 		    }
 		| klEND '{' compstmt '}'
 		    {
-			if (compile_for_eval && (in_def || in_single)) {
-			    yyerror("END in method; use at_exit");
+			if (in_def || in_single) {
+			    rb_warn("END in method; use at_exit");
 			}
 
 			$$ = NEW_ITER(0, NEW_POSTEXE(), $3);
 		    }
 		| lhs '=' command_call
 		    {
-			value_expr($3);
 			$$ = node_assign($1, $3);
 		    }
 		| mlhs '=' command_call
 		    {
 			value_expr($3);
-			$1->nd_value = NEW_RESTARY($3);
+			$1->nd_value = ($1->nd_head) ? NEW_TO_ARY($3) : NEW_ARRAY($3);
 			$$ = $1;
 		    }
 		| var_lhs tOP_ASGN command_call
@@ -525,6 +525,8 @@ stmt		: kALIAS fitem {lex_state = EXPR_FNAME;} fitem
 
 			value_expr($6);
 		        args = NEW_LIST($6);
+			if ($3 && nd_type($3) != NODE_ARRAY)
+			    $3 = NEW_LIST($3);
 			$3 = list_append($3, NEW_NIL());
 			list_concat(args, $3);
 			if ($5 == tOROP) {
@@ -583,7 +585,7 @@ stmt		: kALIAS fitem {lex_state = EXPR_FNAME;} fitem
 		    }
 		| mlhs '=' arg_value
 		    {
-			$1->nd_value = $3;
+			$1->nd_value = ($1->nd_head) ? NEW_TO_ARY($3) : NEW_ARRAY($3);
 			$$ = $1;
 		    }
 		| mlhs '=' mrhs
@@ -809,6 +811,12 @@ mlhs_node	: variable
 			    yyerror("dynamic constant assignment");
 			$$ = NEW_CDECL(0, 0, NEW_COLON2($1, $3));
 		    }
+		| tCOLON3 tCONSTANT
+		    {
+			if (in_def || in_single)
+			    yyerror("dynamic constant assignment");
+			$$ = NEW_CDECL(0, 0, NEW_COLON3($2));
+		    }
 		| backref
 		    {
 		        rb_backref_error($1);
@@ -841,6 +849,12 @@ lhs		: variable
 			if (in_def || in_single)
 			    yyerror("dynamic constant assignment");
 			$$ = NEW_CDECL(0, 0, NEW_COLON2($1, $3));
+		    }
+		| tCOLON3 tCONSTANT
+		    {
+			if (in_def || in_single)
+			    yyerror("dynamic constant assignment");
+			$$ = NEW_CDECL(0, 0, NEW_COLON3($2));
 		    }
 		| backref
 		    {
@@ -975,6 +989,8 @@ arg		: lhs '=' arg
 
 			value_expr($6);
 			args = NEW_LIST($6);
+			if ($3 && nd_type($3) != NODE_ARRAY)
+			    $3 = NEW_LIST($3);
 			$3 = list_append($3, NEW_NIL());
 			list_concat(args, $3);
 			if ($5 == tOROP) {
@@ -1025,6 +1041,12 @@ arg		: lhs '=' arg
 		| primary_value tCOLON2 tCONSTANT tOP_ASGN arg
 		    {
 			yyerror("constant re-assignment");
+			$$ = 0;
+		    }
+		| tCOLON3 tCONSTANT tOP_ASGN arg
+		    {
+			yyerror("constant re-assignment");
+			$$ = 0;
 		    }
 		| backref tOP_ASGN arg
 		    {
@@ -1209,7 +1231,7 @@ aref_args	: none
 		| tSTAR arg opt_nl
 		    {
 			value_expr($2);
-			$$ = NEW_RESTARY2($2);
+			$$ = NEW_NEWLINE(NEW_SPLAT($2));
 		    }
 		;
 
@@ -1274,7 +1296,7 @@ call_args	: command
 		    }
 		| tSTAR arg_value opt_block_arg
 		    {
-			$$ = arg_blk_pass(NEW_RESTARY($2), $3);
+			$$ = arg_blk_pass(NEW_SPLAT($2), $3);
 		    }
 		| block_arg
 		;
@@ -1329,7 +1351,7 @@ call_args2	: arg_value ',' args opt_block_arg
 		    }
 		| tSTAR arg_value opt_block_arg
 		    {
-			$$ = arg_blk_pass(NEW_RESTARY($2), $3);
+			$$ = arg_blk_pass(NEW_SPLAT($2), $3);
 		    }
 		| block_arg
 		;
@@ -1415,10 +1437,13 @@ primary		: literal
 		  bodystmt
 		  kEND
 		    {
-			$$ = NEW_BEGIN($3);
+			if ($3 == NULL)
+			    $$ = NEW_NIL();
+			else
+			    $$ = NEW_BEGIN($3);
 			nd_set_line($$, $<num>1);
 		    }
-		| tLPAREN_ARG expr {lex_state = EXPR_ENDARG;} ')'
+		| tLPAREN_ARG expr {lex_state = EXPR_ENDARG;} opt_nl ')'
 		    {
 		        rb_warning("(...) interpreted as grouped expression");
 			$$ = $2;
@@ -1431,16 +1456,17 @@ primary		: literal
 		    {
 			$$ = NEW_COLON2($1, $3);
 		    }
-		| tCOLON3 cname
+		| tCOLON3 tCONSTANT
 		    {
 			$$ = NEW_COLON3($2);
 		    }
 		| primary_value '[' aref_args ']'
 		    {
-			if (nd_type($1) == NODE_SELF)
+			if ($1 && nd_type($1) == NODE_SELF)
 			    $$ = NEW_FCALL(tAREF, $3);
 			else
 			    $$ = NEW_CALL($1, tAREF, $3);
+			fixpos($$, $1);
 		    }
 		| tLBRACK aref_args ']'
 		    {
@@ -1480,6 +1506,7 @@ primary		: literal
 		    {
 			$2->nd_iter = NEW_FCALL($1, 0);
 			$$ = $2;
+			fixpos($2->nd_iter, $2);
 		    }
 		| method_call
 		| method_call brace_block
@@ -1624,6 +1651,7 @@ primary		: literal
 		  bodystmt
 		  kEND
 		    {
+			if (!$5) $5 = NEW_NIL();
 			$$ = NEW_DEFN($2, $4, $5, NOEX_PRIVATE);
 		        fixpos($$, $4);
 		        local_pop();
@@ -1813,7 +1841,6 @@ case_body	: kWHEN when_args then
 			$$ = NEW_WHEN($2, $4, $5);
 		    }
 		;
-
 when_args	: args
 		| args ',' tSTAR arg_value
 		    {
@@ -1843,7 +1870,11 @@ opt_rescue	: kRESCUE exc_list exc_var then
 		| none
 		;
 
-exc_list	: args
+exc_list	: arg_value
+		    {
+			$$ = NEW_LIST($1);
+		    }
+		| mrhs
 		| none
 		;
 
@@ -2034,19 +2065,22 @@ string_content	: tSTRING_CONTENT
 			lex_strterm = $<node>2;
 		        $$ = NEW_EVSTR($3);
 		    }
-		| tSTRING_DBEG term_push
+		| tSTRING_DBEG
 		    {
 			$<node>$ = lex_strterm;
 			lex_strterm = 0;
 			lex_state = EXPR_BEG;
+			COND_PUSH(0);
+			CMDARG_PUSH(0);
 		    }
 		  compstmt '}'
 		    {
-			quoted_term = $2;
-			lex_strterm = $<node>3;
-			if (($$ = $4) && nd_type($$) == NODE_NEWLINE) {
+			lex_strterm = $<node>2;
+			COND_LEXPOP();
+			CMDARG_LEXPOP();
+			if (($$ = $3) && nd_type($$) == NODE_NEWLINE) {
 			    $$ = $$->nd_next;
-			    rb_gc_force_recycle((VALUE)$4);
+			    rb_gc_force_recycle((VALUE)$3);
 			}
 			$$ = new_evstr($$);
 		    }
@@ -2056,16 +2090,6 @@ string_dvar	: tGVAR {$$ = NEW_GVAR($1);}
 		| tIVAR {$$ = NEW_IVAR($1);}
 		| tCVAR {$$ = NEW_CVAR($1);}
 		| backref
-		;
-
-term_push	: /* none */
-		    {
-			if (($$ = quoted_term) == -1 &&
-			    nd_type(lex_strterm) == NODE_STRTERM &&
-			    !nd_paren(lex_strterm)) {
-			    quoted_term = nd_term(lex_strterm);
-			}
-		    }
 		;
 
 symbol		: tSYMBEG sym
@@ -2267,7 +2291,11 @@ f_optarg	: f_opt
 		    }
 		;
 
-f_rest_arg	: tSTAR tIDENTIFIER
+restarg_mark	: '*'
+		| tSTAR
+		;
+
+f_rest_arg	: restarg_mark tIDENTIFIER
 		    {
 			if (!is_local_id($2))
 			    yyerror("rest argument must be local variable");
@@ -2275,13 +2303,17 @@ f_rest_arg	: tSTAR tIDENTIFIER
 			    yyerror("duplicate rest argument name");
 			$$ = local_cnt($2);
 		    }
-		| tSTAR
+		| restarg_mark
 		    {
 			$$ = -2;
 		    }
 		;
 
-f_block_arg	: tAMPER tIDENTIFIER
+blkarg_mark	: '&'
+		| tAMPER
+		;
+
+f_block_arg	: blkarg_mark tIDENTIFIER
 		    {
 			if (!is_local_id($2))
 			    yyerror("block argument must be local variable");
@@ -2311,7 +2343,7 @@ singleton	: var_ref
 		| '(' {lex_state = EXPR_BEG;} expr opt_nl ')'
 		    {
 			if ($3 == 0) {
-			    yyerror("can't define single method for ().");
+			    yyerror("can't define singleton method for ().");
 			}
 			else {
 			    switch (nd_type($3)) {
@@ -2323,7 +2355,7 @@ singleton	: var_ref
 			      case NODE_LIT:
 			      case NODE_ARRAY:
 			      case NODE_ZARRAY:
-				yyerror("can't define single method for literals");
+				yyerror("can't define singleton method for literals");
 			      default:
 				value_expr($3);
 				break;
@@ -2434,7 +2466,7 @@ static char *lex_pend;
 
 static int
 yyerror(msg)
-    char *msg;
+    const char *msg;
 {
     char *p, *pe, *buf;
     int len, i;
@@ -2519,7 +2551,6 @@ yycompile(f, line)
     ruby_eval_tree = 0;
     heredoc_end = 0;
     lex_strterm = 0;
-    quoted_term = -1;
     ruby_current_node = 0;
     ruby_sourcefile = rb_source_filename(f);
     n = yyparse();
@@ -2935,7 +2966,7 @@ regx_options()
 enum string_type {
     str_squote = (0),
     str_dquote = (STR_FUNC_EXPAND),
-    str_xquote = (STR_FUNC_ESCAPE|STR_FUNC_EXPAND),
+    str_xquote = (STR_FUNC_EXPAND),
     str_regexp = (STR_FUNC_REGEXP|STR_FUNC_ESCAPE|STR_FUNC_EXPAND),
     str_sword  = (STR_FUNC_QWORDS),
     str_dword  = (STR_FUNC_QWORDS|STR_FUNC_EXPAND),
@@ -2977,13 +3008,12 @@ tokadd_string(func, term, paren, nest)
 	}
 	else if (c == '\\') {
 	    c = nextc();
-	    if (QUOTED_TERM_P(c)) {
-		pushback(c);
-		return c;
-	    }
 	    switch (c) {
 	      case '\n':
-		continue;
+		if (func & STR_FUNC_QWORDS) break;
+		if (func & STR_FUNC_EXPAND) continue;
+		tokadd('\\');
+		break;
 
 	      case '\\':
 		if (func & STR_FUNC_ESCAPE) tokadd(c);
@@ -3049,9 +3079,7 @@ parse_string(quote)
 	do {c = nextc();} while (ISSPACE(c));
 	space = 1;
     }
-    if ((c == term && !quote->nd_nest) ||
-	(c == '\\' && WHEN_QUOTED_TERM(peek(quoted_term_char)) &&
-	 (c = nextc()) == term)) {
+    if (c == term && !quote->nd_nest) {
 	if (func & STR_FUNC_QWORDS) {
 	    quote->nd_func = -1;
 	    return ' ';
@@ -3928,7 +3956,7 @@ yylex()
 	c = nextc();
 	if (c == ':') {
 	    if (lex_state == EXPR_BEG ||  lex_state == EXPR_MID ||
-		(IS_ARG() && space_seen)) {
+		lex_state == EXPR_CLASS || (IS_ARG() && space_seen)) {
 		lex_state = EXPR_BEG;
 		return tCOLON3;
 	    }
@@ -4025,7 +4053,8 @@ yylex()
 		c = tLPAREN_ARG;
 	    }
 	    else if (lex_state == EXPR_ARG) {
-		c = tLPAREN_ARG;
+		rb_warn("don't put space before argument parentheses");
+		c = '(';
 	    }
 	}
 	COND_PUSH(0);
@@ -4076,13 +4105,6 @@ yylex()
 	    goto retry; /* skip \\n */
 	}
 	pushback(c);
-	if (QUOTED_TERM_P(c)) {
-	    if (!(quoted_term & ESCAPED_TERM)) {
-		rb_warn("escaped terminator '%c' inside string interpolation", c);
-		quoted_term |= ESCAPED_TERM;
-	    }
-	    goto retry;
-	}
 	return '\\';
 
       case '%':
@@ -4092,14 +4114,6 @@ yylex()
 
 	    c = nextc();
 	  quotation:
-	    if (c == '\\' && WHEN_QUOTED_TERM(peek(quoted_term_char))) {
-		c = nextc();
-		if (!(quoted_term & ESCAPED_TERM)) {
-		    rb_warn("escaped terminator '%s%c' inside string interpolation",
-			    (c == '\'' ? "\\" : ""), c);
-		    quoted_term |= ESCAPED_TERM;
-		}
-	    }
 	    if (!ISALNUM(c)) {
 		term = c;
 		c = 'Q';
@@ -4511,7 +4525,7 @@ block_append(head, tail)
 	parser_warning(h, "unused literal ignored");
 	return tail;
       default:
-	end = NEW_BLOCK(head);
+	h = end = NEW_BLOCK(head);
 	end->nd_end = end;
 	fixpos(end, head);
 	head = end;
@@ -4547,7 +4561,7 @@ block_append(head, tail)
 	tail->nd_end = tail;
     }
     end->nd_next = tail;
-    head->nd_end = tail->nd_end;
+    h->nd_end = tail->nd_end;
     return head;
 }
 
@@ -4641,6 +4655,7 @@ literal_concat(head, tail)
       case NODE_EVSTR:
 	if (htype == NODE_STR) {
 	    nd_set_type(head, NODE_DSTR);
+	    head->nd_alen = 1;
 	}
 	list_append(head, tail);
 	break;
@@ -4837,7 +4852,7 @@ assignable(id, val)
 	return NEW_CVDECL(id, val);
     }
     else {
-	rb_bug("bad id for variable");
+	rb_compile_error("identifier %s is not valid", rb_id2name(id));
     }
     return 0;
 }
@@ -5251,11 +5266,10 @@ static NODE*
 cond0(node)
     NODE *node;
 {
-    enum node_type type = nd_type(node);
-
+    if (node == 0) return 0;
     assign_in_cond(node);
 
-    switch (type) {
+    switch (nd_type(node)) {
       case NODE_DSTR:
       case NODE_EVSTR:
       case NODE_STR:
@@ -5279,8 +5293,8 @@ cond0(node)
       case NODE_DOT3:
 	node->nd_beg = range_op(node->nd_beg);
 	node->nd_end = range_op(node->nd_end);
-	if (type == NODE_DOT2) nd_set_type(node,NODE_FLIP2);
-	else if (type == NODE_DOT3) nd_set_type(node, NODE_FLIP3);
+	if (nd_type(node) == NODE_DOT2) nd_set_type(node,NODE_FLIP2);
+	else if (nd_type(node) == NODE_DOT3) nd_set_type(node, NODE_FLIP3);
 	node->nd_cnt = local_append(internal_id());
 	if (!e_option_supplied()) {
 	    int b = literal_node(node->nd_beg);
@@ -5330,7 +5344,7 @@ logop(type, left, right)
     NODE *left, *right;
 {
     value_expr(left);
-    if (nd_type(left) == type) {
+    if (left && nd_type(left) == type) {
 	NODE *node = left, *second;
 	while ((second = node->nd_2nd) != 0 && nd_type(second) == type) {
 	    node = second;
@@ -5379,8 +5393,8 @@ ret_args(node)
 	if (nd_type(node) == NODE_ARRAY && node->nd_next == 0) {
 	    node = node->nd_head;
 	}
-	if (nd_type(node) == NODE_RESTARY) {
-	    nd_set_type(node, NODE_SPLAT);
+	if (node && nd_type(node) == NODE_SPLAT) {
+	    node = NEW_SVALUE(node);
 	}
     }
     return node;
@@ -5393,18 +5407,17 @@ new_yield(node)
     long state = Qtrue;
 
     if (node) {
-	no_blockarg(node);
-	if (nd_type(node) == NODE_ARRAY && node->nd_next == 0) {
-	    node = node->nd_head;
-	    state = Qfalse;
-	}
-	if (nd_type(node) == NODE_RESTARY) {
-	    nd_set_type(node, NODE_SPLAT);
-	    state = Qfalse;
-	}
+        no_blockarg(node);
+        if (nd_type(node) == NODE_ARRAY && node->nd_next == 0) {
+            node = node->nd_head;
+            state = Qfalse;
+        }
+        if (node && nd_type(node) == NODE_SPLAT) {
+            state = Qtrue;
+        }
     }
     else {
-	state = Qfalse;
+        state = Qfalse;
     }
     return NEW_YIELD(node, state);
 }
@@ -5445,12 +5458,11 @@ static NODE*
 arg_prepend(node1, node2)
     NODE *node1, *node2;
 {
-    switch (nodetype(node2)) {
+    switch (nd_type(node2)) {
       case NODE_ARRAY:
 	return list_concat(NEW_LIST(node1), node2);
 
-      case NODE_RESTARY:
-      case NODE_RESTARY2:
+      case NODE_SPLAT:
 	return arg_concat(node1, node2->nd_head);
 
       case NODE_BLOCK_PASS:
@@ -5458,7 +5470,7 @@ arg_prepend(node1, node2)
 	return node2;
 
       default:
-	rb_bug("unknown nodetype(%d) for arg_prepend", nodetype(node2));
+	rb_bug("unknown nodetype(%d) for arg_prepend", nd_type(node2));
     }
     return 0;			/* not reached */
 }
@@ -5933,6 +5945,22 @@ symbols_i(key, value, ary)
     rb_ary_push(ary, ID2SYM(value));
     return ST_CONTINUE;
 }
+
+/*
+ *  call-seq:
+ *     Symbol.all_symbols    => array
+ *  
+ *  Returns an array of all the symbols currently in Ruby's symbol
+ *  table.
+ *     
+ *     Symbol.all_symbols.size    #=> 903
+ *     Symbol.all_symbols[1,20]   #=> [:floor, :ARGV, :Binding, :symlink,
+ *                                     :chown, :EOFError, :$;, :String, 
+ *                                     :LOCK_SH, :"setuid?", :$<, 
+ *                                     :default_proc, :compact, :extend, 
+ *                                     :Tms, :getwd, :$=, :ThreadGroup,
+ *                                     :wait2, :$>]
+ */
 
 VALUE
 rb_sym_all_symbols()

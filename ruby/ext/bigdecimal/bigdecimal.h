@@ -26,7 +26,7 @@ extern "C" {
 #define SZ_NaN  "NaN"
 #define SZ_INF  "Infinity"
 #define SZ_PINF "+Infinity"
-#define SZ_NINF "+Infinity"
+#define SZ_NINF "-Infinity"
 
 /*
  *   #define VP_EXPORT other than static to let VP_ routines 
@@ -122,12 +122,13 @@ VP_EXPORT U_LONG VpGetPrecLimit(void);
 VP_EXPORT U_LONG VpSetPrecLimit(U_LONG n);
 
 /* Round mode */
+VP_EXPORT int           VpIsRoundMode(unsigned long n);
 VP_EXPORT unsigned long VpGetRoundMode(void);
 VP_EXPORT unsigned long VpSetRoundMode(unsigned long n);
 
 VP_EXPORT int VpException(unsigned short f,char *str,int always);
 VP_EXPORT int VpIsNegDoubleZero(double v);
-VP_EXPORT U_LONG VpNumOfChars(Real *vp);
+VP_EXPORT U_LONG VpNumOfChars(Real *vp,char *pszFmt);
 VP_EXPORT U_LONG VpInit(U_LONG BaseVal);
 VP_EXPORT void *VpMemAlloc(U_LONG mb);
 VP_EXPORT void VpFree(Real *pv);
@@ -139,27 +140,23 @@ VP_EXPORT int VpDivd(Real *c,Real *r,Real *a,Real *b);
 VP_EXPORT int VpComp(Real *a,Real *b);
 VP_EXPORT S_LONG VpExponent10(Real *a);
 VP_EXPORT void VpSzMantissa(Real *a,char *psz);
-VP_EXPORT void VpToString(Real *a,char *psz,int fFmt);
+VP_EXPORT int VpToSpecialString(Real *a,char *psz,int fPlus);
+VP_EXPORT void VpToString(Real *a,char *psz,int fFmt,int fPlus);
+VP_EXPORT void VpToFString(Real *a,char *psz,int fFmt,int fPlus);
 VP_EXPORT int VpCtoV(Real *a,char *int_chr,U_LONG ni,char *frac,U_LONG nf,char *exp_chr,U_LONG ne);
 VP_EXPORT int VpVtoD(double *d,S_LONG *e,Real *m);
 VP_EXPORT void VpDtoV(Real *m,double d);
 VP_EXPORT void VpItoV(Real *m,S_INT ival);
 VP_EXPORT int VpSqrt(Real *y,Real *x);
-VP_EXPORT void VpActiveRound(Real *y,Real *x,int f,int il);
-VP_EXPORT void VpMidRound(Real *y, int f, int nf);
-VP_EXPORT void VpLeftRound(Real *y, int f, int nf);
+VP_EXPORT int VpActiveRound(Real *y,Real *x,int f,int il);
+VP_EXPORT int VpMidRound(Real *y, int f, int nf);
+VP_EXPORT int VpLeftRound(Real *y, int f, int nf);
 VP_EXPORT void VpFrac(Real *y,Real *x);
 VP_EXPORT int VpPower(Real *y,Real *x,S_INT n);
 
 /* VP constants */
 VP_EXPORT Real *VpOne();
 
-#ifdef ENABLE_TRIAL_METHOD
-VP_EXPORT void VpPi(Real *y);
-VP_EXPORT void VpExp1(Real *y);
-VP_EXPORT void VpExp(Real *y,Real *x);
-VP_EXPORT void VpSinCos(Real *psin,Real *pcos,Real *x);
-#endif /* ENABLE_TRIAL_METHOD */
 /*  
  *  ------------------
  *  MACRO definitions.
@@ -205,6 +202,7 @@ VP_EXPORT void VpSinCos(Real *psin,Real *pcos,Real *x);
 #define VpSetPosInf(a)  ((a)->frac[0]=0,(a)->Prec=1,(a)->sign=VP_SIGN_POSITIVE_INFINITE)
 #define VpSetNegInf(a)  ((a)->frac[0]=0,(a)->Prec=1,(a)->sign=VP_SIGN_NEGATIVE_INFINITE)
 #define VpSetInf(a,s)   ( ((s)>0)?VpSetPosInf(a):VpSetNegInf(a) )
+#define VpHasVal(a)     (a->frac[0])
 #define VpIsOne(a)      ((a->Prec==1)&&(a->frac[0]==1)&&(a->exponent==1))
 #define VpExponent(a)   (a->exponent)
 #ifdef _DEBUG
@@ -215,4 +213,4 @@ VP_EXPORT int VPrint(FILE *fp,char *cntl_chr,Real *a);
 #if defined(__cplusplus)
 }  /* extern "C" { */
 #endif
-#endif //____BIG_DECIMAL__H____
+#endif /* ____BIG_DECIMAL__H____ */

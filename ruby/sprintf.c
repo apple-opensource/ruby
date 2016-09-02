@@ -2,8 +2,8 @@
 
   sprintf.c -
 
-  $Author: melville $
-  $Date: 2003/10/15 10:11:46 $
+  $Author: matz $
+  $Date: 2004/12/08 06:22:51 $
   created at: Fri Oct 15 10:39:26 JST 1993
 
   Copyright (C) 1993-2003 Yukihiro Matsumoto
@@ -25,31 +25,30 @@ remove_sign_bits(str, base)
     char *str;
     int base;
 {
-    char *s, *t, *end;
-    unsigned long len;
+    char *s, *t;
     
     s = t = str;
-    len = strlen(str);
-    end = str + len;
 
     if (base == 16) {
-	while (t<end && *t == 'f') {
+	while (*t == 'f') {
 	    t++;
 	}
     }
     else if (base == 8) {
 	if (*t == '3') t++;
-	while (t<end && *t == '7') {
+	while (*t == '7') {
 	    t++;
 	}
     }
     else if (base == 2) {
-	while (t<end && *t == '1') {
+	while (*t == '1') {
 	    t++;
 	}
     }
-    while (*t) *s++ = *t++;
-    *s = '\0';
+    if (t > s) {
+	while (*t) *s++ = *t++;
+	*s = '\0';
+    }
 
     return str;
 }
@@ -57,7 +56,7 @@ remove_sign_bits(str, base)
 static char
 sign_bits(base, p)
     int base;
-    char *p;
+    const char *p;
 {
     char c = '.';
 
@@ -108,7 +107,7 @@ sign_bits(base, p)
 	       (posarg = -1, GETNTHARG(n))))
 
 #define GETNTHARG(nth) \
-    ((nth >= argc) ? (rb_raise(rb_eArgError, "too few argument."), 0) : argv[nth])
+    ((nth >= argc) ? (rb_raise(rb_eArgError, "too few arguments."), 0) : argv[nth])
 
 #define GETASTER(val) do { \
     t = p++; \
@@ -129,13 +128,113 @@ sign_bits(base, p)
     val = NUM2INT(tmp); \
 } while (0)
 
+
+/*
+ *  call-seq:
+ *     format(format_string [, arguments...] )   => string
+ *     sprintf(format_string [, arguments...] )  => string
+ *  
+ *  Returns the string resulting from applying <i>format_string</i> to
+ *  any additional arguments. Within the format string, any characters
+ *  other than format sequences are copied to the result. A format
+ *  sequence consists of a percent sign, followed by optional flags,
+ *  width, and precision indicators, then terminated with a field type
+ *  character. The field type controls how the corresponding
+ *  <code>sprintf</code> argument is to be interpreted, while the flags
+ *  modify that interpretation. The field type characters are listed
+ *  in the table at the end of this section. The flag characters are:
+ *
+ *    Flag     | Applies to   | Meaning
+ *    ---------+--------------+-----------------------------------------
+ *    space    | bdeEfgGioxXu | Leave a space at the start of 
+ *             |              | positive numbers.
+ *    ---------+--------------+-----------------------------------------
+ *    (digit)$ | all          | Specifies the absolute argument number
+ *             |              | for this field. Absolute and relative
+ *             |              | argument numbers cannot be mixed in a
+ *             |              | sprintf string.
+ *    ---------+--------------+-----------------------------------------
+ *     #       | beEfgGoxX    | Use an alternative format. For the
+ *             |              | conversions `o', `x', `X', and `b', 
+ *             |              | prefix the result with ``0'', ``0x'', ``0X'',
+ *             |              |  and ``0b'', respectively. For `e',
+ *             |              | `E', `f', `g', and 'G', force a decimal
+ *             |              | point to be added, even if no digits follow.
+ *             |              | For `g' and 'G', do not remove trailing zeros.
+ *    ---------+--------------+-----------------------------------------
+ *    +        | bdeEfgGioxXu | Add a leading plus sign to positive numbers.
+ *    ---------+--------------+-----------------------------------------
+ *    -        | all          | Left-justify the result of this conversion.
+ *    ---------+--------------+-----------------------------------------
+ *    0 (zero) | all          | Pad with zeros, not spaces.
+ *    ---------+--------------+-----------------------------------------
+ *    *        | all          | Use the next argument as the field width. 
+ *             |              | If negative, left-justify the result. If the
+ *             |              | asterisk is followed by a number and a dollar 
+ *             |              | sign, use the indicated argument as the width.
+ *
+ *     
+ *  The field width is an optional integer, followed optionally by a
+ *  period and a precision. The width specifies the minimum number of
+ *  characters that will be written to the result for this field. For
+ *  numeric fields, the precision controls the number of decimal places
+ *  displayed. For string fields, the precision determines the maximum
+ *  number of characters to be copied from the string. (Thus, the format
+ *  sequence <code>%10.10s</code> will always contribute exactly ten
+ *  characters to the result.)
+ *
+ *  The field types are:
+ *
+ *      Field |  Conversion
+ *      ------+--------------------------------------------------------------
+ *        b   | Convert argument as a binary number.
+ *        c   | Argument is the numeric code for a single character.
+ *        d   | Convert argument as a decimal number.
+ *        E   | Equivalent to `e', but uses an uppercase E to indicate
+ *            | the exponent.
+ *        e   | Convert floating point argument into exponential notation 
+ *            | with one digit before the decimal point. The precision
+ *            | determines the number of fractional digits (defaulting to six).
+ *        f   | Convert floating point argument as [-]ddd.ddd, 
+ *            |  where the precision determines the number of digits after
+ *            | the decimal point.
+ *        G   | Equivalent to `g', but use an uppercase `E' in exponent form.
+ *        g   | Convert a floating point number using exponential form
+ *            | if the exponent is less than -4 or greater than or
+ *            | equal to the precision, or in d.dddd form otherwise.
+ *        i   | Identical to `d'.
+ *        o   | Convert argument as an octal number.
+ *        p   | The valuing of argument.inspect.
+ *        s   | Argument is a string to be substituted. If the format
+ *            | sequence contains a precision, at most that many characters
+ *            | will be copied.
+ *        u   | Treat argument as an unsigned decimal number.
+ *        X   | Convert argument as a hexadecimal number using uppercase
+ *            | letters. Negative numbers will be displayed with two
+ *            | leading periods (representing an infinite string of
+ *            | leading 'FF's.
+ *        x   | Convert argument as a hexadecimal number.
+ *            | Negative numbers will be displayed with two
+ *            | leading periods (representing an infinite string of
+ *            | leading 'ff's.
+ *     
+ *  Examples:
+ *
+ *     sprintf("%d %04x", 123, 123)               #=> "123 007b"
+ *     sprintf("%08b '%4s'", 123, 123)            #=> "01111011 ' 123'"
+ *     sprintf("%1$*2$s %2$d %1$s", "hello", 8)   #=> "   hello 8 hello"
+ *     sprintf("%1$*2$s %2$d", "hello", -8)       #=> "hello    -8"
+ *     sprintf("%+g:% g:%-g", 1.23, 1.23, 1.23)   #=> "+1.23: 1.23:1.23"
+ */
+
 VALUE
 rb_f_sprintf(argc, argv)
     int argc;
     VALUE *argv;
 {
     VALUE fmt;
-    char *buf, *p, *end;
+    const char *p, *end;
+    char *buf;
     int blen, bsiz;
     VALUE result;
 
@@ -150,6 +249,7 @@ rb_f_sprintf(argc, argv)
     fmt = GETNTHARG(0);
     if (OBJ_TAINTED(fmt)) tainted = 1;
     StringValue(fmt);
+    fmt = rb_str_new4(fmt);
     p = RSTRING(fmt)->ptr;
     end = p + RSTRING(fmt)->len;
     blen = 0;
@@ -158,7 +258,7 @@ rb_f_sprintf(argc, argv)
     buf = RSTRING(result)->ptr;
 
     for (; p < end; p++) {
-	char *t;
+	const char *t;
 	int n;
 
 	for (t = p; t < end && *t != '%'; t++) ;
@@ -345,6 +445,7 @@ rb_f_sprintf(argc, argv)
 		long v = 0;
 		int base, bignum = 0;
 		int len, pos;
+		VALUE tmp;
 
 		switch (*p) {
 		  case 'd':
@@ -445,12 +546,12 @@ rb_f_sprintf(argc, argv)
 			if (base == 10) {
 			    rb_warning("negative number for %%u specifier");
 			}
-			else if (!(flags&FPREC)) {
+			if (!(flags&(FPREC|FZERO))) {
 			    strcpy(s, "..");
 			    s += 2;
 			}
 		    }
-		    sprintf(fbuf, "%%l%c", *p);
+		    sprintf(fbuf, "%%l%c", *p == 'X' ? 'x' : *p);
 		    sprintf(s, fbuf, v);
 		    if (v < 0) {
 			char d = 0;
@@ -472,8 +573,8 @@ rb_f_sprintf(argc, argv)
 		}
 
 		if (sign) {
-		    val = rb_big2str(val, base);
-		    s = RSTRING(val)->ptr;
+		    tmp = rb_big2str(val, base);
+		    s = RSTRING(tmp)->ptr;
 		    if (s[0] == '-') {
 			s++;
 			sc = '-';
@@ -493,8 +594,8 @@ rb_f_sprintf(argc, argv)
 		    val = rb_big_clone(val);
 		    rb_big_2comp(val);
 		}
-		val = rb_big2str(val, base);
-		s = RSTRING(val)->ptr;
+		tmp = rb_big2str(val, base);
+		s = RSTRING(tmp)->ptr;
 		if (*s == '-') {
 		    if (base == 10) {
 			rb_warning("negative number for %%u specifier");
@@ -502,9 +603,9 @@ rb_f_sprintf(argc, argv)
 		    }
 		    else {
 			remove_sign_bits(++s, base);
-			val = rb_str_new(0, 3+strlen(s));
-			t = RSTRING(val)->ptr;
-			if (!(flags&FPREC)) {
+			tmp = rb_str_new(0, 3+strlen(s));
+			t = RSTRING(tmp)->ptr;
+			if (!(flags&(FPREC|FZERO))) {
 			    strcpy(t, "..");
 			    t += 2;
 			}
@@ -520,7 +621,7 @@ rb_f_sprintf(argc, argv)
 			bignum = 2;
 		    }
 		}
-		s  = RSTRING(val)->ptr;
+		s = RSTRING(tmp)->ptr;
 
 	      format_integer:
 		pos = -1;
@@ -590,6 +691,63 @@ rb_f_sprintf(argc, argv)
 		char fbuf[32];
 
 		fval = RFLOAT(rb_Float(val))->value;
+#if defined(_WIN32) && !defined(__BORLANDC__)
+		if (isnan(fval) || isinf(fval)) {
+		    char *expr;
+
+		    if  (isnan(fval)) {
+			expr = "NaN";
+		    }
+		    else {
+			expr = "Inf";
+		    }
+		    need = strlen(expr);
+		    if ((!isnan(fval) && fval < 0.0) || (flags & FPLUS))
+			need++;
+		    if ((flags & FWIDTH) && need < width)
+			need = width;
+
+		    CHECK(need);
+		    sprintf(&buf[blen], "%*s", need, "");
+		    if (flags & FMINUS) {
+			if (!isnan(fval) && fval < 0.0)
+			    buf[blen++] = '-';
+			else if (flags & FPLUS)
+			    buf[blen++] = '+';
+			else if (flags & FSPACE)
+			    blen++;
+			strncpy(&buf[blen], expr, strlen(expr));
+		    }
+		    else if (flags & FZERO) {
+			if (!isnan(fval) && fval < 0.0) {
+			    buf[blen++] = '-';
+			    need--;
+			}
+			else if (flags & FPLUS) {
+			    buf[blen++] = '+';
+			    need--;
+			}
+			else if (flags & FSPACE) {
+			    blen++;
+			    need--;
+			}
+			while (need-- - strlen(expr) > 0) {
+			    buf[blen++] = '0';
+			}
+			strncpy(&buf[blen], expr, strlen(expr));
+		    }
+		    else {
+			if (!isnan(fval) && fval < 0.0)
+			    buf[blen + need - strlen(expr) - 1] = '-';
+			else if (flags & FPLUS)
+			    buf[blen + need - strlen(expr) - 1] = '+';
+			strncpy(&buf[blen + need - strlen(expr)], expr,
+				strlen(expr));
+		    }
+		    blen += strlen(&buf[blen]);
+		    break;
+		}
+#endif	/* defined(_WIN32) && !defined(__BORLANDC__) */
 		fmt_setup(fbuf, *p, flags, width, prec);
 		need = 0;
 		if (*p != 'e' && *p != 'E') {
@@ -613,14 +771,12 @@ rb_f_sprintf(argc, argv)
     }
 
   sprint_exit:
-#if 0
     /* XXX - We cannot validiate the number of arguments because
      *       the format string may contain `n$'-style argument selector.
      */
-    if (RTEST(ruby_verbose) && nextarg < argc) {
-	rb_raise(rb_eArgError, "too many argument for format string");
+    if (RTEST(ruby_verbose) && posarg >= 0 && nextarg < argc) {
+	rb_raise(rb_eArgError, "too many arguments for format string");
     }
-#endif
     rb_str_resize(result, blen);
 
     if (tainted) OBJ_TAINT(result);

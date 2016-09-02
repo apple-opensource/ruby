@@ -1,5 +1,5 @@
 /*
- * $Id: ossl_pkey.h,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+ * $Id: ossl_pkey.h,v 1.2 2003/09/12 13:46:48 michal Exp $
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2001 Michal Rokos <m.rokos@sh.cvut.cz>
  * All rights reserved.
@@ -32,6 +32,8 @@ extern ID id_private_q;
     OSSL_Check_Kind(obj, cPKey); \
     GetPKey(obj, pkey); \
 } while (0)
+
+void ossl_generate_cb(int, int, void *);
 
 VALUE ossl_pkey_new(EVP_PKEY *);
 VALUE ossl_pkey_new_from_file(VALUE);

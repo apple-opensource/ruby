@@ -1,19 +1,20 @@
 /*
  * emitter.c
  *
- * $Author: melville $
- * $Date: 2003/10/15 10:11:47 $
+ * $Author: why $
+ * $Date: 2004/05/16 16:09:40 $
  *
  * Copyright (C) 2003 why the lucky stiff
  * 
  * All Base64 code from Ruby's pack.c.
  * Ruby is Copyright (C) 1993-2003 Yukihiro Matsumoto 
  */
+#include "ruby.h"
+
 #include <stdio.h>
 #include <string.h>
 
 #include "syck.h"
-#include "ruby.h"
 
 #define DEFAULT_ANCHOR_FORMAT "id%03d"
 
@@ -102,7 +103,7 @@ syck_base64dec( char *s, long len )
         }
     }
     *end = '\0';
-    //RSTRING(buf)->len = ptr - RSTRING(buf)->ptr;
+    /*RSTRING(buf)->len = ptr - RSTRING(buf)->ptr;*/
     return ptr;
 }
 
@@ -232,9 +233,18 @@ syck_emitter_write( SyckEmitter *e, char *str, long len )
      * Flush if at end of buffer
      */
     at = e->marker - e->buffer;
-    if ( len + at > e->bufsize )
+    if ( len + at >= e->bufsize )
     {
         syck_emitter_flush( e, 0 );
+	for (;;) {
+	    long rest = e->bufsize - (e->marker - e->buffer);
+	    if (len <= rest) break;
+	    S_MEMCPY( e->marker, str, char, rest );
+	    e->marker += rest;
+	    str += rest;
+	    len -= rest;
+	    syck_emitter_flush( e, 0 );
+	}
     }
 
     /*

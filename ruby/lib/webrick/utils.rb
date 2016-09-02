@@ -26,16 +26,16 @@ module WEBrick
     end
     module_function :set_close_on_exec
 
-    def su(user, group=nil)
+    def su(user)
       if defined?(Etc)
         pw = Etc.getpwnam(user)
-        gr = group ? Etc.getgrnam(group) : pw
-        Process::gid = gr.gid
-        Process::egid = gr.gid
-        Process::uid = pw.uid
-        Process::euid = pw.uid
-      end 
-    end   
+        Process::initgroups(user, pw.gid)
+        Process::Sys::setgid(pw.gid)
+        Process::Sys::setuid(pw.uid)
+      else
+        warn("WEBrick::Utils::su doesn't work on this platform")
+      end
+    end
     module_function :su
 
     def getservername
@@ -47,6 +47,30 @@ module WEBrick
       end
     end
     module_function :getservername
+
+    def create_listeners(address, port, logger=nil)
+      res = Socket::getaddrinfo(address, port,
+                                Socket::AF_UNSPEC,   # address family
+                                Socket::SOCK_STREAM, # socket type
+                                0,                   # protocol
+                                Socket::AI_PASSIVE)  # flag
+      last_error = nil
+      sockets = []
+      res.each{|ai|
+        begin
+          logger.debug("TCPServer.new(#{ai[3]}, #{ai[1]})") if logger
+          sock = TCPServer.new(ai[3], ai[1])
+          Utils::set_close_on_exec(sock)
+          sockets << sock
+        rescue => ex
+          logger.warn("TCPServer Error: #{ex}") if logger
+          last_error  = ex
+        end
+      }
+      raise last_error if sockets.empty?
+      return sockets
+    end
+    module_function :create_listeners
 
     RAND_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" +
                  "0123456789" +

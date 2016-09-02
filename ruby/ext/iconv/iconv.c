@@ -3,34 +3,16 @@
 
   iconv.c -
 
-  $Author: melville $
-  $Date: 2003/10/15 10:11:47 $
+  $Author: matz $
+  $Date: 2004/12/21 02:54:16 $
   created at: Wed Dec  1 20:28:09 JST 1999
 
   All the files in this distribution are covered under the Ruby's
   license (see the file COPYING).
 
+  Documentation by Yukihiro Matsumoto and Gavin Sinclair.
+
 **********************************************************************/
-
-/*
-=begin
-= Summary
-Ruby extension for codeset conversion.
-
-= Abstract
-Iconv is a wrapper class for UNIX 95 (({iconv()})) function family, which
-translates string between various coding systems.
-
-See ((<Open Group|URL:http://www.opengroup.org/>))'s on-line documents for more details.
-* ((<iconv.h|URL:http://www.opengroup.org/onlinepubs/007908799/xsh/iconv.h.html>))
-* ((<iconv_open()|URL:http://www.opengroup.org/onlinepubs/007908799/xsh/iconv_open.html>))
-* ((<iconv()|URL:http://www.opengroup.org/onlinepubs/007908799/xsh/iconv.html>))
-* ((<iconv_close()|URL:http://www.opengroup.org/onlinepubs/007908799/xsh/iconv_close.html>))
-
-Which coding systems are available, it depends on the platform.
-
-=end
-*/
 
 #include "ruby.h"
 #include <errno.h>
@@ -38,6 +20,54 @@ Which coding systems are available, it depends on the platform.
 #include <assert.h>
 #include "st.h"
 #include "intern.h"
+
+/*
+ * Document-class: Iconv
+ *
+ * == Summary
+ *
+ * Ruby extension for charset conversion.
+ * 
+ * == Abstract
+ *
+ * Iconv is a wrapper class for the UNIX 95 <tt>iconv()</tt> function family,
+ * which translates string between various encoding systems.
+ * 
+ * See Open Group's on-line documents for more details.
+ * * <tt>iconv.h</tt>:       http://www.opengroup.org/onlinepubs/007908799/xsh/iconv.h.html
+ * * <tt>iconv_open()</tt>:  http://www.opengroup.org/onlinepubs/007908799/xsh/iconv_open.html
+ * * <tt>iconv()</tt>:       http://www.opengroup.org/onlinepubs/007908799/xsh/iconv.html
+ * * <tt>iconv_close()</tt>: http://www.opengroup.org/onlinepubs/007908799/xsh/iconv_close.html
+ * 
+ * Which coding systems are available is platform-dependent.
+ * 
+ * == Examples
+ *
+ * 1. Instantiate a new Iconv and use method Iconv#iconv.
+ *
+ *      cd = Iconv.new(to, from)
+ *      begin
+ *        input.each { |s| output << cd.iconv(s) }
+ *        output << cd.iconv(nil)                   # Don't forget this!
+ *      ensure
+ *        cd.close
+ *      end
+ *
+ * 2. Invoke Iconv.open with a block.
+ *
+ *      Iconv.open(to, from) do |cd|
+ *        input.each { |s| output << cd.iconv(s) }
+ *        output << cd.iconv(nil)
+ *      end
+ *
+ * 3. Shorthand for (2).
+ *
+ *      Iconv.iconv(to, from, *input.to_a)
+ *
+ * 4. Simple conversion between two charsets.
+ *
+ *      converted_text = Iconv.new('iso-8859-15', 'utf-8').iconv(text)
+ */
 
 /* Invalid value for iconv_t is -1 but 0 for VALUE, I hope VALUE is
    big enough to keep iconv_t */
@@ -50,16 +80,17 @@ struct iconv_env_t
     int argc;
     VALUE *argv;
     VALUE ret;
+    VALUE (*append)_((VALUE, VALUE));
 };
 
 static VALUE rb_eIconvFailure;
 static VALUE rb_eIconvIllegalSeq;
 static VALUE rb_eIconvInvalidChar;
 static VALUE rb_eIconvOutOfRange;
-static ID rb_inserter;
 
-static ID rb_success, rb_failed, rb_mesg;
-static VALUE iconv_failure_initialize _((VALUE error, VALUE success, VALUE failed, struct iconv_env_t* env));
+static ID rb_success, rb_failed;
+static VALUE iconv_fail _((VALUE error, VALUE success, VALUE failed, struct iconv_env_t* env, const char *mesg));
+static VALUE iconv_failure_initialize _((VALUE error, VALUE mesg, VALUE success, VALUE failed));
 static VALUE iconv_failure_success _((VALUE self));
 static VALUE iconv_failure_failed _((VALUE self));
 
@@ -78,18 +109,6 @@ static VALUE iconv_init_state _((VALUE cd));
 static VALUE iconv_finish _((VALUE self));
 static VALUE iconv_iconv _((int argc, VALUE *argv, VALUE self));
 
-
-/*
-=begin
-= Classes & Modules
-=end
-*/
-
-/*
-=begin
-== Iconv
-=end
-*/
 static VALUE charset_map;
 
 static VALUE charset_map_get _((void))
@@ -108,14 +127,14 @@ map_charset
 {
     VALUE val = *code;
 
-    StringValuePtr(val);
     if (RHASH(charset_map)->tbl && RHASH(charset_map)->tbl->num_entries) {
-	if (st_lookup(RHASH(charset_map)->tbl, val, &val)) {
-	    StringValuePtr(val);
+	VALUE key = rb_funcall2(val, rb_intern("downcase"), 0, 0);
+	StringValuePtr(key);
+	if (st_lookup(RHASH(charset_map)->tbl, key, &val)) {
 	    *code = val;
 	}
     }
-    return RSTRING(val)->ptr;
+    return StringValuePtr(*code);
 }
 
 static iconv_t
@@ -209,7 +228,8 @@ iconv_try
     size_t *outlen;
 #endif /* HAVE_PROTOTYPES */
 {
-    if (iconv(cd, ICONV_INPTR_CAST inptr, inlen, outptr, outlen) == (size_t)-1) {
+    size_t ret = iconv(cd, ICONV_INPTR_CAST inptr, inlen, outptr, outlen);
+    if (ret == (size_t)-1) {
 	if (!*inlen)
 	    return Qfalse;
 	switch (errno) {
@@ -217,57 +237,75 @@ iconv_try
 	    /* try the left in next loop */
 	    break;
 	  case EILSEQ:
-	    return rb_class_new_instance(0, 0, rb_eIconvIllegalSeq);
+	    return rb_eIconvIllegalSeq;
 	  case EINVAL:
-	    return rb_class_new_instance(0, 0, rb_eIconvInvalidChar);
+	    return rb_eIconvInvalidChar;
 	  default:
 	    rb_sys_fail("iconv");
 	}
     }
     else if (*inlen > 0) {
 	/* something goes wrong */
-	return rb_class_new_instance(0, 0, rb_eIconvIllegalSeq);
+	return rb_eIconvIllegalSeq;
+    }
+    else if (ret) {
+	return Qnil;		/* conversion */
     }
     return Qfalse;
 }
 
-#define iconv_fail(error, success, failed, env) \
-	rb_exc_raise(iconv_failure_initialize(error, success, failed, env))
-
 #define FAILED_MAXLEN 16
 
-static VALUE
-iconv_failure_initialize
+static VALUE iconv_failure_initialize
 #ifdef HAVE_PROTOTYPES
-    (VALUE error, VALUE success, VALUE failed, struct iconv_env_t* env)
+    (VALUE error, VALUE mesg, VALUE success, VALUE failed)
 #else /* HAVE_PROTOTYPES */
-    (error, success, failed, env)
-    VALUE error;
-    VALUE success;
-    VALUE failed;
-    struct iconv_env_t *env;
+    (error, mesg, success, failed)
+    VALUE error, mesg, success, failed;
 #endif /* HAVE_PROTOTYPES */
 {
-    if (NIL_P(rb_attr_get(error, rb_mesg))) {
-	if (TYPE(failed) != T_STRING || RSTRING(failed)->len < FAILED_MAXLEN) {
-	    rb_ivar_set(error, rb_mesg, rb_inspect(failed));
-	}
-	else {
-	    VALUE mesg = rb_inspect(rb_str_substr(failed, 0, FAILED_MAXLEN));
-	    rb_str_cat2(mesg, "...");
-	    rb_ivar_set(error, rb_mesg, mesg);
-	}
-    }
-    if (env) {
-	success = rb_funcall3(env->ret, rb_inserter, 1, &success);
-	if (env->argc > 0) {
-	    *(env->argv) = failed;
-	    failed = rb_ary_new4(env->argc, env->argv);
-	}
-    }
+    rb_call_super(1, &mesg);
     rb_ivar_set(error, rb_success, success);
     rb_ivar_set(error, rb_failed, failed);
     return error;
+}
+
+static VALUE
+iconv_fail
+#ifdef HAVE_PROTOTYPES
+    (VALUE error, VALUE success, VALUE failed, struct iconv_env_t* env, const char *mesg)
+#else /* HAVE_PROTOTYPES */
+    (error, success, failed, env, mesg)
+    VALUE error, success, failed;
+    struct iconv_env_t *env;
+    const char *mesg;
+#endif /* HAVE_PROTOTYPES */
+{
+    VALUE args[3];
+
+    if (mesg && *mesg) {
+	args[0] = rb_str_new2(mesg);
+    }
+    else if (TYPE(failed) != T_STRING || RSTRING(failed)->len < FAILED_MAXLEN) {
+	args[0] = rb_inspect(failed);
+    }
+    else {
+	args[0] = rb_inspect(rb_str_substr(failed, 0, FAILED_MAXLEN));
+	rb_str_cat2(args[0], "...");
+    }
+    args[1] = success;
+    args[2] = failed;
+    if (env) {
+	args[1] = env->append(rb_obj_dup(env->ret), success);
+	if (env->argc > 0) {
+	    *(env->argv) = failed;
+	    args[2] = rb_ary_new4(env->argc, env->argv);
+	}
+    }
+    error = rb_class_new_instance(3, args, error);
+    if (!rb_block_given_p()) rb_exc_raise(error);
+    ruby_errinfo = error;
+    return rb_yield(failed);
 }
 
 static VALUE
@@ -310,6 +348,7 @@ iconv_convert
 {
     VALUE ret = Qfalse;
     VALUE error = Qfalse;
+    VALUE rescue;
     const char *inptr, *instart;
     size_t inlen;
     /* I believe ONE CHARACTER never exceed this. */
@@ -327,8 +366,20 @@ iconv_convert
 	outptr = buffer;
 	outlen = sizeof(buffer);
 	error = iconv_try(cd, &inptr, &inlen, &outptr, &outlen);
-	if (error)
-	    iconv_fail(error, Qnil, Qnil, env);
+	if (RTEST(error)) {
+	    unsigned int i;
+	    rescue = iconv_fail(error, Qnil, Qnil, env, 0);
+	    if (TYPE(rescue) == T_ARRAY) {
+		str = RARRAY(rescue)->len > 0 ? RARRAY(rescue)->ptr[0] : Qnil;
+	    }
+	    if (FIXNUM_P(str) && (i = FIX2INT(str)) <= 0xff) {
+		char c = i;
+		str = rb_str_new(&c, 1);
+	    }
+	    else if (!NIL_P(str)) {
+		StringValue(str);
+	    }
+	}
 
 	inptr = NULL;
 	length = 0;
@@ -353,15 +404,18 @@ iconv_convert
     inlen = length;
 
     do {
+	char errmsg[50];
 	const char *tmpstart = inptr;
 	outptr = buffer;
 	outlen = sizeof(buffer);
 
+	errmsg[0] = 0;
 	error = iconv_try(cd, &inptr, &inlen, &outptr, &outlen);
 
 	if (0 <= outlen && outlen <= sizeof(buffer)) {
 	    outlen = sizeof(buffer) - outlen;
-	    if (outlen > inptr - tmpstart || /* input can't contain output */
+	    if (NIL_P(error) ||	/* something converted */
+		outlen > inptr - tmpstart || /* input can't contain output */
 		(outlen < inptr - tmpstart && inlen > 0) || /* something skipped */
 		memcmp(buffer, tmpstart, outlen)) /* something differs */
 	    {
@@ -386,16 +440,33 @@ iconv_convert
 	}
 	else {
 	    /* Some iconv() have a bug, return *outlen out of range */
-	    char errmsg[50];
-	    sprintf(errmsg, "bug?(output length = %d)", sizeof(buffer) - outlen);
-	    error = rb_exc_new2(rb_eIconvOutOfRange, errmsg);
+	    sprintf(errmsg, "bug?(output length = %ld)", (long)(sizeof(buffer) - outlen));
+	    error = rb_eIconvOutOfRange;
 	}
 
-	if (error) {
+	if (RTEST(error)) {
+	    long len = 0;
+
 	    if (!ret)
 		ret = rb_str_derive(str, instart, inptr - instart);
+	    else if (inptr > instart)
+		rb_str_cat(ret, instart, inptr - instart);
 	    str = rb_str_derive(str, inptr, inlen);
-	    iconv_fail(error, ret, str, env);
+	    rescue = iconv_fail(error, ret, str, env, errmsg);
+	    if (TYPE(rescue) == T_ARRAY) {
+		if ((len = RARRAY(rescue)->len) > 0)
+		    rb_str_concat(ret, RARRAY(rescue)->ptr[0]);
+		if (len > 1 && !NIL_P(str = RARRAY(rescue)->ptr[1])) {
+		    StringValue(str);
+		    inlen = length = RSTRING(str)->len;
+		    instart = inptr = RSTRING(str)->ptr;
+		    continue;
+		}
+	    }
+	    else if (!NIL_P(rescue)) {
+		rb_str_concat(ret, rescue);
+	    }
+	    break;
 	}
     } while (inlen > 0);
 
@@ -406,36 +477,6 @@ iconv_convert
     return ret;
 }
 
-
-/*
-=begin
-=== Class methods
-=end
-*/
-/*
-=begin
---- Iconv.new(to, from) {|cd| ...}
-    Creates new code converter from a coding-system designated with ((|from|))
-    to another one designated with ((|to|)).
-    :Parameters
-      :((|to|))
-        coding-system name for destination.
-      :((|from|))
-        coding-system name for source.
-    :Exceptions
-      :(({TypeError}))
-        if ((|to|)) or ((|from|)) aren't String
-      :(({ArgumentError}))
-        if designated converter couldn't find out.
-      :(({SystemCallError}))
-        when (({iconv_open(3)})) failed.
-
---- Iconv.open(to, from)
-    Equivalents to ((<Iconv.new>)) except with in the case of called
-    with a block, yields with the new instance and closes it, and
-    returns the result which returned from the block.
-=end
-*/
 static VALUE
 iconv_s_allocate
 #ifdef HAVE_PROTOTYPES
@@ -448,6 +489,24 @@ iconv_s_allocate
     return Data_Wrap_Struct(klass, 0, ICONV_FREE, 0);
 }
 
+/*
+ * Document-method: new
+ * call-seq: Iconv.new(to, from)
+ *
+ * Creates new code converter from a coding-system designated with +from+
+ * to another one designated with +to+.
+ * 
+ * === Parameters
+ *
+ * +to+::   encoding name for destination
+ * +from+:: encoding name for source
+ *
+ * === Exceptions
+ *
+ * TypeError::       if +to+ or +from+ aren't String
+ * ArgumentError::   if designated converter couldn't find out
+ * SystemCallError:: if <tt>iconv_open3</tt> fails
+ */
 static VALUE
 iconv_initialize
 #ifdef HAVE_PROTOTYPES
@@ -465,6 +524,14 @@ iconv_initialize
     return self;
 }
 
+/*
+ * Document-method: open
+ * call-seq: Iconv.open(to, from) { |iconv| ... }
+ *
+ * Equivalent to Iconv.new except that when it is called with a block, it
+ * yields with the new instance and closes it, and returns the result which
+ * returned from the block.
+ */
 static VALUE
 iconv_s_open
 #ifdef HAVE_PROTOTYPES
@@ -487,22 +554,6 @@ iconv_s_open
     }
 }
 
-/*
-=begin
---- Iconv.iconv(to, from, *strs)
-    Shorthand for
-      Iconv.open(to, from) {|cd| (strs + [nil]).collect {|s| cd.iconv(s)}}
-    :Parameters
-      :((|to|)), ((|from|))
-        see ((<Iconv.new>)).
-      :((|strs|))
-        strings to be converted.
-    :Exceptions
-      exceptions thrown by ((<Iconv.new>)), ((<Iconv.open>)) and
-      ((<Iconv#iconv>)).
-=end
-*/
-
 static VALUE
 iconv_s_convert
 #ifdef HAVE_PROTOTYPES
@@ -516,18 +567,36 @@ iconv_s_convert
 
     for (; env->argc > 0; --env->argc, ++env->argv) {
 	VALUE s = iconv_convert(env->cd, last = *(env->argv), 0, -1, env);
-	rb_funcall3(env->ret, rb_inserter, 1, &s);
+	env->append(env->ret, s);
     }
 
     if (!NIL_P(last)) {
 	VALUE s = iconv_convert(env->cd, Qnil, 0, 0, env);
 	if (RSTRING(s)->len)
-	    rb_funcall3(env->ret, rb_inserter, 1, &s);
+	    env->append(env->ret, s);
     }
 
     return env->ret;
 }
 
+/*
+ * Document-method: iconv
+ * call-seq: Iconv.iconv(to, from, *strs)
+ *
+ * Shorthand for
+ *   Iconv.open(to, from) { |cd|
+ *     (strs + [nil]).collect { |s| cd.iconv(s) }
+ *   }
+ *
+ * === Parameters
+ *
+ * <tt>to, from</tt>:: see Iconv.new
+ * <tt>strs</tt>:: strings to be converted
+ *
+ * === Exceptions
+ *
+ * Exceptions thrown by Iconv.new, Iconv.open and Iconv#iconv.
+*/
 static VALUE
 iconv_s_iconv
 #ifdef HAVE_PROTOTYPES
@@ -542,15 +611,22 @@ iconv_s_iconv
     struct iconv_env_t arg;
 
     if (argc < 2)		/* needs `to' and `from' arguments at least */
-	rb_raise(rb_eArgError, "wrong # of arguments (%d for %d)", argc, 2);
+	rb_raise(rb_eArgError, "wrong number of arguments (%d for %d)", argc, 2);
 
     arg.argc = argc -= 2;
     arg.argv = argv + 2;
+    arg.append = rb_ary_push;
     arg.ret = rb_ary_new2(argc);
     arg.cd = iconv_create(argv[0], argv[1]);
     return rb_ensure(iconv_s_convert, (VALUE)&arg, iconv_free, ICONV2VALUE(arg.cd));
 }
 
+/*
+ * Document-method: Iconv::conv
+ * call-seq: Iconv.iconv(to, from, *strs)
+ *
+ * See Iconv.iconv ???
+ */
 static VALUE
 iconv_s_conv
 #ifdef HAVE_PROTOTYPES
@@ -564,27 +640,22 @@ iconv_s_conv
 
     arg.argc = 1;
     arg.argv = &str;
+    arg.append = rb_str_append;
     arg.ret = rb_str_new(0, 0);
     arg.cd = iconv_create(to, from);
     return rb_ensure(iconv_s_convert, (VALUE)&arg, iconv_free, ICONV2VALUE(arg.cd));
 }
 
-
 /*
-=begin
-=== Instance methods
-=end
-*/
-/*
-=begin
---- Iconv#close
-    Finishes conversion.
-    * After calling this, invoking method ((<Iconv#iconv>)) will cause
-      exception, but multiple calls of (({close})) are guaranteed to
-      end successfully.
-    * Returns a string contains the byte sequence to change the
-      output buffer to its initial shift state.
-=end
+ * Document-method: close
+ *
+ * Finishes conversion.
+ *
+ * After calling this, calling Iconv#iconv will cause an exception, but
+ * multiple calls of #close are guaranteed to end successfully.
+ *
+ * Returns a string containing the byte sequence to change the output buffer to
+ * its initial shift state.  <i>???</i>
 */
 static VALUE
 iconv_init_state
@@ -616,29 +687,31 @@ iconv_finish
 }
 
 /*
-=begin
---- Iconv#iconv(str, [ start = 0, [ length = -1 ] ])
-    Converts string and returns converted one.
-    * In the case of ((|str|)) is (({String})), converts (({str[start, length]})).
-      Returns converted string.
-    * In the case of ((|str|)) is (({nil})), places ((|converter|))
-      itself into initial shift state and just returns a string contains
-      the byte sequence to change the output buffer to its initial shift
-      state.
-    * Otherwise, causes exception.
-    :Parameters
-      :((|str|))
-        string to be converted or (({nil})).
-      :((|start|))
-        starting offset.
-      :((|length|))
-        conversion length,
-        (({nil})) or (({-1})) means whole string from (({start})).
-    :Exceptions
-      * ((<Iconv::IllegalSequence>))
-      * ((<Iconv::InvalidCharacter>))
-      * ((<Iconv::OutOfRange>))
-=end
+ * Document-method: iconv
+ * call-seq: iconv(str, start=0, length=-1)
+ *
+ * Converts string and returns the result.
+ * * If +str+ is a String, converts <tt>str[start, length]</tt> and returns the converted string.
+ * * If +str+ is +nil+, places converter itself into initial shift state and
+ *   just returns a string containing the byte sequence to change the output
+ *   buffer to its initial shift state.
+ * * Otherwise, raises an exception.
+ *
+ * === Parameters
+ *
+ * str::    string to be converted, or nil
+ * start::  starting offset
+ * length:: conversion length; nil or -1 means whole the string from start
+ *
+ * === Exceptions
+ *
+ * * IconvIllegalSequence
+ * * IconvInvalidCharacter
+ * * IconvOutOfRange
+ *
+ * === Examples
+ *
+ * See the Iconv documentation.
 */
 static VALUE
 iconv_iconv
@@ -659,33 +732,31 @@ iconv_iconv
 
     return iconv_convert(VALUE2ICONV(cd), str,
 			 NIL_P(n1) ? 0 : NUM2INT(n1),
-			 NIL_P(n2) ? -1 : NUM2INT(n1),
+                        NIL_P(n2) ? -1 : NUM2INT(n2),
 			 NULL);
 }
 
-
 /*
-=begin
-= Exceptions
-=end
-*/
-/*
-=begin
-== Iconv::Failure
-Base exceptional attributes from ((<Iconv>)).
-
-=== Instance methods
-=end
-*/
-/*
-=begin
---- Iconv::Failure#success
-    Returns string(s) translated successfully until the exception occurred.
-    * In the case of failure occurred within ((<Iconv.iconv>)), returned
-      value is an array of strings translated successfully preceding
-      failure and the last element is string on the way.
-=end
-*/
+ * Document-class: Iconv::Failure
+ *
+ * Base attributes for Iconv exceptions.
+ * 
+ * === Iconv::Failure#success
+ *
+ * Returns string(s) translated successfully until the exception occurred.
+ * * In the case of failure occurred within Iconv.iconv, returned
+ *   value is an array of strings translated successfully preceding
+ *   failure and the last element is string on the way.
+ *
+ * === Iconv::Failure#failed
+ * 
+ * Returns substring of the original string passed to Iconv that starts at the
+ * character caused the exception. 
+ *
+ * === Iconv::Failure#inspect
+ *
+ * Returns inspected string like as: #<_class_: _success_, _failed_>
+ */
 static VALUE
 iconv_failure_success
 #ifdef HAVE_PROTOTYPES
@@ -699,12 +770,8 @@ iconv_failure_success
 }
 
 /*
-=begin
---- Iconv::Failure#failed
-    Returns substring of the original string passed to ((<Iconv>)) that
-    starts at the character caused the exception. 
-=end
-*/
+ * Comment!
+ */
 static VALUE
 iconv_failure_failed
 #ifdef HAVE_PROTOTYPES
@@ -717,12 +784,6 @@ iconv_failure_failed
     return rb_attr_get(self, rb_failed);
 }
 
-/*
-=begin
---- Iconv::Failure#inspect
-    Returns inspected string like as: #<(({type})): "(({success}))", "(({failed}))">
-=end
-*/
 static VALUE
 iconv_failure_inspect
 #ifdef HAVE_PROTOTYPES
@@ -744,40 +805,54 @@ iconv_failure_inspect
 }
 
 /*
-  Hmmm, I don't like to write RD inside of function :-<.
+ * Document-class: Iconv::IllegalSequence
+ * 
+ * Input conversion stopped due to an input byte that does not belong to
+ * the input codeset, or the output codeset does not contain the
+ * character.
+ * 
+ * === Superclass
+ * 
+ * ArgumentError
+ * 
+ * === Included Modules
+ * 
+ * Iconv::Failure
+ */
 
-=begin
-== Iconv::IllegalSequence
-Input conversion stopped due to an input byte that does not belong to
-the input codeset, or the output codeset does not contain the
-character.
-=== Superclass
-(({ArgumentError}))
-=== Included Modules
-((<Iconv::Failure>))
+/*
+ * Document-class: Iconv::InvalidCharacter
+ * 
+ * Input conversion stopped due to an incomplete character or shift
+ * sequence at the end of the input buffer.
+ * 
+ * === Superclass
+ * 
+ * ArgumentError
+ * 
+ * === Included Modules
+ * 
+ * Iconv::Failure
+ */
 
-== Iconv::InvalidCharacter
-Input conversion stopped due to an incomplete character or shift
-sequence at the end of the input buffer.
-=== Superclass
-(({ArgumentError}))
-=== Included Modules
-((<Iconv::Failure>))
-
-== Iconv::OutOfRange
-Iconv library internal error.  Must not occur.
-=== Superclass
-(({RuntimeError}))
-=== Included Modules
-((<Iconv::Failure>))
-=end
-*/
+/*
+ * Document-class: Iconv::OutOfRange
+ * 
+ * Iconv library internal error.  Must not occur.
+ * 
+ * === Superclass
+ * 
+ * RuntimeError
+ * 
+ * === Included Modules
+ * 
+ * Iconv::Failure
+ */
 
 void
 Init_iconv _((void))
 {
     VALUE rb_cIconv = rb_define_class("Iconv", rb_cData);
-    VALUE metaclass = RBASIC(rb_cIconv)->klass;
 
     rb_define_alloc_func(rb_cIconv, iconv_s_allocate);
     rb_define_singleton_method(rb_cIconv, "open", iconv_s_open, 2);
@@ -788,6 +863,7 @@ Init_iconv _((void))
     rb_define_method(rb_cIconv, "iconv", iconv_iconv, -1);
 
     rb_eIconvFailure = rb_define_module_under(rb_cIconv, "Failure");
+    rb_define_method(rb_eIconvFailure, "initialize", iconv_failure_initialize, 3);
     rb_define_method(rb_eIconvFailure, "success", iconv_failure_success, 0);
     rb_define_method(rb_eIconvFailure, "failed", iconv_failure_failed, 0);
     rb_define_method(rb_eIconvFailure, "inspect", iconv_failure_inspect, 0);
@@ -799,34 +875,11 @@ Init_iconv _((void))
     rb_include_module(rb_eIconvInvalidChar, rb_eIconvFailure);
     rb_include_module(rb_eIconvOutOfRange, rb_eIconvFailure);
 
-    rb_inserter = rb_intern("<<");
     rb_success = rb_intern("success");
     rb_failed = rb_intern("failed");
-    rb_mesg = rb_intern("mesg");
 
     charset_map = rb_hash_new();
     rb_gc_register_address(&charset_map);
     rb_define_singleton_method(rb_cIconv, "charset_map", charset_map_get, 0);
 }
 
-
-/*
-=begin
-== Example
-(1) Instantiate a new ((<Iconv>)), use method ((<Iconv#iconv>)).
-      cd = Iconv.new(to, from)
-      begin
-        input.each {|s| output << cd.iconv(s)}
-        output << cd.iconv(nil)      # don't forget this
-      ensure
-        cd.close
-      end
-(2) Invoke ((<Iconv.open>)) with a block.
-      Iconv.open(to, from) do |cd|
-        input.each {|s| output << cd.iconv(s)}
-        output << cd.iconv(nil)
-      end
-(3) Shorthand for (2).
-      Iconv.iconv(to, from, *input.to_a)
-=end
-*/

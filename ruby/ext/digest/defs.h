@@ -1,5 +1,5 @@
 /* -*- C -*-
- * $Id: defs.h,v 1.1.1.2 2003/10/15 10:11:47 melville Exp $
+ * $Id: defs.h,v 1.7 2003/06/01 15:39:52 eban Exp $
  */
 
 #ifndef DEFS_H

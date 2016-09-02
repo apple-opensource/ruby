@@ -1,5 +1,5 @@
 /* -*- C -*-
- * $Id: handle.c,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+ * $Id: handle.c,v 1.11 2003/11/13 11:46:31 ttate Exp $
  */
 
 #include <ruby.h>
@@ -52,11 +52,11 @@ rb_dlhandle_initialize(int argc, VALUE argv[], VALUE self)
 
   switch (rb_scan_args(argc, argv, "11", &lib, &flag)) {
   case 1:
-    clib = StringValuePtr(lib);
+    clib = NIL_P(lib) ? NULL : StringValuePtr(lib);
     cflag = RTLD_LAZY | RTLD_GLOBAL;
     break;
   case 2:
-    clib = StringValuePtr(lib);
+    clib = NIL_P(lib) ? NULL : StringValuePtr(lib);
     cflag = NUM2INT(flag);
     break;
   default:

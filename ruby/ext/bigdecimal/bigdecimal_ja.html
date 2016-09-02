@@ -1,3 +1,4 @@
+<!-- saved from url=(0022)http://internet.e-mail -->
 <HTML>
 <HEAD>
 <META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=Shift_JIS">
@@ -97,9 +98,15 @@ c=a+b
 内部の「有効桁数」は４の倍数となっています。
 <P>
 以下のメソッド以外にも、(C ではない) Ruby ソースの形で
-提供されているものもあります。例えば、文字列から BigDecimal への
-変換や、"0.xxxxxEn" という形式ではなく "nnnnn.mmmm" の形式の文字列
-へ変換するメソッド等があります。利用するには
+提供されているものもあります。例えば、
+<CODE><PRE>
+require "bigdecimal/math.rb"
+</PRE></CODE>
+とすることで、sin や cos といった関数が使用できるようになります。
+使用方法など、詳細は math.rb の内容を参照して下さい。
+
+その他、Float との相互変換などのメソッドが util.rb でサポートされています。
+利用するには
 <CODE><PRE>
 require "bigdecimal/util.rb"
 </PRE></CODE>
@@ -111,7 +118,9 @@ require "bigdecimal/util.rb"
 新しい BigDecimal オブジェクトを生成します。<BR>
 a=BigDecimal::new(s[,n]) または<BR>
 a=BigDecimal(s[,n])<BR>
-s は初期値を文字列で指定します．
+s は数字を表現する初期値を文字列で指定します。
+スペースは無視されます。また、判断できない文字が出現した時点で
+文字列は終了したものとみなされます。
 n は必要な有効桁数（a の最大有効桁数）を整数で指定します。
 n が 0 または省略されたときは、n の値は s の有効桁数とみなされます。
 s の有効桁数より n が小さいときも n=0 のときと同じです。
@@ -126,7 +135,10 @@ BigDecimal("1",10) / BigDecimal("3",10) # => 0.3333333333 3333333333 33333333E0
 </BLOCKQUOTE>
 
 <LI><B>mode</B></LI><BLOCKQUOTE>
-BigDecimalの実行結果を制御します。以下の使用方法が定義されています。
+f = BigDecimal.mode(s[,v])<BR>
+BigDecimalの実行結果を制御します。第２引数を省略、または nil を指定すると
+現状の設定値が戻ります。<BR>
+以下の使用方法が定義されています。
 <P>
 <B>[例外処理]</B><P>
 計算結果が非数(NaN)やゼロによる除算になったときの処理を定義することができます。
@@ -157,10 +169,9 @@ EXCEPTION_ZERODIVIDE のとき、+Infinity か -Infinity<BR>
 </BLOCKQUOTE>
 EXCEPTION_INFINITY、EXCEPTION_OVERFLOW、EXCEPTION_ZERODIVIDE
 は今のところ同じです。<BR>
-戻り値は、設定前の値です。「値」の意味は、例えば
+戻り値は、設定後の値です。「値」の意味は、例えば
 BigDecimal::EXCEPTION_NaNと「値」の & が ゼロ以外ならば
-EXCEPTION_NaNが設定されているという意味です。<BR>
-引数に正しくないものが指定された場合は nil が返ります。
+EXCEPTION_NaNが設定されているという意味です。
 
 <P>
 <B>[丸め処理指定]</B><P>
@@ -181,23 +192,20 @@ f = BigDecimal::mode(BigDecimal::ROUND_MODE,flag)
 
 </TABLE>
 戻り値は指定後の flag の値です。
-引数に数値以外が指定された場合は nil が返ります。正しくない ROUND_MODE が指定されたときは
-無視され、現状の ROUND_MODE が返ります。<BR>
+第２引数に nil を指定すると、現状の設定値が返ります。
 mode メソッドでは丸め操作の位置をユーザが指定することはできません。
-丸め操作と位置を自分で制御したい場合は truncate/round/ceil/floor や 
+丸め操作と位置を自分で制御したい場合は BigDecimal::limit や truncate/round/ceil/floor、
 add/sub/mult/div といったインスタンスメソッドを使用して下さい。
 </BLOCKQUOTE>
 <LI><B>limit([n])</B></LI><BLOCKQUOTE>
 生成されるBigDecimalオブジェクトの最大桁数をn桁に制限します。
 戻り値は設定する前の値です。設定値のデフォルト値は０で、桁数無制限という意味です。
-n を指定しない場合は、現状の最大桁数が返ります。<BR>
+n を指定しない、または n が nil の場合は、現状の最大桁数が返ります。<BR>
 計算を続行する間に、数字の桁数が無制限に増えてしまうような場合
  limit で予め桁数を制限できます。この場合 BigDecimal.mode で指定された
 丸め処理が実行されます。
-ただし、実際には n より若干大きい
-桁数が確保されます。また、limit による桁数制限は(無制限を除いて)、
-インスタンスメソッド (truncate/round/ceil/floor/add/sub/mult/div) より
-優先されるので注意が必要です。<BR>
+ただし、インスタンスメソッド (truncate/round/ceil/floor/add/sub/mult/div) の
+桁数制限は limit より優先されます。<BR>
 mf = BigDecimal::limit(n)<BR>
 </BLOCKQUOTE>
 
@@ -250,22 +258,24 @@ c の精度については「<A HREF="#PREC">計算精度について</A>」を参照してください。
 <LI><B>add(b,n)</B></LI><BLOCKQUOTE>
 以下のように使用します。<BR>
 c = a.add(b,n)<BR>
-c = a + b を最大で n 桁まで計算します。
-a + b の精度が n より大きいときは BigDecimal.mode で指定された方法で丸められます。
-
+c = a + b を最大で n 桁まで計算します。<BR>
+a + b の精度が n より大きいときは BigDecimal.mode で指定された方法で丸められます。<BR>
+n がゼロなら + と同じです。
 </BLOCKQUOTE>
 <LI><B>sub(b,n)</B></LI><BLOCKQUOTE>
 以下のように使用します。<BR>
 c = a.sub(b,n)<BR>
-c = a - b を最大で n 桁まで計算します。
-a - b の精度が n より大きいときは BigDecimal.mode で指定された方法で丸められます。
+c = a - b を最大で n 桁まで計算します。<BR>
+a - b の精度が n より大きいときは BigDecimal.mode で指定された方法で丸められます。<BR>
+n がゼロなら - と同じです。
 
 </BLOCKQUOTE>
 <LI><B>mult(b,n)</B></LI><BLOCKQUOTE>
 以下のように使用します。<BR>
 c = a.mult(b,n)<BR>
-c = a * b を最大で n 桁まで計算します。
-a * b の精度が n より大きいときは BigDecimal.mode で指定された方法で丸められます。
+c = a * b を最大で n 桁まで計算します。<BR>
+a * b の精度が n より大きいときは BigDecimal.mode で指定された方法で丸められます。<BR>
+n がゼロなら * と同じです。
 
 </BLOCKQUOTE>
 <LI><B>div(b[,n])</B></LI><BLOCKQUOTE>
@@ -273,6 +283,7 @@ a * b の精度が n より大きいときは BigDecimal.mode で指定された方法で丸められます
 c = a.div(b,n)<BR>
 c = a / b を最大で n 桁まで計算します。
 a / b の精度が n より大きいときは BigDecimal.mode で指定された方法で丸められます。<BR>
+n がゼロなら / と同じです。<BR>
 n が省略されたときは Float#div と同様に結果が整数(BigDecimal)になります。
 </BLOCKQUOTE>
 
@@ -375,10 +386,36 @@ Float オブジェクトに変換します。
 ください。
 </BLOCKQUOTE>
 <LI><B>to_s[(n)]</B></LI><BLOCKQUOTE>
-文字列に変換します("0.xxxxxEn"の形になります）。<BR>
-s = a.to_s<BR>
-n が指定されたときは、仮数部分を n 桁毎に空白で区切ります。<BR>
-s = a.to_s(n)
+文字列に変換します(デフォルトは "0.xxxxxEn" の形になります）。
+<CODE><PRE>
+BigDecimal("1.23456").to_s  #  ==> "0.123456E1"
+</PRE></CODE>
+引数 n に正の整数が指定されたときは、少数点で分けられる左右部分を、それぞれ n 桁毎
+に空白で区切ります。
+<CODE><PRE>
+BigDecimal("0.1234567890123456789").to_s(10)   #  ==> "0.1234567890 123456789E0"
+</PRE></CODE>
+引数 n に正の整数を表す文字列を指定することもできます。
+<CODE><PRE>
+BigDecimal("0.1234567890123456789").to_s("10") #  ==> "0.1234567890 123456789E0"
+</PRE></CODE>
+文字列の最初に '+'（または ' '）を付けると、値が正の場合、先頭に '+'（または ' '）が付きます
+（負の場合は、常に '-' が付きます。）。
+<CODE><PRE>
+BigDecimal("0.1234567890123456789").to_s(" 10") #  ==> " 0.1234567890 123456789E0"
+BigDecimal("0.1234567890123456789").to_s("+10") #  ==> "+0.1234567890 123456789E0"
+BigDecimal("-0.1234567890123456789").to_s("10") #  ==> "-0.1234567890 123456789E0"
+</PRE></CODE>
+
+さらに文字列の最後に E(または e) か F(または f) を指定することで、以下のように
+表示形式を変更することができます。
+<CODE><PRE>
+BigDecimal("1234567890.123456789").to_s("E")  #  ==> "0.1234567890123456789E10"
+BigDecimal("1234567890.123456789").to_s("F")  #  ==> "1234567890.123456789"
+BigDecimal("1234567890.123456789").to_s("5E") #  ==> "0.12345 67890 12345 6789E10"
+BigDecimal("1234567890.123456789").to_s("5F") #  ==> "12345 67890.12345 6789"
+</PRE></CODE>
+
 </BLOCKQUOTE>
 <LI><B>exponent</B></LI><BLOCKQUOTE>
 指数部を整数値で返します。
@@ -386,8 +423,8 @@ n = a.exponent <BR>
 は a の値が 0.xxxxxxx*10**n を意味します。
 </BLOCKQUOTE>
 
-<LI><B>prec</B></LI><BLOCKQUOTE>
-n,m  = a.prec<BR>
+<LI><B>precs</B></LI><BLOCKQUOTE>
+n,m  = a.precs<BR>
 a の有効数字 (n) と最大有効数字 (m) の配列を返します。
 
 </BLOCKQUOTE>
@@ -483,53 +520,13 @@ c = a &lt=&gt b
 <LI><B>&gt=</B></LI>
 </UL>
 
-<H4><U>(評価段階の)クラスメソッド</U></H4>
-以下のクラスメソッドは、まだ評価段階ですので、通常では
-使用できません。使用するには bigdecimal.c の
-「/* #define ENABLE_TRIAL_METHOD   */」
-のコメントを外し、再コンパイル・再インストールが必要です。
-
-<UL>
-<LI><B>E</B></LI><BLOCKQUOTE>
-自然対数の底e(=2.718281828....)を計算します（正直にテイラー展開で）。<BR>
-e = BigDecimal::E(n)<BR>
-nは必要な有効桁数を整数で指定します。
-</BLOCKQUOTE>
-<LI><B>PI</B></LI><BLOCKQUOTE>
-円周率(=3.14159265358979....)を計算します（J．Machinの公式を用います）。<BR>
-e = BigDecimal::PI(n)<BR>
-n は必要な有効桁数を整数で指定します。
-</BLOCKQUOTE>
-</UL>
-
-<H4><U>(評価段階の)インスタンスメソッド</U></H4>
-以下のインスタンスメソッドは、まだ評価段階ですので、通常では
-使用できません。使用するには bigdecimal.c の
-「/* #define ENABLE_TRIAL_METHOD   */」
-のコメントを外して、再コンパイル・再インストールが必要です。
-<UL>
-<LI><B>sincos</B></LI><BLOCKQUOTE>
-a の有効桁 n 桁の sin と cos を同時に（テイラー展開で）計算して、
- sin と cos の配列を返します。
-n は必要な有効桁数です（ n の sin や cos を計算するわけではありません）。
-<BR>
-sin,cos = a.sincos(n)<BR>
-|a| &lt; 2*3.1415....でないと正しい答えを計算できないこともあります。
-</BLOCKQUOTE>
-<LI><B>exp</B></LI><BLOCKQUOTE>
-自然対数の底e(=2.718281828....)の a 乗を計算します。<BR>
-c = a.exp(n)<BR>
-n は必要な有効桁数です。
-</BLOCKQUOTE>
-</UL>
-
 <H3>coerceについて</H3>
 BigDecimal オブジェクトが算術演算子の左にあるときは、BigDecimal オブジェクトが
 右にあるオブジェクトを(必要なら) BigDecimal に変換してから計算します。
 従って、BigDecimal オブジェクト以外でも数値を意味するものなら右に置けば
 演算は可能です。<BR>
 ただし、文字列は（通常）数値に自動変換することはできません。
-文字列を数値に自動変換に自動変換したい場合は bigfloat.c の
+文字列を数値に自動変換したい場合は bigfloat.c の
 「/* #define ENABLE_NUMERIC_STRING */」のコメントを外してから、
 再コンパイル、再インストールする必要があります。
 文字列で数値を与える場合は注意が必要です。数値に変換できない文字があると、

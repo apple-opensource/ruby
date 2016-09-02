@@ -1,40 +1,53 @@
 #!/usr/bin/env ruby
-#
-# set - defines the Set class
-#
+#--
+# set.rb - defines the Set class
+#++
 # Copyright (c) 2002 Akinori MUSHA <knu@iDaemons.org>
 #
-# All rights reserved.
+# Documentation by Akinori MUSHA and Gavin Sinclair. 
 #
-# You can redistribute and/or modify it under the same terms as Ruby.
+# All rights reserved.  You can redistribute and/or modify it under the same
+# terms as Ruby.
 #
-# $Id: set.rb,v 1.1.1.1 2003/10/15 10:11:48 melville Exp $
+#   $Id: set.rb,v 1.20.2.4 2004/12/18 02:07:28 matz Exp $
+#
+# == Overview 
 # 
-# This library provides the Set class that deals with a collection of
-# unordered values with no duplicates.  It is a hybrid of Array's
-# intuitive inter-operation facilities and Hash's fast lookup.
+# This library provides the Set class, which deals with a collection
+# of unordered values with no duplicates.  It is a hybrid of Array's
+# intuitive inter-operation facilities and Hash's fast lookup.  If you
+# need to keep values ordered, use the SortedSet class.
 #
-#== Example
+# The method +to_set+ is added to Enumerable for convenience.
 #
-#  require 'set'
-#
-#  set1 = Set.new ["foo", "bar", "baz"]
-#
-#  p set1			#=> #<Set: {"baz", "foo", "bar"}>
-#
-#  p set1.include?("bar")	#=> true
-#
-#  set1.add("heh")
-#  set1.delete("foo")
-#
-#  p set1			#=> #<Set: {"heh", "baz", "bar"}>
+# See the Set class for an example of usage.
 
+
+#
 # Set implements a collection of unordered values with no duplicates.
 # This is a hybrid of Array's intuitive inter-operation facilities and
 # Hash's fast lookup.
 #
+# Several methods accept any Enumerable object (implementing +each+)
+# for greater flexibility: new, replace, merge, subtract, |, &, -, ^.
+#
 # The equality of each couple of elements is determined according to
 # Object#eql? and Object#hash, since Set uses Hash as storage.
+#
+# Finally, if you are using class Set, you can also use Enumerable#to_set
+# for convenience.
+#
+# == Example
+#
+#   require 'set'
+#   s1 = Set.new [1, 2]                   # -> #<Set: {1, 2}>
+#   s2 = [1, 2].to_set                    # -> #<Set: {1, 2}>
+#   s1 == s2                              # -> true
+#   s1.add("foo")                         # -> #<Set: {1, 2, "foo"}>
+#   s1.merge([2, 6])                      # -> #<Set: {6, 1, 2, "foo"}>
+#   s1.subset? s2                         # -> false
+#   s2.subset? s1                         # -> true
+#
 class Set
   include Enumerable
 
@@ -60,13 +73,9 @@ class Set
     end
   end
 
-  # Duplicates the set.
-  def dup
-    myhash = @hash
-    self.class.new.instance_eval {
-      @hash.replace(myhash)
-      self
-    }
+  # Copy internal hash.
+  def initialize_copy(orig)
+    @hash = orig.instance_eval{@hash}.dup
   end
 
   # Returns the number of elements.
@@ -181,14 +190,15 @@ class Set
     self
   end
 
-  # Adds the given object to the set and returns self.
+  # Adds the given object to the set and returns self.  Use +merge+ to
+  # add several elements at once.
   def add(o)
     @hash[o] = true
     self
   end
   alias << add
 
-  # Adds the given object to the set and returns self.  If it the
+  # Adds the given object to the set and returns self.  If the
   # object is already in the set, returns nil.
   def add?(o)
     if include?(o)
@@ -198,7 +208,8 @@ class Set
     end
   end
 
-  # Deletes the given object from the set and returns self.
+  # Deletes the given object from the set and returns self.  Use +subtract+ to
+  # delete several items at once.
   def delete(o)
     @hash.delete(o)
     self
@@ -240,7 +251,7 @@ class Set
   # Merges the elements of the given enumerable object to the set and
   # returns self.
   def merge(enum)
-    if enum.class == self.class
+    if enum.is_a?(Set)
       @hash.update(enum.instance_eval { @hash })
     else
       enum.is_a?(Enumerable) or raise ArgumentError, "value must be enumerable"
@@ -268,7 +279,7 @@ class Set
   alias union |		##
 
   # Returns a new set built by duplicating the set, removing every
-  # element that appear in the given enumerable object.
+  # element that appears in the given enumerable object.
   def -(enum)
     enum.is_a?(Enumerable) or raise ArgumentError, "value must be enumerable"
     dup.subtract(enum)
@@ -280,7 +291,7 @@ class Set
   def &(enum)
     enum.is_a?(Enumerable) or raise ArgumentError, "value must be enumerable"
     n = self.class.new
-    enum.each { |o| include?(o) and n.add(o) }
+    enum.each { |o| n.add(o) if include?(o) }
     n
   end
   alias intersection &	##
@@ -302,7 +313,8 @@ class Set
 
     set.is_a?(Set) && size == set.size or return false
 
-    set.all? { |o| include?(o) }
+    hash = @hash.dup
+    set.all? { |o| hash.include?(o) }
   end
 
   def hash	# :nodoc:
@@ -310,7 +322,8 @@ class Set
   end
 
   def eql?(o)	# :nodoc:
-    @hash.hash == o.hash
+    return false unless o.is_a?(Set)
+    @hash.eql?(o.instance_eval{@hash})
   end
 
   # Classifies the set by the return value of the given block and
@@ -381,7 +394,7 @@ class Set
     end
   end
 
-  InspectKey = :__inspect_key__
+  InspectKey = :__inspect_key__         # :nodoc:
 
   # Returns a string containing a human-readable representation of the
   # set. ("#<Set: {element1, element2, ...}>")
@@ -403,14 +416,7 @@ class Set
   def pretty_print(pp)	# :nodoc:
     pp.text sprintf('#<%s: {', self.class.name)
     pp.nest(1) {
-      first = true
-      each { |o|
-	if first
-	  first = false
-	else
-	  pp.text ","
-	  pp.breakable
-	end
+      pp.seplist(self) { |o|
 	pp.pp o
       }
     }
@@ -422,7 +428,7 @@ class Set
   end
 end
 
-# SortedSet implements a set which elements are sorted in order.
+# SortedSet implements a set which elements are sorted in order.  See Set.
 class SortedSet < Set
   @@setup = false
 
@@ -579,7 +585,9 @@ end
 #     else
 #       instance_eval %{
 # 	def add(o)
-# 	  @hash[o] = true if @proc.call(o)
+#         if @proc.call(o)
+# 	    @hash[o] = true 
+#         end
 # 	  self
 # 	end
 # 	alias << add
@@ -610,7 +618,6 @@ end
 __END__
 
 require 'test/unit'
-require 'test/unit/ui/console/testrunner'
 
 class TC_Set < Test::Unit::TestCase
   def test_aref
@@ -663,6 +670,13 @@ class TC_Set < Test::Unit::TestCase
 
     s = Set.new(ary) { |o| o * 2 }
     assert_equal([2,4,6], s.sort)
+  end
+
+  def test_clone
+    set1 = Set.new
+    set2 = set1.clone
+    set1 << 'abc'
+    assert_equal(Set.new, set2)
   end
 
   def test_dup
@@ -741,7 +755,7 @@ class TC_Set < Test::Unit::TestCase
     assert_same(orig_set1, set1)
     assert_equal(set3, set1)
 
-    # test3; multiple occurences of a set in an set
+    # test3; multiple occurrences of a set in an set
     set1 = Set[1, 2]
     set2 = Set[set1, Set[set1, 4], 3]
 
@@ -760,7 +774,7 @@ class TC_Set < Test::Unit::TestCase
       set1.flatten!
     }
 
-    # test5; miscellaneus
+    # test5; miscellaneous
     empty = Set[]
     set =  Set[Set[empty, "a"],Set[empty, "b"]]
 
@@ -1041,8 +1055,8 @@ class TC_Set < Test::Unit::TestCase
     set2 = Set["a", "b", set1]
     set1 = set1.add(set1.clone)
 
-    assert_equal(set1, set2)
-    assert_equal(set2, set1)
+#    assert_equal(set1, set2)
+#    assert_equal(set2, set1)
     assert_equal(set2, set2.clone)
     assert_equal(set1.clone, set1)
   end

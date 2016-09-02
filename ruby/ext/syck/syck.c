@@ -1,16 +1,17 @@
 /*
  * syck.c
  *
- * $Author: melville $
- * $Date: 2003/10/15 10:11:48 $
+ * $Author: why $
+ * $Date: 2004/05/25 15:04:16 $
  *
  * Copyright (C) 2003 why the lucky stiff
  */
+#include "ruby.h"
+
 #include <stdio.h>
 #include <string.h>
 
 #include "syck.h"
-#include "ruby.h"
 
 void syck_parser_pop_level( SyckParser * );
 
@@ -50,7 +51,7 @@ syck_io_file_read( char *buf, SyckIoFile *file, long max_size, long skip )
     ASSERT( file != NULL );
 
     max_size -= skip;
-    len = fread( buf + skip, max_size, sizeof( char ), file->ptr );
+    len = fread( buf + skip, sizeof( char ), max_size, file->ptr );
     len += skip;
     buf[len] = '\0';
 
@@ -71,9 +72,9 @@ syck_io_str_read( char *buf, SyckIoStr *str, long max_size, long skip )
     if ( max_size >= 0 )
     {
         max_size -= skip;
-        if ( max_size < 0 ) max_size = 0;
+        if ( max_size <= 0 )  max_size = 0;
+        else                  str->ptr += max_size;
 
-        str->ptr += max_size;
         if ( str->ptr > str->end )
         {
             str->ptr = str->end;
@@ -88,7 +89,7 @@ syck_io_str_read( char *buf, SyckIoStr *str, long max_size, long skip )
     }
     if ( beg < str->ptr )
     {
-        len = str->ptr - beg;
+        len = ( str->ptr - beg );
         S_MEMCPY( buf + skip, beg, char, len );
     }
     len += skip;
@@ -109,6 +110,7 @@ syck_parser_reset_levels( SyckParser *p )
     {
         p->lvl_idx = 1;
         p->levels[0].spaces = -1;
+        p->levels[0].ncount = 0;
         p->levels[0].domain = syck_strndup( "", 0 );
     }
     p->levels[0].status = syck_lvl_header;
@@ -157,8 +159,10 @@ syck_new_parser()
 {
     SyckParser *p;
     p = S_ALLOC( SyckParser );
+    S_MEMZERO( p, SyckParser, 1 );
     p->lvl_capa = ALLOC_CT;
     p->levels = S_ALLOC_N( SyckLevel, p->lvl_capa ); 
+    p->input_type = syck_yaml_utf8;
     p->io_type = syck_io_str;
     p->io.str = NULL;
     p->syms = NULL;
@@ -181,7 +185,7 @@ syck_add_sym( SyckParser *p, char *data )
     {
         p->syms = st_init_numtable();
     }
-    id = p->syms->num_entries;
+    id = p->syms->num_entries + 1;
     st_insert( p->syms, id, (st_data_t)data );
     return id;
 }
@@ -196,7 +200,8 @@ syck_lookup_sym( SyckParser *p, SYMID id, char **data )
 int
 syck_st_free_nodes( char *key, SyckNode *n, char *arg )
 {
-    syck_free_node( n );
+    if ( n != (void *)1 ) syck_free_node( n );
+    n = NULL;
     return ST_CONTINUE;
 }
 
@@ -283,6 +288,13 @@ syck_parser_bad_anchor_handler( SyckParser *p, SyckBadAnchorHandler hdlr )
 }
 
 void
+syck_parser_set_input_type( SyckParser *p, enum syck_parser_input input_type )
+{
+    ASSERT( p != NULL );
+    p->input_type = input_type;
+}
+
+void
 syck_parser_file( SyckParser *p, FILE *fp, SyckIoFileRead read )
 {
     ASSERT( p != NULL );
@@ -358,6 +370,7 @@ syck_parser_add_level( SyckParser *p, int len, enum syck_level_status status )
 
     ASSERT( len > p->levels[p->lvl_idx-1].spaces );
     p->levels[p->lvl_idx].spaces = len;
+    p->levels[p->lvl_idx].ncount = 0;
     p->levels[p->lvl_idx].domain = syck_strndup( p->levels[p->lvl_idx-1].domain, strlen( p->levels[p->lvl_idx-1].domain ) );
     p->levels[p->lvl_idx].status = status;
     p->lvl_idx += 1;

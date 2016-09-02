@@ -2,8 +2,8 @@
 
   rubyio.h -
 
-  $Author: melville $
-  $Date: 2003/10/15 10:11:46 $
+  $Author: matz $
+  $Date: 2004/11/22 15:29:50 $
   created at: Fri Nov 12 16:47:09 JST 1993
 
   Copyright (C) 1993-2003 Yukihiro Matsumoto
@@ -15,6 +15,10 @@
 
 #include <stdio.h>
 #include <errno.h>
+
+#if defined(HAVE_STDIO_EXT_H)
+#include <stdio_ext.h>
+#endif
 
 typedef struct OpenFile {
     FILE *f;			/* stdio ptr for read/write */
@@ -29,6 +33,8 @@ typedef struct OpenFile {
 #define FMODE_READABLE  1
 #define FMODE_WRITABLE  2
 #define FMODE_READWRITE 3
+#define FMODE_APPEND   64
+#define FMODE_CREATE  128
 #define FMODE_BINMODE   4
 #define FMODE_SYNC      8
 #define FMODE_WBUF     16
@@ -61,10 +67,12 @@ int rb_getc _((FILE*));
 long rb_io_fread _((char *, long, FILE *));
 long rb_io_fwrite _((const char *, long, FILE *));
 int  rb_io_mode_flags _((const char*));
+int  rb_io_modenum_flags _((int));
 void rb_io_check_writable _((OpenFile*));
 void rb_io_check_readable _((OpenFile*));
 void rb_io_fptr_finalize _((OpenFile*));
 void rb_io_synchronized _((OpenFile*));
+void rb_io_check_initialized _((OpenFile*));
 void rb_io_check_closed _((OpenFile*));
 int rb_io_wait_readable _((int));
 int rb_io_wait_writable _((int));

@@ -1,3 +1,5 @@
+# -*- makefile -*-
+
 SHELL = $(COMSPEC)
 
 #### Start of system configuration section. ####
@@ -83,11 +85,17 @@ OPTFLAGS = -O
 !ifndef prefix
 prefix = /usr
 !endif
+!ifndef exec_prefix
+exec_prefix = $(prefix)
+!endif
+!ifndef libdir
+libdir = $(exec_prefix)/lib
+!endif
 !ifndef DESTDIR
 DESTDIR = $(prefix)
 !endif
 !ifndef CFLAGS
-CFLAGS = -q $(DEBUGFLAGS) $(OPTFLAGS) $(PROCESSOR_FLAG) -w-
+CFLAGS = -q -tWR -tWC $(DEBUGFLAGS) $(OPTFLAGS) $(PROCESSOR_FLAG) -w- -wsus -wcpt -wdup -wext -wrng -wrpt -wzdi
 !endif
 !ifndef CPPFLAGS
 CPPFLAGS = -I. -I$(srcdir) -I$(srcdir)missing
@@ -101,7 +109,7 @@ RFLAGS = $(iconinc)
 !ifndef EXTLIBS
 EXTLIBS =
 !endif
-LIBS = cw32.lib import32.lib ws2_32.lib $(EXTLIBS)
+LIBS = cw32i.lib import32.lib ws2_32.lib $(EXTLIBS)
 MISSING = acosh.obj crypt.obj erf.obj win32.obj
 
 !ifndef STACK
@@ -114,7 +122,7 @@ ARFLAGS = /a
 LD = ilink32 -q -Gn
 LDSHARED  = $(LD)
 XLDFLAGS  = -Tpe c0x32.obj
-WLDFLAGS  = -Tpe c0w32.obj
+WLDFLAGS  = -aa -Tpe c0w32.obj
 DLDFLAGS  = -Tpd c0d32.obj
 LIBRUBY_LDSHARED = $(LDSHARED)
 LIBRUBY_DLDFLAGS = -Gi $(DLDFLAGS) $(EXTLDFLAGS)
@@ -201,57 +209,68 @@ config: config.h config.status
 config.h:
 	@echo Creating $(@:.\=)
 	@type > $@ &&|
-\#define HAVE_PROTOTYPES 1
-\#define HAVE_STDARG_PROTOTYPES 1
-/* \#define HAVE_ATTR_NORETURN 1 */
-\#define NORETURN(x) x
-\#define TOKEN_PASTE(x,y) x\#\#y
-\#define inline __inline
-/* \#define HAVE_DIRENT_H 1 */
-/* \#define HAVE_UNISTD_H 1 */
+\#define HAVE_SYS_TYPES_H 1
+\#define HAVE_SYS_STAT_H 1
 \#define HAVE_STDLIB_H 1
-\#define HAVE_LIMITS_H 1
-/* \#define HAVE_SYS_FILE_H 1 */
-\#define HAVE_FCNTL_H 1
-/* \#define HAVE_PWD_H 1       */
-/* \#define HAVE_SYS_TIME_H 1  */
-/* \#define HAVE_SYS_TIMES_H 1 */
-/* \#define HAVE_SYS_PARAM_H 1 */
-/* \#define HAVE_SYS_WAIT_H 1  */
 \#define HAVE_STRING_H 1
-\#define HAVE_UTIME_H 1
 \#define HAVE_MEMORY_H 1
-/* \#define HAVE_ST_BLKSIZE 1  */
+\#define HAVE_OFF_T 1
+\#define SIZEOF_INT 4
+\#define SIZEOF_SHORT 2
+\#define SIZEOF_LONG 4
+\#define SIZEOF_LONG_LONG 0
+\#define SIZEOF___INT64 8
+\#define SIZEOF_OFF_T 4
+\#define SIZEOF_VOIDP 4
+\#define SIZEOF_FLOAT 4
+\#define SIZEOF_DOUBLE 8
+\#define SIZEOF_TIME_T 4
+\#define HAVE_PROTOTYPES 1
+\#define TOKEN_PASTE(x,y) x\#\#y
+\#define HAVE_STDARG_PROTOTYPES 1
+\#define NORETURN(x) x
+\#define HAVE_DECL_SYS_NERR 1
+\#define HAVE_LIMITS_H 1
+\#define HAVE_FCNTL_H 1
+\#define HAVE_UTIME_H 1
+\#define HAVE_FLOAT_H 1
+\#define HAVE_STRUCT_STAT_ST_RDEV 1
 \#define HAVE_ST_RDEV 1
-/* \#define GETGROUPS_T gid_t */
 \#define GETGROUPS_T int
 \#define RETSIGTYPE void
 \#define HAVE_ALLOCA 1
-\#define vfork fork
+\#define HAVE_DUP2 1
+\#define HAVE_MEMMOVE 1
+\#define HAVE_MKDIR 1
+\#define HAVE_STRCASECMP 1
+\#define HAVE_STRNCASECMP 1
+\#define HAVE_STRERROR 1
+\#define HAVE_STRFTIME 1
+\#define HAVE_STRCHR 1
+\#define HAVE_STRSTR 1
+\#define HAVE_STRTOD 1
+\#define HAVE_STRTOL 1
+\#define HAVE_STRTOUL 1
+\#define HAVE_ISNAN 1
+\#define HAVE_FINITE 1
 \#define HAVE_FMOD 1
-/* \#define HAVE_RANDOM 1    */
 \#define HAVE_WAITPID 1
-\#define HAVE_GETCWD 1
 \#define HAVE_FSYNC 1
-/* \#define HAVE_TRUNCATE 1  */
+\#define HAVE_GETCWD 1
 \#define HAVE_CHSIZE 1
 \#define HAVE_TIMES 1
-/* \#define HAVE_UTIMES 1    */
-/* \#define HAVE_FCNTL 1     */
-/* \#define HAVE_SETITIMER 1 */
-/* \#define HAVE_GETGROUPS 1 */
-/* \#define HAVE_SIGPROCMASK 1 */
-\#define HAVE_GETLOGIN 1
+\#define HAVE_LINK 1
 \#define HAVE_TELLDIR 1
 \#define HAVE_SEEKDIR 1
 \#define HAVE_COSH 1
 \#define HAVE_SINH 1
 \#define HAVE_TANH 1
-
-\#define NEED_IO_SEEK_BETWEEN_RW 1
-\#define RSHIFT(x,y) ((x)>>y)
+\#define RSHIFT(x,y) ((x)>>(int)y)
 \#define FILE_COUNT level
 \#define FILE_READPTR curp
+\#define inline __inline
+\#define NEED_IO_SEEK_BETWEEN_RW 1
+\#define STACK_GROW_DIRECTION -1
 \#define DEFAULT_KCODE KCODE_NONE
 \#define DLEXT ".so"
 \#define DLEXT2 ".dll"
@@ -261,28 +280,6 @@ config.h:
 \#define RUBY_PLATFORM "$(ARCH)-$(OS)"
 \#define RUBY_ARCHLIB "/lib/ruby/$(MAJOR).$(MINOR)/$(ARCH)-$(OS)"
 \#define RUBY_SITE_ARCHLIB "/lib/ruby/site_ruby/$(MAJOR).$(MINOR)/$(ARCH)-$(OS)"
-
-\#define SIZEOF_INT     4
-\#define SIZEOF_SHORT   2
-\#define SIZEOF_LONG    4
-\#define SIZEOF___INT64 8
-\#define SIZEOF_VOIDP   4
-\#define SIZEOF_FLOAT   4
-\#define SIZEOF_DOUBLE  8
-
-\#define HAVE_DECL_SYS_NERR 1
-\#define HAVE_ISINF         1
-\#define HAVE_ISNAN         1
-\#define HAVE_MEMMOVE       1
-\#define HAVE_MKDIR         1
-\#define HAVE_STRCASECMP    1
-\#define HAVE_STRNCASECMP   1
-\#define HAVE_STRCHR        1
-\#define HAVE_STRERROR      1
-\#define HAVE_STRFTIME      1
-\#define HAVE_STRSTR        1
-\#define HAVE_STRTOD        1
-\#define HAVE_STRTOUL       1
 |
 
 config.status: Makefile $(srcdir)bcc32/Makefile.sub
@@ -339,8 +336,10 @@ s,@ALLOCA@,$(ALLOCA),;t t
 s,@DEFAULT_KCODE@,$(DEFAULT_KCODE),;t t
 s,@EXEEXT@,.exe,;t t
 s,@OBJEXT@,obj,;t t
+s,@XCFLAGS@,$(XCFLAGS),;t t
 s,@XLDFLAGS@,$(XLDFLAGS),;t t
 s,@DLDFLAGS@,$(DLDFLAGS),;t t
+s,@ARCH_FLAG@,$(ARCH_FLAG),;t t
 s,@STATIC@,$(STATIC),;t t
 s,@CCDLFLAGS@,,;t t
 s,@LDSHARED@,$(LDSHARED),;t t
@@ -369,9 +368,10 @@ s,@DLDLIBS@,$(DLDLIBS),;t t
 s,@ENABLE_SHARED@,yes,;t t
 s,@OUTFLAG@,-o,;t t
 s,@CPPOUTFILE@,,;t t
-s,@LIBPATHFLAG@, -L%s,;t t
+s,@LIBPATHFLAG@, -L"%s",;t t
+s,@RPATHFLAG@,,;t t
 s,@LIBARG@,%s.lib,;t t
-s,@LINK_SO@,$$(LDSHARED) $$(DLDFLAGS) $$(LIBPATH) $$(OBJS), $$@, nul, $$(LIBS) $$(LOCAL_LIBS), $$(DEFFILE), $$(RESFILE),;t t
+s,@LINK_SO@,$$(LDSHARED) $$(DLDFLAGS) $$(LIBPATH) $$(OBJS), $$(@:/=\), nul, $$(LIBS) $$(LOCAL_LIBS), $$(DEFFILE), $$(RESFILE),;t t
 s,@COMPILE_C@,$$(CC) $$(CFLAGS) $$(CPPFLAGS) -c $$(<:/=\),;t t
 s,@COMPILE_CXX@,$$(CXX) $$(CXXFLAGS) $$(CPPFLAGS) -P -c $$(<:/=\),;t t
 s,@COMPILE_RULES@,{$$(srcdir)}.%s{}.%s: .%s.%s:,;t t
@@ -476,7 +476,7 @@ realclean:	distclean
 		@if exist parse.c del parse.c
 		@if exist lex.c del lex.c
 
-test:		miniruby$(EXEEXT)
+test:		miniruby$(EXEEXT) rbconfig.rb $(PROGRAM) NUL
 		@$(MINIRUBY) $(srcdir)rubytest.rb
 
 rbconfig.rb:	miniruby$(EXEEXT) config.status
@@ -506,7 +506,7 @@ $(RUBY_INSTALL_NAME).rc $(RUBYW_INSTALL_NAME).rc $(RUBY_SO_NAME).rc: rbconfig.rb
 
 .y.c:
 	$(YACC) $(YFLAGS) $(<:\=/)
-	sed -e "s!^extern char \*getenv();!/* & */!;s/^\(#.*\)y\.tab/\1parse/" y.tab.c > $(@F)
+	sed -e "s!^ *extern char \*getenv();!/* & */!;s/^\(#.*\)y\.tab/\1parse/" y.tab.c > $(@F)
 	@del y.tab.c
 
 parse.c: parse.y
@@ -547,17 +547,17 @@ win32.obj: win32.c win32.h
 ###
 array.obj: array.c ruby.h config.h defines.h intern.h missing.h util.h st.h win32.h
 bignum.obj: bignum.c ruby.h config.h defines.h intern.h missing.h win32.h
-class.obj: class.c ruby.h config.h defines.h intern.h missing.h rubysig.h node.h st.h version.h win32.h
+class.obj: class.c ruby.h config.h defines.h intern.h missing.h rubysig.h node.h st.h win32.h
 compar.obj: compar.c ruby.h config.h defines.h intern.h missing.h win32.h
 dir.obj: dir.c ruby.h config.h defines.h intern.h missing.h util.h win32.h
 dln.obj: dln.c ruby.h config.h defines.h intern.h missing.h dln.h win32.h
 dmyext.obj: dmyext.c
 enum.obj: enum.c ruby.h config.h defines.h intern.h missing.h node.h util.h win32.h
-error.obj: error.c ruby.h config.h defines.h intern.h missing.h env.h version.h st.h win32.h
+error.obj: error.c ruby.h config.h defines.h intern.h missing.h env.h st.h win32.h
 eval.obj: eval.c ruby.h config.h defines.h intern.h missing.h node.h env.h util.h rubysig.h st.h dln.h win32.h
 file.obj: file.c ruby.h config.h defines.h intern.h missing.h rubyio.h rubysig.h util.h dln.h win32.h
 gc.obj: gc.c ruby.h config.h defines.h intern.h missing.h rubysig.h st.h node.h env.h re.h regex.h win32.h
-hash.obj: hash.c ruby.h config.h defines.h intern.h missing.h st.h util.h rubysig.h version.h win32.h
+hash.obj: hash.c ruby.h config.h defines.h intern.h missing.h st.h util.h rubysig.h win32.h
 inits.obj: inits.c ruby.h config.h defines.h intern.h missing.h win32.h
 io.obj: io.c ruby.h config.h defines.h intern.h missing.h rubyio.h rubysig.h env.h util.h win32.h
 main.obj: main.c ruby.h config.h defines.h intern.h missing.h win32.h
@@ -577,7 +577,7 @@ ruby.obj: ruby.c ruby.h config.h defines.h intern.h missing.h dln.h node.h util.
 signal.obj: signal.c ruby.h config.h defines.h intern.h missing.h rubysig.h win32.h
 sprintf.obj: sprintf.c ruby.h config.h defines.h intern.h missing.h win32.h
 st.obj: st.c config.h st.h
-string.obj: string.c ruby.h config.h defines.h intern.h missing.h re.h regex.h version.h win32.h
+string.obj: string.c ruby.h config.h defines.h intern.h missing.h re.h regex.h win32.h
 struct.obj: struct.c ruby.h config.h defines.h intern.h missing.h win32.h
 time.obj: time.c ruby.h config.h defines.h intern.h missing.h win32.h
 util.obj: util.c ruby.h config.h defines.h intern.h missing.h util.h win32.h

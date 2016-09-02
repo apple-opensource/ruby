@@ -1,10 +1,9 @@
 # scanf for Ruby
 #
-# $Release Version: 1.1.2 $
-# $Revision: 1.1.1.1 $
-# $Id: scanf.rb,v 1.1.1.1 2003/10/15 10:11:48 melville Exp $
-# $Author: melville $
-# $Date: 2003/10/15 10:11:48 $
+# $Revision: 1.2.2.1 $
+# $Id: scanf.rb,v 1.2.2.1 2004/03/20 11:57:10 dblack Exp $
+# $Author: dblack $
+# $Date: 2004/03/20 11:57:10 $
 #
 # A product of the Austin Ruby Codefest (Austin, Texas, August 2002)
 
@@ -304,8 +303,7 @@ module Scanf
 
   class FormatSpecifier
 
-    attr_reader :re_string, :matched_string, :conversion
-    attr_writer :i
+    attr_reader :re_string, :matched_string, :conversion, :matched
 
     private
 
@@ -332,7 +330,6 @@ module Scanf
 
     def initialize(str)
       @spec_string = str
-
       h = '[A-Fa-f0-9]'
 
       @re_string, @handler = 
@@ -456,12 +453,14 @@ module Scanf
     end
 
     def match(str)
+      @matched = false
       s = str.dup
       s.sub!(/\A\s+/,'') unless count_space?
       res = to_re.match(s)
       if res
         @conversion = send(@handler, res[1])
-        @matched_string = @matched_item.to_s
+        @matched_string = @conversion.to_s
+        @matched = true
       end
       res
     end
@@ -472,22 +471,24 @@ module Scanf
 
     def width
       w = /%\*?(\d+)/.match(@spec_string).to_a[1]
-      w && w.to_i || 0
+      w && w.to_i
     end
 
     def mid_match?
-      cc_no_width    =   letter == '[' && width.zero?
-      c_or_cc_width  =   (letter == 'c' || letter == '[') &&! width.zero?
-      c_or_cc_open   =   c_or_cc_width && (matched_string.size < width)
-      
-      return c_or_cc_open || cc_no_width
+      return false unless @matched
+      cc_no_width    = letter == '[' &&! width
+      c_or_cc_width  = (letter == 'c' || letter == '[') && width
+      width_left     = c_or_cc_width && (matched_string.size < width)
+
+      return width_left || cc_no_width
     end
     
   end
 
   class FormatString
 
-    attr_reader :string_left, :last_spec_tried, :last_match_tried, :matched_count, :space
+    attr_reader :string_left, :last_spec_tried,
+                :last_match_tried, :matched_count, :space
 
     SPECIFIERS = 'diuXxofeEgsc'
     REGEX = /
@@ -512,6 +513,7 @@ module Scanf
 
     def initialize(str)
       @specs = []
+      @i = 1
       s = str.to_s
       return unless /\S/.match(s)
       @space = true if /\s\z/.match(s)
@@ -519,7 +521,7 @@ module Scanf
     end
 
     def to_s
-      @spec_string
+      @specs.join('')
     end
 
     def prune(n=matched_count)
@@ -566,16 +568,12 @@ class IO
 # That's why this is much more elaborate than the string
 # version.
 #
+# For each line:
 # Match succeeds (non-emptily)
 # and the last attempted spec/string sub-match succeeded:
 #
-# is the current matched spec a '%[...]' or '%c' with a width?
-#   yes: is current.string.size < available width?
-#     yes: save interim results
-#     no: width is used up, so move on (next)
-#   no: is it a '%[...]' with no width?
-#     yes: evidently nothing violated it yet, so store
-#          interim results and continue (next)
+#   could the last spec keep matching?
+#     yes: save interim results and continue (next line)
 #
 # The last attempted spec/string did not match:
 #
@@ -588,11 +586,12 @@ class IO
 #   no: continue  [this state could be analyzed further]
 #
 #
+
   def scanf(str,&b)
     return block_scanf(str,&b) if b
     return [] unless str.size > 0
 
-    start_position = pos
+    start_position = pos rescue 0
     matched_so_far = 0
     source_buffer = ""
     result_buffer = []
@@ -601,21 +600,23 @@ class IO
     fstr = Scanf::FormatString.new(str)
 
     loop do
-      if eof
+      if eof || (tty? &&! fstr.match(source_buffer))
         final_result.concat(result_buffer)
         break
       end
 
       source_buffer << gets
+
       current_match = fstr.match(source_buffer)
 
       spec = fstr.last_spec_tried
 
-      if fstr.last_match_tried
+      if spec.matched
         if spec.mid_match?
           result_buffer.replace(current_match)
           next
         end
+
       elsif (fstr.matched_count == fstr.spec_count - 1)
         if /\A\s*\z/.match(fstr.string_left)
           break if spec.count_space?
@@ -632,10 +633,9 @@ class IO
       break if fstr.last_spec
       fstr.prune
     end
-    
     seek(start_position + matched_so_far, IO::SEEK_SET) rescue Errno::ESPIPE
     soak_up_spaces if fstr.last_spec && fstr.space
-    
+
     return final_result
   end
 
@@ -647,15 +647,20 @@ class IO
     until eof ||! c || /\S/.match(c.chr)
       c = getc
     end
-    ungetc(c) if c
+    ungetc(c) if (c && /\S/.match(c.chr))
   end
 
   def block_scanf(str)
     final = []
+# Sub-ideal, since another FS gets created in scanf.
+# But used here to determine the number of specifiers.
+    fstr = Scanf::FormatString.new(str)
+    last_spec = fstr.last_spec
     begin
       current = scanf(str)
-      final.push(yield(current)) unless current.empty?
-    end until current.empty? || eof
+      break if current.empty?
+      final.push(yield(current))
+    end until eof || fstr.last_spec_tried == last_spec
     return final
   end
 end
@@ -691,7 +696,7 @@ end
 
 module Kernel
   private
-  def scanf(fs)
-    STDIN.scanf(fs)
+  def scanf(fs,&b)
+    STDIN.scanf(fs,&b)
   end
 end

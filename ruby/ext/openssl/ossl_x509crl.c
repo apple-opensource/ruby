@@ -1,5 +1,5 @@
 /*
- * $Id: ossl_x509crl.c,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+ * $Id: ossl_x509crl.c,v 1.3.2.1 2004/12/15 01:54:38 matz Exp $
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2001-2002 Michal Rokos <m.rokos@sh.cvut.cz>
  * All rights reserved.
@@ -86,40 +86,26 @@ ossl_x509crl_alloc(VALUE klass)
 
     return obj;
 }
-DEFINE_ALLOC_WRAPPER(ossl_x509crl_alloc)
 
 static VALUE 
 ossl_x509crl_initialize(int argc, VALUE *argv, VALUE self)
 {
     BIO *in;
     X509_CRL *crl;
-    VALUE buffer;
+    VALUE arg;
 
-    if (rb_scan_args(argc, argv, "01", &buffer) == 0) {
+    if (rb_scan_args(argc, argv, "01", &arg) == 0) {
 	return self;
     }
-    StringValue(buffer);
-    
-    in = BIO_new_mem_buf(RSTRING(buffer)->ptr, RSTRING(buffer)->len);
-    if (!in) {
-	ossl_raise(eX509CRLError, NULL);
-    }
-    /*
-     * TODO:
-     * Check if we should free CRL
-     X509_CRL_free(DATA_PTR(self));
-    */
+    arg = ossl_to_der_if_possible(arg);
+    in = ossl_obj2bio(arg);
     crl = PEM_read_bio_X509_CRL(in, (X509_CRL **)&DATA_PTR(self), NULL, NULL);
     if (!crl) {
 	BIO_reset(in);
-
 	crl = d2i_X509_CRL_bio(in, (X509_CRL **)&DATA_PTR(self));
     }
-    if (!crl) {
-	BIO_free(in);
-	ossl_raise(eX509CRLError, NULL);
-    }
     BIO_free(in);
+    if (!crl) ossl_raise(eX509CRLError, NULL);
 
     return self;
 }
@@ -160,11 +146,10 @@ ossl_x509crl_set_version(VALUE self, VALUE version)
     X509_CRL *crl;
     long ver;
 
-    GetX509CRL(self, crl);
-
     if ((ver = NUM2LONG(version)) < 0) {
 	ossl_raise(eX509CRLError, "version must be >= 0!");
     }
+    GetX509CRL(self, crl);
     if (!X509_CRL_set_version(crl, ver)) {
 	ossl_raise(eX509CRLError, NULL);
     }
@@ -181,7 +166,6 @@ ossl_x509crl_get_signature_algorithm(VALUE self)
     VALUE str;
 
     GetX509CRL(self, crl);
-	
     if (!(out = BIO_new(BIO_s_mem()))) {
 	ossl_raise(eX509CRLError, NULL);
     }
@@ -234,8 +218,8 @@ ossl_x509crl_set_last_update(VALUE self, VALUE time)
     X509_CRL *crl;
     time_t sec;
 
-    GetX509CRL(self, crl);
     sec = time_to_time_t(time);
+    GetX509CRL(self, crl);
     if (!X509_time_adj(crl->crl->lastUpdate, 0, &sec)) {
 	ossl_raise(eX509CRLError, NULL);
     }
@@ -259,8 +243,8 @@ ossl_x509crl_set_next_update(VALUE self, VALUE time)
     X509_CRL *crl;
     time_t sec;
 
-    GetX509CRL(self, crl);
     sec = time_to_time_t(time);
+    GetX509CRL(self, crl);
     /* This must be some thinko in OpenSSL */
     if (!(crl->crl->nextUpdate = X509_time_adj(crl->crl->nextUpdate, 0, &sec))){
 	ossl_raise(eX509CRLError, NULL);
@@ -301,12 +285,12 @@ ossl_x509crl_set_revoked(VALUE self, VALUE ary)
     X509_REVOKED *rev;
     int i;
 
-    GetX509CRL(self, crl);
     Check_Type(ary, T_ARRAY);
     /* All ary members should be X509 Revoked */
     for (i=0; i<RARRAY(ary)->len; i++) {
 	OSSL_Check_Kind(RARRAY(ary)->ptr[i], cX509Rev);
     }
+    GetX509CRL(self, crl);
     sk_X509_REVOKED_pop_free(crl->crl->revoked, X509_REVOKED_free);
     crl->crl->revoked = NULL;
     for (i=0; i<RARRAY(ary)->len; i++) {
@@ -475,12 +459,12 @@ ossl_x509crl_set_extensions(VALUE self, VALUE ary)
     X509_EXTENSION *ext;
     int i;
 	
-    GetX509CRL(self, crl);
     Check_Type(ary, T_ARRAY);
     /* All ary members should be X509 Extensions */
     for (i=0; i<RARRAY(ary)->len; i++) {
 	OSSL_Check_Kind(RARRAY(ary)->ptr[i], cX509Ext);
     }
+    GetX509CRL(self, crl);
     sk_X509_EXTENSION_pop_free(crl->crl->extensions, X509_EXTENSION_free);
     crl->crl->extensions = NULL;
     for (i=0; i<RARRAY(ary)->len; i++) {

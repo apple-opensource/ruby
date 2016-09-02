@@ -1,5 +1,5 @@
 /*
- * $Id: ossl_digest.h,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+ * $Id: ossl_digest.h,v 1.2 2003/09/05 09:08:40 gotoyuzo Exp $
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2001-2002  Michal Rokos <m.rokos@sh.cvut.cz>
  * All rights reserved.
@@ -16,6 +16,7 @@ extern VALUE cDigest;
 extern VALUE eDigestError;
 
 const EVP_MD *GetDigestPtr(VALUE);
+VALUE ossl_digest_new(const EVP_MD *);
 void Init_ossl_digest(void);
 
 #endif /* _OSSL_DIGEST_H_ */

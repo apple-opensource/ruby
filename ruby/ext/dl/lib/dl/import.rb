@@ -9,15 +9,11 @@ module DL
 
     module Internal
       def init_types()
-	if( !@types )
-	  @types = ::DL::Types.new
-	end
+	@types ||= ::DL::Types.new
       end
 
       def init_sym()
-	if( !@SYM )
-	  @SYM = {}
-	end
+	@SYM ||= {}
       end
 
       def [](name)
@@ -74,23 +70,26 @@ module DL
 	init_types()
 	init_sym()
 
-	rty,renc,rdec = @types.encode_type(ret)
-	ty,enc,dec = encode_types(args)
+	rty,renc,rdec = @types.encode_return_type(ret)
+        if( !rty )
+          raise(TypeError, "unsupported type: #{ret}")
+        end
+	ty,enc,dec = encode_argument_types(args)
 	symty = rty + ty
 
 	module_eval("module_function :#{func}")
-	sym = module_eval [
+	sym = module_eval([
 	  "DL::callback(\"#{symty}\"){|*args|",
 	  "  sym,rdec,enc,dec  = @SYM['#{func}']",
 	  "  args = enc.call(args) if enc",
 	  "  r,rs = #{func}(*args)",
 	  "  r  = renc.call(r) if rdec",
-	  "  rs = dec.call(rs) if dec",
+	  "  rs = dec.call(rs) if (dec && rs)",
 	  "  @retval = r",
 	  "  @args   = rs",
 	  "  @retval",
 	  "}",
-	].join("\n")
+	].join("\n"))
 
 	@SYM[func] = [sym,rdec,enc,dec]
 
@@ -135,8 +134,11 @@ module DL
 	init_types()
 	init_sym()
 
-	rty,_,rdec = @types.encode_type(rettype)
-	ty,enc,dec = encode_types(argtypes)
+	rty,_,rdec = @types.encode_return_type(rettype)
+        if( !rty )
+          raise(TypeError, "unsupported type: #{rettype}")
+        end
+	ty,enc,dec = encode_argument_types(argtypes)
 	symty = rty + ty
 
 	sym = symbol(name, symty)
@@ -182,13 +184,16 @@ module DL
 	return @retval
       end
 
-      def encode_types(tys)
+      def encode_argument_types(tys)
 	init_types()
 	encty = []
 	enc = nil
 	dec = nil
 	tys.each_with_index{|ty,idx|
-	  ty,c1,c2,_,_ = @types.encode_type(ty)
+	  ty,c1,c2 = @types.encode_argument_type(ty)
+          if( !ty )
+            raise(TypeError, "unsupported type: #{ty}")
+          end
 	  encty.push(ty)
 	  if( enc )
 	    if( c1 )

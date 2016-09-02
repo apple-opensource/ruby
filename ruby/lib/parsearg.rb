@@ -1,8 +1,8 @@
 #
 #		parsearg.rb - parse arguments
 #			$Release Version: $
-#			$Revision: 1.1.1.2 $
-#			$Date: 2003/10/15 10:11:48 $
+#			$Revision: 1.2 $
+#			$Date: 2002/07/29 06:14:06 $
 #			by Yasuo OHBA(SHL Japan Inc. Technology Dept.)
 #
 # --
@@ -10,7 +10,7 @@
 #	
 #
 
-$RCS_ID=%q$Header: /cvs/Darwin/ruby/ruby/lib/parsearg.rb,v 1.1.1.2 2003/10/15 10:11:48 melville Exp $
+$RCS_ID=%q$Header: /src/ruby/lib/parsearg.rb,v 1.2 2002/07/29 06:14:06 matz Exp $
 
 require "getopts"
 

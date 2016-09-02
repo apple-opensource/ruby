@@ -1,8 +1,8 @@
 #
 #   shell/process-controller.rb - 
 #   	$Release Version: 0.6.0 $
-#   	$Revision: 1.1.1.2 $
-#   	$Date: 2003/10/15 10:11:49 $
+#   	$Revision: 1.3 $
+#   	$Date: 2003/10/16 17:47:19 $
 #   	by Keiju ISHITSUKA(Nihon Rational Software Co.,Ltd)
 #
 # --
@@ -165,7 +165,7 @@ class Shell
 	  return
 	elsif @active_jobs.include?(command)
 	  begin
-	    r = command.kill sig
+	    r = command.kill(sig)
 	    ProcessController.inactivate(self)
 	  rescue
 	    print "Shell: Warn: $!\n" if @shell.verbose?

@@ -1,5 +1,5 @@
 /*
- * $Id: ossl_x509cert.c,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+ * $Id: ossl_x509cert.c,v 1.3.2.1 2004/12/15 01:54:38 matz Exp $
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2001-2002  Michal Rokos <m.rokos@sh.cvut.cz>
  * All rights reserved.
@@ -124,7 +124,6 @@ ossl_x509_alloc(VALUE klass)
 
     return obj;
 }
-DEFINE_ALLOC_WRAPPER(ossl_x509_alloc)
 
 static VALUE 
 ossl_x509_initialize(int argc, VALUE *argv, VALUE self)
@@ -137,13 +136,8 @@ ossl_x509_initialize(int argc, VALUE *argv, VALUE self)
 	/* create just empty X509Cert */
 	return self;
     }
+    arg = ossl_to_der_if_possible(arg);
     in = ossl_obj2bio(arg);
-
-    /*
-     * TODO:
-     * Check if we could free old X509
-     X509_free(DATA_PTR(self));
-    */
     x509 = PEM_read_bio_X509(in, (X509 **)&DATA_PTR(self), NULL, NULL);
     if (!x509) {
 	BIO_reset(in);
@@ -179,22 +173,18 @@ static VALUE
 ossl_x509_to_der(VALUE self)
 {
     X509 *x509;
-    BIO *out;
     VALUE str;
-    int status=0;
+    long len;
+    unsigned char *p;
 
     GetX509(self, x509);
-
-    out = BIO_new(BIO_s_mem());
-    if (!out) ossl_raise(eX509CertError, NULL);
-
-    if (!i2d_X509_bio(out, x509)) {
-	BIO_free(out);
+    if ((len = i2d_X509(x509, NULL)) <= 0)
 	ossl_raise(eX509CertError, NULL);
-    }
-    str = ossl_protect_membio2str(out, &status);
-    BIO_free(out);
-    if (status) rb_jump_tag(status);
+    str = rb_str_new(0, len);
+    p = RSTRING(str)->ptr;
+    if (i2d_X509(x509, &p) <= 0)
+	ossl_raise(eX509CertError, NULL);
+    ossl_str_adjust(str, p);
     
     return str;
 }
@@ -205,7 +195,6 @@ ossl_x509_to_pem(VALUE self)
     X509 *x509;
     BIO *out;
     VALUE str;
-    int status=0;
 	
     GetX509(self, x509);
     out = BIO_new(BIO_s_mem());
@@ -215,9 +204,7 @@ ossl_x509_to_pem(VALUE self)
 	BIO_free(out);
 	ossl_raise(eX509CertError, NULL);
     }
-    str = ossl_protect_membio2str(out, &status);
-    BIO_free(out);
-    if (status) rb_jump_tag(status);
+    str = ossl_membio2str(out);
 
     return str;
 }
@@ -228,7 +215,6 @@ ossl_x509_to_text(VALUE self)
     X509 *x509;
     BIO *out;
     VALUE str;
-    int status=0;
 	
     GetX509(self, x509);
 
@@ -239,9 +225,7 @@ ossl_x509_to_text(VALUE self)
 	BIO_free(out);
 	ossl_raise(eX509CertError, NULL);
     }
-    str = ossl_protect_membio2str(out, &status);
-    BIO_free(out);
-    if (status) rb_jump_tag(status);
+    str = ossl_membio2str(out);
 
     return str;
 }
@@ -284,10 +268,10 @@ ossl_x509_set_version(VALUE self, VALUE version)
     X509 *x509;
     long ver;
 
-    GetX509(self, x509);
     if ((ver = NUM2LONG(version)) < 0) {
 	ossl_raise(eX509CertError, "version must be >= 0!");
     }
+    GetX509(self, x509);
     if (!X509_set_version(x509, ver)) {
 	ossl_raise(eX509CertError, NULL);
     }
@@ -324,10 +308,8 @@ ossl_x509_get_signature_algorithm(VALUE self)
     X509 *x509;
     BIO *out;
     VALUE str;
-    int status=0;
 
     GetX509(self, x509);
-	
     out = BIO_new(BIO_s_mem());
     if (!out) ossl_raise(eX509CertError, NULL);
 
@@ -335,9 +317,7 @@ ossl_x509_get_signature_algorithm(VALUE self)
 	BIO_free(out);
 	ossl_raise(eX509CertError, NULL);
     }
-    str = ossl_protect_membio2str(out, &status);
-    BIO_free(out);
-    if (status) rb_jump_tag(status);
+    str = ossl_membio2str(out);
 
     return str;
 }
@@ -416,8 +396,8 @@ ossl_x509_set_not_before(VALUE self, VALUE time)
     X509 *x509;
     time_t sec;
 	
-    GetX509(self, x509);
     sec = time_to_time_t(time);
+    GetX509(self, x509);
     if (!X509_time_adj(X509_get_notBefore(x509), 0, &sec)) {
 	ossl_raise(eX509CertError, NULL);
     }
@@ -445,8 +425,8 @@ ossl_x509_set_not_after(VALUE self, VALUE time)
     X509 *x509;
     time_t sec;
 	
-    GetX509(self, x509);
     sec = time_to_time_t(time);
+    GetX509(self, x509);
     if (!X509_time_adj(X509_get_notAfter(x509), 0, &sec)) {
 	ossl_raise(eX509CertError, NULL);
     }
@@ -488,9 +468,9 @@ ossl_x509_sign(VALUE self, VALUE key, VALUE digest)
     EVP_PKEY *pkey;
     const EVP_MD *md;
 
-    GetX509(self, x509);
     pkey = GetPrivPKeyPtr(key); /* NO NEED TO DUP */
     md = GetDigestPtr(digest);
+    GetX509(self, x509);
     if (!X509_sign(x509, pkey, md)) {
 	ossl_raise(eX509CertError, NULL);
     }
@@ -508,8 +488,8 @@ ossl_x509_verify(VALUE self, VALUE key)
     EVP_PKEY *pkey;
     int i;
 
-    GetX509(self, x509);
     pkey = GetPKeyPtr(key); /* NO NEED TO DUP */
+    GetX509(self, x509);
     if ((i = X509_verify(x509, pkey)) < 0) {
 	ossl_raise(eX509CertError, NULL);
     } 
@@ -529,9 +509,9 @@ ossl_x509_check_private_key(VALUE self, VALUE key)
     X509 *x509;
     EVP_PKEY *pkey;
 	
-    GetX509(self, x509);
     /* not needed private key, but should be */
     pkey = GetPrivPKeyPtr(key); /* NO NEED TO DUP */
+    GetX509(self, x509);
     if (!X509_check_private_key(x509, pkey)) {
 	OSSL_Warning("Check private key:%s", OSSL_ErrMsg());
 	return Qfalse;
@@ -575,12 +555,12 @@ ossl_x509_set_extensions(VALUE self, VALUE ary)
     X509_EXTENSION *ext;
     int i;
 	
-    GetX509(self, x509);
     Check_Type(ary, T_ARRAY);
     /* All ary's members should be X509Extension */
     for (i=0; i<RARRAY(ary)->len; i++) {
 	OSSL_Check_Kind(RARRAY(ary)->ptr[i], cX509Ext);
     }
+    GetX509(self, x509);
     sk_X509_EXTENSION_pop_free(x509->cert_info->extensions, X509_EXTENSION_free);
     x509->cert_info->extensions = NULL;
     for (i=0; i<RARRAY(ary)->len; i++) {

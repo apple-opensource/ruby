@@ -1,8 +1,8 @@
 #
 #   thwait.rb - thread synchronization class
 #   	$Release Version: 0.9 $
-#   	$Revision: 1.1.1.2 $
-#   	$Date: 2003/10/15 10:11:48 $
+#   	$Revision: 1.3 $
+#   	$Date: 1998/06/26 03:19:34 $
 #   	by Keiju ISHITSUKA(Nihpon Rational Software Co.,Ltd.)
 #
 # --
@@ -52,7 +52,7 @@ require "e2mmap.rb"
 #   end
 #
 class ThreadsWait
-  RCS_ID='-$Id: thwait.rb,v 1.1.1.2 2003/10/15 10:11:48 melville Exp $-'
+  RCS_ID='-$Id: thwait.rb,v 1.3 1998/06/26 03:19:34 keiju Exp keiju $-'
   
   Exception2MessageMapper.extend_to(binding)
   def_exception("ErrNoWaitingThread", "No threads for waiting.")
@@ -117,8 +117,11 @@ class ThreadsWait
     @threads.concat threads
     for th in threads
       Thread.start(th) do |t|
-	t.join
-	@wait_queue.push t
+	begin
+	  t.join
+	ensure
+	  @wait_queue.push t
+	end
       end
     end
   end
@@ -158,7 +161,7 @@ ThWait = ThreadsWait
 
 
 # Documentation comments:
-#  - Source of doumentation is evenly split between Nutshell, existing
+#  - Source of documentation is evenly split between Nutshell, existing
 #    comments, and my own rephrasing.
 #  - I'm not particularly confident that the comments are all exactly correct.
 #  - The history, etc., up the top appears in the RDoc output.  Perhaps it would

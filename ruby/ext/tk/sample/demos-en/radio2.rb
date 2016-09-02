@@ -1,4 +1,4 @@
-# radio.rb
+# radio2.rb
 #
 # This demonstration script creates a toplevel window containing
 # several radiobutton widgets.
@@ -14,8 +14,8 @@ end
 
 # demo toplevel widget
 $radio2_demo = TkToplevel.new {|w|
-  title("Radiobutton Demonstration")
-  iconname("radio")
+  title("Radiobutton Demonstration 2")
+  iconname("radio2")
   positionWindow(w)
 }
 
@@ -47,25 +47,25 @@ TkFrame.new($radio2_demo) {|frame|
 
   TkButton.new(frame) {
     text 'Show Code'
-    command proc{showCode 'radio'}
+    command proc{showCode 'radio2'}
   }.pack('side'=>'left', 'expand'=>'yes')
 
   TkButton.new(frame) {
     text 'See Variables'
     command proc{
       showVars($radio2_demo, 
-	       ['size', size], ['color', color], ['compound', align])
+               ['size', size], ['color', color], ['compound', align])
     }
   }.pack('side'=>'left', 'expand'=>'yes')
 }.pack('side'=>'bottom', 'fill'=>'x', 'pady'=>'2m')
 
 # frame 
 f_left  = TkLabelFrame.new($radio2_demo, 'text'=>'Point Size', 
-			   'pady'=>2, 'padx'=>2)
+                           'pady'=>2, 'padx'=>2)
 f_mid   = TkLabelFrame.new($radio2_demo, 'text'=>'Color', 
-			   'pady'=>2, 'padx'=>2)
+                           'pady'=>2, 'padx'=>2)
 f_right = TkLabelFrame.new($radio2_demo, 'text'=>'Alignment', 
-			   'pady'=>2, 'padx'=>2)
+                           'pady'=>2, 'padx'=>2)
 f_left.pack('side'=>'left', 'expand'=>'yes', 'padx'=>'.5c', 'pady'=>'.5c')
 f_mid.pack('side'=>'left', 'expand'=>'yes', 'padx'=>'.5c', 'pady'=>'.5c')
 f_right.pack('side'=>'left', 'expand'=>'yes', 'padx'=>'.5c', 'pady'=>'.5c')
@@ -91,14 +91,14 @@ f_right.pack('side'=>'left', 'expand'=>'yes', 'padx'=>'.5c', 'pady'=>'.5c')
 }
 
 label = TkLabel.new(f_right, 'text'=>'Label', 'bitmap'=>'questhead', 
-		    'compound'=>'left')
+                    'compound'=>'left')
 label.configure('width'=>TkWinfo.reqwidth(label), 'compound'=>'top')
 label.height(TkWinfo.reqheight(label))
 abtn = ['Top', 'Left', 'Right', 'Bottom'].collect{|a|
   lower = a.downcase
   TkRadioButton.new(f_right, 'text'=>a, 'variable'=>align, 'relief'=>'flat', 
-		    'value'=>lower, 'indicatoron'=>0, 'width'=>7, 
-		    'command'=>proc{label.compound(align.value)})
+                    'value'=>lower, 'indicatoron'=>0, 'width'=>7, 
+                    'command'=>proc{label.compound(align.value)})
 }
 
 Tk.grid('x', abtn[0])

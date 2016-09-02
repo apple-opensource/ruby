@@ -2,7 +2,7 @@ module IRB
   class LoadAbort < Exception;end
 
   module IrbLoader
-    @RCS_ID='-$Id: loader.rb,v 1.1.1.1 2003/10/15 10:11:49 melville Exp $-'
+    @RCS_ID='-$Id: loader.rb,v 1.1 2002/07/09 11:17:17 keiju Exp $-'
     alias ruby_load load
     alias ruby_require require
 

@@ -1,5 +1,5 @@
 /* -*- C -*-
- * $Id: curses.c,v 1.1.1.2 2003/10/15 10:11:47 melville Exp $
+ * $Id: curses.c,v 1.24.2.1 2004/12/15 09:57:05 shugo Exp $
  *
  * ext/curses/curses.c
  * 
@@ -14,27 +14,34 @@
  */
 
 #include "ruby.h"
+#include "rubyio.h"
 
 #if defined(HAVE_NCURSES_H)
 # include <ncurses.h>
 #elif defined(HAVE_NCURSES_CURSES_H)
 # include <ncurses/curses.h>
 #elif defined(HAVE_CURSES_COLR_CURSES_H)
-# include <varargs.h>
+# ifdef HAVE_STDARG_PROTOTYPES
+#  include <stdarg.h>
+# else
+#  include <varargs.h>
+# endif
 # include <curses_colr/curses.h>
 #else
 # include <curses.h>
-# if (defined(__bsdi__) || defined(__NetBSD__) || defined(__APPLE__)) && !defined(_maxx)
+# if defined(__bsdi__) || defined(__NetBSD__) || defined(__APPLE__)
+#  if !defined(_maxx)
 #  define _maxx maxx
-# endif
-# if (defined(__bsdi__) || defined(__NetBSD__) || defined(__APPLE__)) && !defined(_maxy)
+#  endif
+#  if !defined(_maxy)
 #  define _maxy maxy
-# endif
-# if (defined(__bsdi__) || defined(__NetBSD__) || defined(__APPLE__)) && !defined(_begx)
+#  endif
+#  if !defined(_begx)
 #  define _begx begx
-# endif
-# if (defined(__bsdi__) || defined(__NetBSD__) || defined(__APPLE__)) && !defined(_begy)
+#  endif
+#  if !defined(_begy)
 #  define _begy begy
+#  endif
 # endif
 #endif
 
@@ -46,9 +53,6 @@
 #ifdef NCURSES_MOUSE_VERSION
 # define USE_MOUSE 1
 #endif
-
-#include <stdio.h>
-#include "rubyio.h"
 
 static VALUE mCurses;
 static VALUE mKey;
@@ -174,6 +178,7 @@ static VALUE
 curses_clear(obj)
     VALUE obj;
 {
+    curses_stdscr();
     wclear(stdscr);
     return Qnil;
 }
@@ -183,6 +188,7 @@ static VALUE
 curses_refresh(obj)
     VALUE obj;
 {
+    curses_stdscr();
     refresh();
     return Qnil;
 }
@@ -192,6 +198,7 @@ static VALUE
 curses_doupdate(obj)
     VALUE obj;
 {
+    curses_stdscr();
 #ifdef HAVE_DOUPDATE
     doupdate();
 #else
@@ -205,6 +212,7 @@ static VALUE
 curses_echo(obj)
     VALUE obj;
 {
+    curses_stdscr();
     echo();
     return Qnil;
 }
@@ -214,6 +222,7 @@ static VALUE
 curses_noecho(obj)
     VALUE obj;
 {
+    curses_stdscr();
     noecho();
     return Qnil;
 }
@@ -223,6 +232,7 @@ static VALUE
 curses_raw(obj)
     VALUE obj;
 {
+    curses_stdscr();
     raw();
     return Qnil;
 }
@@ -232,6 +242,7 @@ static VALUE
 curses_noraw(obj)
     VALUE obj;
 {
+    curses_stdscr();
     noraw();
     return Qnil;
 }
@@ -241,6 +252,7 @@ static VALUE
 curses_cbreak(obj)
     VALUE obj;
 {
+    curses_stdscr();
     cbreak();
     return Qnil;
 }
@@ -250,6 +262,7 @@ static VALUE
 curses_nocbreak(obj)
     VALUE obj;
 {
+    curses_stdscr();
     nocbreak();
     return Qnil;
 }
@@ -259,6 +272,7 @@ static VALUE
 curses_nl(obj)
     VALUE obj;
 {
+    curses_stdscr();
     nl();
     return Qnil;
 }
@@ -268,6 +282,7 @@ static VALUE
 curses_nonl(obj)
     VALUE obj;
 {
+    curses_stdscr();
     nonl();
     return Qnil;
 }
@@ -278,6 +293,7 @@ curses_beep(obj)
     VALUE obj;
 {
 #ifdef HAVE_BEEP
+    curses_stdscr();
     beep();
 #endif
     return Qnil;
@@ -289,6 +305,7 @@ curses_flash(obj)
     VALUE obj;
 {
 #ifdef HAVE_FLASH
+    curses_stdscr();
     flash();
 #endif
     return Qnil;
@@ -301,6 +318,7 @@ curses_ungetch(obj, ch)
     VALUE ch;
 {
 #ifdef HAVE_UNGETCH
+    curses_stdscr();
     ungetch(NUM2INT(ch));
 #else
     rb_notimplement();
@@ -315,6 +333,7 @@ curses_setpos(obj, y, x)
     VALUE y;
     VALUE x;
 {
+    curses_stdscr();
     move(NUM2INT(y), NUM2INT(x));
     return Qnil;
 }
@@ -342,6 +361,7 @@ static VALUE
 curses_inch(obj)
     VALUE obj;
 {
+    curses_stdscr();
     return CHR2FIX(inch());
 }
 
@@ -351,6 +371,7 @@ curses_addch(obj, ch)
     VALUE obj;
     VALUE ch;
 {
+    curses_stdscr();
     addch(NUM2CHR(ch));
     return Qnil;
 }
@@ -361,6 +382,7 @@ curses_insch(obj, ch)
     VALUE obj;
     VALUE ch;
 {
+    curses_stdscr();
     insch(NUM2CHR(ch));
     return Qnil;
 }
@@ -371,6 +393,7 @@ curses_addstr(obj, str)
     VALUE obj;
     VALUE str;
 {
+    curses_stdscr();
     if (!NIL_P(str)) {
 	addstr(STR2CSTR(str));
     }
@@ -383,6 +406,7 @@ curses_getch(obj)
     VALUE obj;
 {
     rb_read_check(stdin);
+    curses_stdscr();
     return UINT2NUM(getch());
 }
 
@@ -457,22 +481,34 @@ curses_cols()
 static VALUE
 curses_curs_set(VALUE obj, VALUE visibility)
 {
+#ifdef HAVE_CURS_SET
   int n;
   return (n = curs_set(NUM2INT(visibility)) != ERR) ? INT2FIX(n) : Qnil;
+#else
+  return Qnil;
+#endif
 }
 
 static VALUE
 curses_scrl(VALUE obj, VALUE n)
 {
   /* may have to raise exception on ERR */
+#ifdef HAVE_SCRL
   return (scrl(NUM2INT(n)) == OK) ? Qtrue : Qfalse;
+#else
+  return Qfalse;
+#endif
 }
 
 static VALUE
 curses_setscrreg(VALUE obj, VALUE top, VALUE bottom)
 {
   /* may have to raise exception on ERR */
+#ifdef HAVE_SETSCRREG
   return (setscrreg(NUM2INT(top), NUM2INT(bottom)) == OK) ? Qtrue : Qfalse;
+#else
+  return Qfalse;
+#endif
 }
 
 static VALUE
@@ -499,21 +535,27 @@ curses_attrset(VALUE obj, VALUE attrs)
 static VALUE
 curses_bkgdset(VALUE obj, VALUE ch)
 {
+#ifdef HAVE_BKGDSET
   bkgdset(NUM2CHR(ch));
+#endif
   return Qnil;
 }
 
 static VALUE
 curses_bkgd(VALUE obj, VALUE ch)
 {
-  return CHR2FIX(bkgd(NUM2CHR(ch)));
+#ifdef HAVE_BKGD
+  return (bkgd(NUM2CHR(ch)) == OK) ? Qtrue : Qfalse;
+#else
+  return Qfalse;
+#endif
 }
 
 static VALUE
-curses_resizeterm(VALUE obj, VALUE lines, VALUE columns)
+curses_resizeterm(VALUE obj, VALUE lin, VALUE col)
 {
 #if defined(HAVE_RESIZETERM)
-  return (resizeterm(NUM2INT(lines),NUM2INT(columns)) == OK) ? Qtrue : Qfalse;
+  return (resizeterm(NUM2INT(lin),NUM2INT(col)) == OK) ? Qtrue : Qfalse;
 #else
   return Qnil;
 #endif
@@ -583,7 +625,7 @@ curses_pair_number(VALUE obj, VALUE attrs)
 {
   return INT2FIX(PAIR_NUMBER(NUM2INT(attrs)));
 }
-#endif
+#endif /* USE_COLOR */
 
 #ifdef USE_MOUSE
 struct mousedata {
@@ -659,6 +701,37 @@ DEFINE_MOUSE_GET_MEMBER(curs_mouse_bstate, bstate)
 #undef define_curs_mouse_member
 #endif /* USE_MOUSE */
 
+static VALUE
+curses_timeout(VALUE obj, VALUE delay)
+{
+#ifdef HAVE_TIMEOUT
+  timeout(NUM2INT(delay));
+  return Qnil;
+#else
+    rb_notimplement();
+#endif
+}
+
+static VALUE
+curses_def_prog_mode(VALUE obj)
+{
+#ifdef HAVE_DEF_PROG_MODE
+  return def_prog_mode() == OK ? Qtrue : Qfalse;
+#else
+    rb_notimplement();
+#endif
+}
+
+static VALUE
+curses_reset_prog_mode(VALUE obj)
+{
+#ifdef HAVE_RESET_PROG_MODE
+  return reset_prog_mode() == OK ? Qtrue : Qfalse;
+#else
+    rb_notimplement();
+#endif
+}
+
 /*-------------------------- class Window --------------------------*/
 
 /* def self.allocate */
@@ -693,22 +766,26 @@ window_initialize(obj, h, w, top, left)
     return obj;
 }
 
-/* def subwin(h, w, top, left) */
+/* def subwin(height, width, top, left) */
 static VALUE
-window_subwin(obj, h, w, top, left)
+window_subwin(obj, height, width, top, left)
     VALUE obj;
-    VALUE h;
-    VALUE w;
+    VALUE height;
+    VALUE width;
     VALUE top;
     VALUE left;
 {
     struct windata *winp;
     WINDOW *window;
     VALUE win;
+    int h, w, t, l;
 
+    h = NUM2INT(height);
+    w = NUM2INT(width);
+    t = NUM2INT(top);
+    l = NUM2INT(left);
     GetWINDOW(obj, winp);
-    window = subwin(winp->window, NUM2INT(h), NUM2INT(w),
-		                  NUM2INT(top), NUM2INT(left));
+    window = subwin(winp->window, h, w, t, l);
     win = prep_window(rb_obj_class(obj), window);
 
     return win;
@@ -1105,6 +1182,7 @@ window_idlok(VALUE obj, VALUE bf)
 static VALUE
 window_setscrreg(VALUE obj, VALUE top, VALUE bottom)
 {
+#ifdef HAVE_WSETSCRREG
   struct windata *winp;
   int res;
 
@@ -1112,6 +1190,9 @@ window_setscrreg(VALUE obj, VALUE top, VALUE bottom)
   res = wsetscrreg(winp->window, NUM2INT(top), NUM2INT(bottom));
   /* may have to raise exception on ERR */
   return (res == OK) ? Qtrue : Qfalse;
+#else
+  return Qfalse;
+#endif
 }
 
 static VALUE
@@ -1127,25 +1208,34 @@ window_scroll(VALUE obj)
 static VALUE
 window_scrl(VALUE obj, VALUE n)
 {
+#ifdef HAVE_WSCRL
   struct windata *winp;
 
   GetWINDOW(obj, winp);
   /* may have to raise exception on ERR */
   return (wscrl(winp->window,NUM2INT(n)) == OK) ? Qtrue : Qfalse;
+#else
+  return Qfalse;
+#endif
 }
 
 static VALUE
 window_attroff(VALUE obj, VALUE attrs)
 {
+#ifdef HAVE_WATTROFF
   struct windata *winp;
 
   GetWINDOW(obj,winp);
   return INT2FIX(wattroff(winp->window,NUM2INT(attrs)));
+#else
+  return Qtrue;
+#endif
 }
 
 static VALUE
 window_attron(VALUE obj, VALUE attrs)
 {
+#ifdef HAVE_WATTRON
   struct windata *winp;
   VALUE val;
 
@@ -1159,63 +1249,81 @@ window_attron(VALUE obj, VALUE attrs)
   else{
     return val;
   }
+#else
+  return Qtrue;
+#endif
 }
 
 static VALUE
 window_attrset(VALUE obj, VALUE attrs)
 {
+#ifdef HAVE_WATTRSET
   struct windata *winp;
 
   GetWINDOW(obj,winp);
   return INT2FIX(wattrset(winp->window,NUM2INT(attrs)));
+#else
+  return Qtrue;
+#endif
 }
 
 static VALUE
 window_bkgdset(VALUE obj, VALUE ch)
 {
+#ifdef HAVE_WBKGDSET
   struct windata *winp;
 
   GetWINDOW(obj,winp);
   wbkgdset(winp->window, NUM2CHR(ch));
+#endif
   return Qnil;
 }
 
 static VALUE
 window_bkgd(VALUE obj, VALUE ch)
 {
+#ifdef HAVE_WBKGD
   struct windata *winp;
 
   GetWINDOW(obj,winp);
-  return CHR2FIX(wbkgd(winp->window, NUM2CHR(ch)));
+  return (wbkgd(winp->window, NUM2CHR(ch)) == OK) ? Qtrue : Qfalse;
+#else
+  return Qfalse;
+#endif
 }
 
 static VALUE
 window_getbkgd(VALUE obj)
 {
+#ifdef HAVE_WGETBKGD
+  char c;
   struct windata *winp;
 
   GetWINDOW(obj,winp);
-  return CHR2FIX(getbkgd(winp->window));
+  return (c = getbkgd(winp->window) != ERR) ? CHR2FIX(c) : Qnil;
+#else
+  return Qnil;
+#endif
 }
 
 static VALUE
-window_resize(VALUE obj, VALUE lines, VALUE columns)
+window_resize(VALUE obj, VALUE lin, VALUE col)
 {
 #if defined(HAVE_WRESIZE)
   struct windata *winp;
 
   GetWINDOW(obj,winp);
-  return wresize(winp->window, NUM2INT(lines), NUM2INT(columns)) == OK ? Qtrue : Qfalse;
+  return wresize(winp->window, NUM2INT(lin), NUM2INT(col)) == OK ? Qtrue : Qfalse;
 #else
   return Qnil;
 #endif
 }
 
 
-#ifdef HAVE_KEYPAD
 static VALUE
 window_keypad(VALUE obj, VALUE val)
 {
+#ifdef HAVE_KEYPAD
   struct windata *winp;
 
   GetWINDOW(obj,winp);
@@ -1228,8 +1336,43 @@ window_keypad(VALUE obj, VALUE val)
   return (keypad(winp->window,RTEST(val) ? TRUE : FALSE)) == OK ?
     Qtrue : Qfalse;
 #endif
-}
+#else
+    rb_notimplement();
 #endif /* HAVE_KEYPAD */
+}
+
+static VALUE
+window_nodelay(VALUE obj, VALUE val)
+{
+#ifdef HAVE_NODELAY
+  struct windata *winp;
+  GetWINDOW(obj,winp);
+
+  /* nodelay() of NetBSD's libcurses returns no value */
+#if defined(__NetBSD__) && !defined(NCURSES_VERSION)
+  nodelay(winp->window, RTEST(val) ? TRUE : FALSE);
+  return Qnil;
+#else
+  return nodelay(winp->window,RTEST(val) ? TRUE : FALSE) == OK ? Qtrue : Qfalse;
+#endif
+#else
+    rb_notimplement();
+#endif
+}
+
+static VALUE
+window_timeout(VALUE obj, VALUE delay)
+{
+#ifdef HAVE_WTIMEOUT
+  struct windata *winp;
+  GetWINDOW(obj,winp);
+
+  wtimeout(winp->window,NUM2INT(delay));
+  return Qnil;
+#else
+    rb_notimplement();
+#endif
+}
 
 /*------------------------- Initialization -------------------------*/
 void
@@ -1308,10 +1451,14 @@ Init_curses()
 #endif /* USE_COLOR */
 #ifdef USE_MOUSE
     rb_define_module_function(mCurses, "getmouse", curses_getmouse, 0);
-    rb_define_module_function(mCurses, "ungetmouse", curses_getmouse, 1);
+    rb_define_module_function(mCurses, "ungetmouse", curses_ungetmouse, 1);
     rb_define_module_function(mCurses, "mouseinterval", curses_mouseinterval, 1);
     rb_define_module_function(mCurses, "mousemask", curses_mousemask, 1);
 #endif /* USE_MOUSE */
+
+    rb_define_module_function(mCurses, "timeout=", curses_timeout, 1);
+    rb_define_module_function(mCurses, "def_prog_mode", curses_def_prog_mode, 0);
+    rb_define_module_function(mCurses, "reset_prog_mode", curses_reset_prog_mode, 0);
 
     cWindow = rb_define_class_under(mCurses, "Window", rb_cData);
     rb_define_alloc_func(cWindow, window_s_allocate);
@@ -1347,19 +1494,18 @@ Init_curses()
     rb_define_method(cWindow, "setscrreg", window_setscrreg, 2);
     rb_define_method(cWindow, "scrl", window_scrl, 1);
     rb_define_method(cWindow, "resize", window_resize, 2);
-#ifdef HAVE_KEYPAD
     rb_define_method(cWindow, "keypad", window_keypad, 1);
     rb_define_method(cWindow, "keypad=", window_keypad, 1);
-#endif
-#ifdef USE_COLOR
+
     rb_define_method(cWindow, "attroff", window_attroff, 1);
     rb_define_method(cWindow, "attron", window_attron, 1);
     rb_define_method(cWindow, "attrset", window_attrset, 1);
     rb_define_method(cWindow, "bkgdset", window_bkgdset, 1);
     rb_define_method(cWindow, "bkgd", window_bkgd, 1);
     rb_define_method(cWindow, "getbkgd", window_getbkgd, 0);
-#endif /* USE_COLOR */
 
+    rb_define_method(cWindow, "nodelay=", window_nodelay, 1);
+    rb_define_method(cWindow, "timeout=", window_timeout, 1);
 
 #define rb_curses_define_const(c) rb_define_const(mCurses,#c,UINT2NUM(c))
 

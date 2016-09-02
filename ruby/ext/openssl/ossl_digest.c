@@ -1,5 +1,5 @@
 /*
- * $Id: ossl_digest.c,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+ * $Id: ossl_digest.c,v 1.4.2.2 2004/12/15 01:54:39 matz Exp $
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2001-2002  Michal Rokos <m.rokos@sh.cvut.cz>
  * All rights reserved.
@@ -28,6 +28,8 @@ VALUE mDigest;
 VALUE cDigest;
 VALUE eDigestError;
 
+static VALUE ossl_digest_alloc(VALUE klass);
+
 /*
  * Public
  */
@@ -39,6 +41,20 @@ GetDigestPtr(VALUE obj)
     SafeGetDigest(obj, ctx);
 
     return EVP_MD_CTX_md(ctx); /*== ctx->digest*/
+}
+
+VALUE
+ossl_digest_new(const EVP_MD *md)
+{  
+    VALUE ret;
+    EVP_MD_CTX *ctx;
+
+    ret = ossl_digest_alloc(cDigest);
+    GetDigest(ret, ctx);
+    EVP_MD_CTX_init(ctx);
+    EVP_DigestInit_ex(ctx, md, NULL);
+   
+    return ret;
 }
 
 /*
@@ -53,11 +69,11 @@ ossl_digest_alloc(VALUE klass)
     ctx = EVP_MD_CTX_create();
     if (ctx == NULL)
 	ossl_raise(rb_eRuntimeError, "EVP_MD_CTX_create() failed");
+    EVP_MD_CTX_init(ctx);
     obj = Data_Wrap_Struct(klass, 0, EVP_MD_CTX_destroy, ctx);
 	
     return obj;
 }
-DEFINE_ALLOC_WRAPPER(ossl_digest_alloc)
 
 VALUE ossl_digest_update(VALUE, VALUE);
 
@@ -69,17 +85,17 @@ ossl_digest_initialize(int argc, VALUE *argv, VALUE self)
     char *name;
     VALUE type, data;
 
-    GetDigest(self, ctx);
-
     rb_scan_args(argc, argv, "11", &type, &data);
-    name = StringValuePtr(type);
+    StringValue(type);
     if (!NIL_P(data)) StringValue(data);
+    name = StringValuePtr(type);
     
     md = EVP_get_digestbyname(name);
     if (!md) {
 	ossl_raise(rb_eRuntimeError, "Unsupported digest algorithm (%s).", name);
     }
-    EVP_DigestInit(ctx, md);
+    GetDigest(self, ctx);
+    EVP_DigestInit_ex(ctx, md, NULL);
     
     if (!NIL_P(data)) return ossl_digest_update(self, data);
     return self;
@@ -108,7 +124,7 @@ ossl_digest_reset(VALUE self)
     EVP_MD_CTX *ctx;
 
     GetDigest(self, ctx);
-    EVP_DigestInit(ctx, EVP_MD_CTX_md(ctx));
+    EVP_DigestInit_ex(ctx, EVP_MD_CTX_md(ctx), NULL);
 
     return self;
 }
@@ -118,8 +134,8 @@ ossl_digest_update(VALUE self, VALUE data)
 {
     EVP_MD_CTX *ctx;
 
-    GetDigest(self, ctx);
     StringValue(data);
+    GetDigest(self, ctx);
     EVP_DigestUpdate(ctx, RSTRING(data)->ptr, RSTRING(data)->len);
 
     return self;
@@ -134,9 +150,10 @@ digest_final(EVP_MD_CTX *ctx, char **buf, int *buf_len)
 	ossl_raise(eDigestError, NULL);
     }
     if (!(*buf = OPENSSL_malloc(EVP_MD_CTX_size(&final)))) {
+	EVP_MD_CTX_cleanup(&final);
 	ossl_raise(eDigestError, "Cannot allocate mem for digest");
     }
-    EVP_DigestFinal(&final, *buf, buf_len);
+    EVP_DigestFinal_ex(&final, *buf, buf_len);
     EVP_MD_CTX_cleanup(&final);
 }
 
@@ -150,8 +167,7 @@ ossl_digest_digest(VALUE self)
 	
     GetDigest(self, ctx);
     digest_final(ctx, &buf, &buf_len);
-    digest = rb_str_new(buf, buf_len);
-    OPENSSL_free(buf);
+    digest = ossl_buf2str(buf, buf_len);
 	
     return digest;
 }
@@ -170,9 +186,8 @@ ossl_digest_hexdigest(VALUE self)
 	OPENSSL_free(buf);
 	ossl_raise(eDigestError, "Memory alloc error");
     }
-    hexdigest = rb_str_new(hexbuf, 2 * buf_len);
     OPENSSL_free(buf);
-    OPENSSL_free(hexbuf);
+    hexdigest = ossl_buf2str(hexbuf, 2 * buf_len);
 
     return hexdigest;
 }
@@ -180,12 +195,7 @@ ossl_digest_hexdigest(VALUE self)
 static VALUE
 ossl_digest_s_digest(VALUE klass, VALUE str, VALUE data)
 {
-    VALUE obj =
-#if HAVE_RB_DEFINE_ALLOC_FUNC
-	rb_class_new_instance(1, &str, klass);
-#else
-	ossl_digest_alloc_wrapper(1, &str, klass);
-#endif
+    VALUE obj = rb_class_new_instance(1, &str, klass);
 
     ossl_digest_update(obj, data);
 
@@ -195,12 +205,7 @@ ossl_digest_s_digest(VALUE klass, VALUE str, VALUE data)
 static VALUE
 ossl_digest_s_hexdigest(VALUE klass, VALUE str, VALUE data)
 {
-    VALUE obj =
-#if HAVE_RB_DEFINE_ALLOC_FUNC
-	rb_class_new_instance(1, &str, klass);
-#else
-	ossl_digest_alloc_wrapper(1, &str, klass);
-#endif
+    VALUE obj = rb_class_new_instance(1, &str, klass);
 
     ossl_digest_update(obj, data);
 
@@ -213,13 +218,13 @@ ossl_digest_equal(VALUE self, VALUE other)
     EVP_MD_CTX *ctx;
     VALUE str1, str2;
 
-    GetDigest(self, ctx);
     if (rb_obj_is_kind_of(other, cDigest) == Qtrue) {
 	str2 = ossl_digest_digest(other);
     } else {
 	StringValue(other);
 	str2 = other;
     }
+    GetDigest(self, ctx);
     if (RSTRING(str2)->len == EVP_MD_CTX_size(ctx)) {
 	str1 = ossl_digest_digest(self);
     } else {

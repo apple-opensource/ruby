@@ -12,6 +12,7 @@
 
 #include "ruby.h"
 #include "rubysig.h"
+#include "dln.h"
 #include <fcntl.h>
 #include <process.h>
 #include <sys/stat.h>
@@ -88,8 +89,7 @@
 
 bool NtSyncProcess = TRUE;
 
-static struct ChildRecord *CreateChild(char *, char *, SECURITY_ATTRIBUTES *, HANDLE, HANDLE, HANDLE);
-static int make_cmdvector(const char *, char ***);
+static struct ChildRecord *CreateChild(const char *, const char *, SECURITY_ATTRIBUTES *, HANDLE, HANDLE, HANDLE);
 static bool has_redirection(const char *);
 static void StartSockets ();
 static DWORD wait_events(HANDLE event, DWORD timeout);
@@ -180,24 +180,28 @@ static struct {
     {	ERROR_FILENAME_EXCED_RANGE,	ENOENT		},
     {	ERROR_NESTING_NOT_ALLOWED,	EAGAIN		},
     {	ERROR_NOT_ENOUGH_QUOTA,		ENOMEM		},
-    {	0,				0		}
+    {	WSAENAMETOOLONG,		ENAMETOOLONG	},
+    {	WSAENOTEMPTY,			ENOTEMPTY	}
 };
 
-static int map_errno(void)
+static int
+map_errno(DWORD winerr)
 {
-    DWORD winerr = GetLastError();
     int i;
 
     if (winerr == 0) {
 	return 0;
     }
 
-    for (i = 0; errmap[i].winerr; i++) {
+    for (i = 0; i < sizeof(errmap) / sizeof(*errmap); i++) {
 	if (errmap[i].winerr == winerr) {
 	    return errmap[i].err;
 	}
     }
 
+    if (winerr >= WSABASEERR) {
+	return winerr;
+    }
     return EINVAL;
 }
 
@@ -364,11 +368,6 @@ NtInitialize(int *argc, char ***argv)
 #endif
 
     //
-    // subvert cmd.exe's feeble attempt at command line parsing
-    //
-    *argc = make_cmdvector(GetCommandLine(), argv);
-
-    //
     // Now set up the correct time stuff
     //
 
@@ -376,11 +375,6 @@ NtInitialize(int *argc, char ***argv)
 
     // Initialize Winsock
     StartSockets();
-
-#ifdef _WIN32_WCE
-    // free commandline buffer
-    wce_FreeCommandLine();
-#endif
 }
 
 char *getlogin()
@@ -477,35 +471,62 @@ int SafeFree(char **vec, int vecc)
 }
 
 
+/*
+  ruby -lne 'BEGIN{$cmds = Hash.new(0); $mask = 1}'
+   -e '$cmds[$_.downcase] |= $mask' -e '$mask <<= 1 if ARGF.eof'
+   -e 'END{$cmds.sort.each{|n,f|puts "    \"\\#{f.to_s(8)}\" #{n.dump} + 1,"}}'
+   98cmd ntcmd
+ */
 static char *szInternalCmds[] = {
-  "append",
-  "break",
-  "call",
-  "cd",
-  "chdir",
-  "cls",
-  "copy",
-  "date",
-  "del",
-  "dir",
-  "echo",
-  "erase",
-  "label",
-  "md",
-  "mkdir",
-  "path",
-  "pause",
-  "rd",
-  "rem",
-  "ren",
-  "rename",
-  "rmdir",
-  "set",
-  "start",
-  "time",
-  "type",
-  "ver",
-  "vol",
+    "\2" "assoc" + 1,
+    "\3" "break" + 1,
+    "\3" "call" + 1,
+    "\3" "cd" + 1,
+    "\1" "chcp" + 1,
+    "\3" "chdir" + 1,
+    "\3" "cls" + 1,
+    "\2" "color" + 1,
+    "\3" "copy" + 1,
+    "\1" "ctty" + 1,
+    "\3" "date" + 1,
+    "\3" "del" + 1,
+    "\3" "dir" + 1,
+    "\3" "echo" + 1,
+    "\2" "endlocal" + 1,
+    "\3" "erase" + 1,
+    "\3" "exit" + 1,
+    "\3" "for" + 1,
+    "\2" "ftype" + 1,
+    "\3" "goto" + 1,
+    "\3" "if" + 1,
+    "\1" "lfnfor" + 1,
+    "\1" "lh" + 1,
+    "\1" "lock" + 1,
+    "\3" "md" + 1,
+    "\3" "mkdir" + 1,
+    "\2" "move" + 1,
+    "\3" "path" + 1,
+    "\3" "pause" + 1,
+    "\2" "popd" + 1,
+    "\3" "prompt" + 1,
+    "\2" "pushd" + 1,
+    "\3" "rd" + 1,
+    "\3" "rem" + 1,
+    "\3" "ren" + 1,
+    "\3" "rename" + 1,
+    "\3" "rmdir" + 1,
+    "\3" "set" + 1,
+    "\2" "setlocal" + 1,
+    "\3" "shift" + 1,
+    "\2" "start" + 1,
+    "\3" "time" + 1,
+    "\2" "title" + 1,
+    "\1" "truename" + 1,
+    "\3" "type" + 1,
+    "\1" "unlock" + 1,
+    "\3" "ver" + 1,
+    "\3" "verify" + 1,
+    "\3" "vol" + 1,
 };
 
 static int
@@ -515,11 +536,16 @@ internal_match(const void *key, const void *elem)
 }
 
 static int
-isInternalCmd(const char *cmd)
+isInternalCmd(const char *cmd, const char *interp)
 {
-    int i;
-    char cmdname[8], *b = cmdname, c;
+    int i, nt = 1;
+    char cmdname[9], *b = cmdname, c, **nm;
 
+    i = strlen(interp) - 11;
+    if ((i == 0 || i > 0 && isdirsep(interp[i-1])) &&
+	strcasecmp(interp+i, "command.com") == 0) {
+	nt = 0;
+    }
     do {
 	if (!(c = *cmd++)) return 0;
     } while (isspace(c));
@@ -538,10 +564,11 @@ isInternalCmd(const char *cmd)
 	return 0;
     }
     *b = 0;
-    if (!bsearch(cmdname, szInternalCmds,
+    nm = bsearch(cmdname, szInternalCmds,
 		 sizeof(szInternalCmds) / sizeof(*szInternalCmds),
 		 sizeof(*szInternalCmds),
-		 internal_match))
+		 internal_match);
+    if (!nm || !(nm[0][-1] & (nt ? 2 : 1)))
 	return 0;
     return 1;
 }
@@ -594,12 +621,12 @@ pipe_exec(char *cmd, int mode, FILE **fpr, FILE **fpw)
 	if (reading) {
 	    fRet = CreatePipe(&hReadIn, &hReadOut, &sa, 2048L);
 	    if (!fRet) {
-		errno = map_errno();
+		errno = map_errno(GetLastError());
 		break;
 	    }
 	    if (!DuplicateHandle(hCurProc, hReadIn, hCurProc, &hDupInFile, 0,
 				 FALSE, DUPLICATE_SAME_ACCESS)) {
-		errno = map_errno();
+		errno = map_errno(GetLastError());
 		CloseHandle(hReadIn);
 		CloseHandle(hReadOut);
 		CloseHandle(hCurProc);
@@ -610,7 +637,7 @@ pipe_exec(char *cmd, int mode, FILE **fpr, FILE **fpw)
 	if (writing) {
 	    fRet = CreatePipe(&hWriteIn, &hWriteOut, &sa, 2048L);
 	    if (!fRet) {
-		errno = map_errno();
+		errno = map_errno(GetLastError());
 	      write_pipe_failed:
 		if (reading) {
 		    CloseHandle(hDupInFile);
@@ -620,7 +647,7 @@ pipe_exec(char *cmd, int mode, FILE **fpr, FILE **fpw)
 	    }
 	    if (!DuplicateHandle(hCurProc, hWriteOut, hCurProc, &hDupOutFile, 0,
 				 FALSE, DUPLICATE_SAME_ACCESS)) {
-		errno = map_errno();
+		errno = map_errno(GetLastError());
 		CloseHandle(hWriteIn);
 		CloseHandle(hWriteOut);
 		CloseHandle(hCurProc);
@@ -698,6 +725,7 @@ int mode;
 char *cmd;
 {
     struct ChildRecord *child;
+    DWORD exitcode;
 
     switch (mode) {
       case P_WAIT:
@@ -721,7 +749,10 @@ char *cmd;
       case P_NOWAIT:
 	return child->pid;
       case P_OVERLAY:
-	exit(0);
+	WaitForSingleObject(child->hProcess, INFINITE);
+	GetExitCodeProcess(child->hProcess, &exitcode);
+	CloseChildHandle(child);
+	_exit(exitcode);
       default:
 	return -1;	/* not reached */
     }
@@ -736,6 +767,7 @@ char **argv;
     char *cmd, *p, *q, *s, **t;
     int len, n, bs, quote;
     struct ChildRecord *child;
+    DWORD exitcode;
 
     switch (mode) {
       case P_WAIT:
@@ -811,22 +843,27 @@ char **argv;
       case P_NOWAIT:
 	return child->pid;
       case P_OVERLAY:
-	exit(0);
+	WaitForSingleObject(child->hProcess, INFINITE);
+	GetExitCodeProcess(child->hProcess, &exitcode);
+	CloseChildHandle(child);
+	_exit(exitcode);
       default:
 	return -1;	/* not reached */
     }
 }
 
 static struct ChildRecord *
-CreateChild(char *cmd, char *prog, SECURITY_ATTRIBUTES *psa, HANDLE hInput, HANDLE hOutput, HANDLE hError)
+CreateChild(const char *cmd, const char *prog, SECURITY_ATTRIBUTES *psa,
+	    HANDLE hInput, HANDLE hOutput, HANDLE hError)
 {
     BOOL fRet;
     DWORD  dwCreationFlags;
     STARTUPINFO aStartupInfo;
     PROCESS_INFORMATION aProcessInformation;
     SECURITY_ATTRIBUTES sa;
-    char *shell;
+    const char *shell;
     struct ChildRecord *child;
+    char *p = NULL;
 
     if (!cmd && !prog) {
 	errno = EFAULT;
@@ -874,33 +911,80 @@ CreateChild(char *cmd, char *prog, SECURITY_ATTRIBUTES *psa, HANDLE hInput, HAND
     dwCreationFlags = (NORMAL_PRIORITY_CLASS);
 
     if (prog) {
-	shell = prog;
+	if (!(p = dln_find_exe(prog, NULL))) {
+	    shell = prog;
+	}
     }
     else {
 	int redir = -1;
+	int len = 0;
+	while (ISSPACE(*cmd)) cmd++;
+	for (prog = cmd; *prog; prog = CharNext(prog)) {
+	    if (ISSPACE(*prog)) {
+		len = prog - cmd;
+		do ++prog; while (ISSPACE(*prog));
+		if (!*prog--) break;
+	    }
+	    else {
+		len = 0;
+	    }
+	}
+	if (!len) len = strlen(cmd);
 	if ((shell = getenv("RUBYSHELL")) && (redir = has_redirection(cmd))) {
-	    char *tmp = ALLOCA_N(char, strlen(shell) + strlen(cmd) +
-				 sizeof (" -c "));
-	    sprintf(tmp, "%s -c %s", shell, cmd);
+	    char *tmp = ALLOCA_N(char, strlen(shell) + len + sizeof(" -c ") + 2);
+	    sprintf(tmp, "%s -c \"%.*s\"", shell, len, cmd);
 	    cmd = tmp;
 	}
 	else if ((shell = getenv("COMSPEC")) &&
-		 ((redir < 0 ? has_redirection(cmd) : redir) || isInternalCmd(cmd))) {
-	    char *tmp = ALLOCA_N(char, strlen(shell) + strlen(cmd) +
-				 sizeof (" /c "));
-	    sprintf(tmp, "%s /c %s", shell, cmd);
+		 ((redir < 0 ? has_redirection(cmd) : redir) ||
+		  isInternalCmd(cmd, shell))) {
+	    char *tmp = ALLOCA_N(char, strlen(shell) + len + sizeof(" /c "));
+	    sprintf(tmp, "%s /c %.*s", shell, len, cmd);
 	    cmd = tmp;
 	}
 	else {
 	    shell = NULL;
+	    prog = cmd;
+	    for (;;) {
+		if (!*prog) {
+		    p = dln_find_exe(cmd, NULL);
+		    break;
+		}
+		if (strchr(".:*?\"/\\", *prog)) {
+		    if (cmd[len]) {
+			char *tmp = ALLOCA_N(char, len + 1);
+			memcpy(tmp, cmd, len);
+			tmp[len] = 0;
+			cmd = tmp;
+		    }
+		    break;
+		}
+		if (ISSPACE(*prog) || strchr("<>|", *prog)) {
+		    len = prog - cmd;
+		    p = ALLOCA_N(char, len + 1);
+		    memcpy(p, cmd, len);
+		    p[len] = 0;
+		    p = dln_find_exe(p, NULL);
+		    break;
+		}
+		prog++;
+	    }
+	}
+    }
+    if (p) {
+	shell = p;
+	while (*p) {
+	    if ((unsigned char)*p == '/')
+		*p = '\\';
+	    p = CharNext(p);
 	}
     }
 
     RUBY_CRITICAL({
-	fRet = CreateProcess(shell, cmd, psa, psa,
+	fRet = CreateProcess(shell, (char *)cmd, psa, psa,
 			     psa->bInheritHandle, dwCreationFlags, NULL, NULL,
 			     &aStartupInfo, &aProcessInformation);
-	errno = map_errno();
+	errno = map_errno(GetLastError());
     });
 
     if (!fRet) {
@@ -1038,8 +1122,8 @@ skipspace(char *ptr)
     return ptr;
 }
 
-static int 
-make_cmdvector(const char *cmd, char ***vec)
+int 
+rb_w32_cmdvector(const char *cmd, char ***vec)
 {
     int cmdlen, globbing, len, i;
     int elements, strsz, done;
@@ -1112,7 +1196,6 @@ make_cmdvector(const char *cmd, char ***vec)
 
 		if (quote != '\'')
 		    globbing++;
-		ptr++;
 		slashes = 0;
 		break;
 
@@ -1150,8 +1233,7 @@ make_cmdvector(const char *cmd, char ***vec)
 	//
 
 	len = ptr - base;
-	if (quote) escape = 0;
-	else if (done) --len;
+	if (done) --len;
 
 	//
 	// if it's an input vector element and it's enclosed by quotes, 
@@ -1288,8 +1370,8 @@ rb_w32_opendir(const char *filename)
     char               scannamespc[PATHLEN];
     char	      *scanname = scannamespc;
     struct stat	       sbuf;
-    struct _finddata_t fd;
-    long               fh;
+    WIN32_FIND_DATA fd;
+    HANDLE          fh;
 
     //
     // check to see if we've got a directory
@@ -1327,8 +1409,9 @@ rb_w32_opendir(const char *filename)
     // do the FindFirstFile call
     //
 
-    fh = _findfirst(scanname, &fd);
-    if (fh == -1) {
+    fh = FindFirstFile(scanname, &fd);
+    if (fh == INVALID_HANDLE_VALUE) {
+	errno = map_errno(GetLastError());
 	return NULL;
     }
 
@@ -1337,19 +1420,19 @@ rb_w32_opendir(const char *filename)
     // filenames that we find.
     //
 
-    idx = strlen(fd.name)+1;
+    idx = strlen(fd.cFileName)+1;
     p->start = ALLOC_N(char, idx);
-    strcpy(p->start, fd.name);
+    strcpy(p->start, fd.cFileName);
     p->nfiles++;
-    
+
     //
     // loop finding all the files that match the wildcard
     // (which should be all of them in this directory!).
     // the variable idx should point one past the null terminator
     // of the previous string found.
     //
-    while (_findnext(fh, &fd) == 0) {
-	len = strlen(fd.name);
+    while (FindNextFile(fh, &fd)) {
+	len = strlen(fd.cFileName);
 
 	//
 	// bump the string table size by enough for the
@@ -1362,11 +1445,11 @@ rb_w32_opendir(const char *filename)
 	if (p->start == NULL) {
             rb_fatal ("opendir: malloc failed!\n");
 	}
-	strcpy(&p->start[idx], fd.name);
+	strcpy(&p->start[idx], fd.cFileName);
 	p->nfiles++;
 	idx += len+1;
     }
-    _findclose(fh);
+    FindClose(fh);
     p->size = idx;
     p->curr = p->start;
     return p;
@@ -1728,7 +1811,12 @@ rb_w32_fdclr(int fd, fd_set *set)
 int
 rb_w32_fdisset(int fd, fd_set *set)
 {
-       return __WSAFDIsSet(TO_SOCKET(fd), set);
+    int ret;
+    SOCKET s = TO_SOCKET(fd);
+    if (s == (SOCKET)INVALID_HANDLE_VALUE)
+        return 0;
+    RUBY_CRITICAL(ret = __WSAFDIsSet(s, set));
+    return ret;
 }
 
 //
@@ -1820,7 +1908,7 @@ rb_w32_select (int nfds, fd_set *rd, fd_set *wr, fd_set *ex,
     RUBY_CRITICAL({
 	r = select(nfds, rd, wr, ex, timeout);
 	if (r == SOCKET_ERROR) {
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
 	}
     });
     return r;
@@ -1886,7 +1974,7 @@ rb_w32_accept(int s, struct sockaddr *addr, int *addrlen)
     RUBY_CRITICAL({
 	r = accept(TO_SOCKET(s), addr, addrlen);
 	if (r == INVALID_SOCKET) {
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
 	    s = -1;
 	}
 	else {
@@ -1909,7 +1997,7 @@ rb_w32_bind(int s, struct sockaddr *addr, int addrlen)
     RUBY_CRITICAL({
 	r = bind(TO_SOCKET(s), addr, addrlen);
 	if (r == SOCKET_ERROR)
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
     });
     return r;
 }
@@ -1926,7 +2014,7 @@ rb_w32_connect(int s, struct sockaddr *addr, int addrlen)
     RUBY_CRITICAL({
 	r = connect(TO_SOCKET(s), addr, addrlen);
 	if (r == SOCKET_ERROR)
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
     });
     return r;
 }
@@ -1944,7 +2032,7 @@ rb_w32_getpeername(int s, struct sockaddr *addr, int *addrlen)
     RUBY_CRITICAL({
 	r = getpeername(TO_SOCKET(s), addr, addrlen);
 	if (r == SOCKET_ERROR)
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
     });
     return r;
 }
@@ -1961,7 +2049,7 @@ rb_w32_getsockname(int s, struct sockaddr *addr, int *addrlen)
     RUBY_CRITICAL({
 	r = getsockname(TO_SOCKET(s), addr, addrlen);
 	if (r == SOCKET_ERROR)
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
     });
     return r;
 }
@@ -1976,7 +2064,7 @@ rb_w32_getsockopt(int s, int level, int optname, char *optval, int *optlen)
     RUBY_CRITICAL({
 	r = getsockopt(TO_SOCKET(s), level, optname, optval, optlen);
 	if (r == SOCKET_ERROR)
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
     });
     return r;
 }
@@ -1993,7 +2081,7 @@ rb_w32_ioctlsocket(int s, long cmd, u_long *argp)
     RUBY_CRITICAL({
 	r = ioctlsocket(TO_SOCKET(s), cmd, argp);
 	if (r == SOCKET_ERROR)
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
     });
     return r;
 }
@@ -2010,7 +2098,7 @@ rb_w32_listen(int s, int backlog)
     RUBY_CRITICAL({
 	r = listen(TO_SOCKET(s), backlog);
 	if (r == SOCKET_ERROR)
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
     });
     return r;
 }
@@ -2027,7 +2115,7 @@ rb_w32_recv(int s, char *buf, int len, int flags)
     RUBY_CRITICAL({
 	r = recv(TO_SOCKET(s), buf, len, flags);
 	if (r == SOCKET_ERROR)
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
     });
     return r;
 }
@@ -2045,7 +2133,7 @@ rb_w32_recvfrom(int s, char *buf, int len, int flags,
     RUBY_CRITICAL({
 	r = recvfrom(TO_SOCKET(s), buf, len, flags, from, fromlen);
 	if (r == SOCKET_ERROR)
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
     });
     return r;
 }
@@ -2062,7 +2150,7 @@ rb_w32_send(int s, char *buf, int len, int flags)
     RUBY_CRITICAL({
 	r = send(TO_SOCKET(s), buf, len, flags);
 	if (r == SOCKET_ERROR)
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
     });
     return r;
 }
@@ -2080,7 +2168,7 @@ rb_w32_sendto(int s, char *buf, int len, int flags,
     RUBY_CRITICAL({
 	r = sendto(TO_SOCKET(s), buf, len, flags, to, tolen);
 	if (r == SOCKET_ERROR)
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
     });
     return r;
 }
@@ -2097,7 +2185,7 @@ rb_w32_setsockopt(int s, int level, int optname, char *optval, int optlen)
     RUBY_CRITICAL({
 	r = setsockopt(TO_SOCKET(s), level, optname, optval, optlen);
 	if (r == SOCKET_ERROR)
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
     });
     return r;
 }
@@ -2114,7 +2202,7 @@ rb_w32_shutdown(int s, int how)
     RUBY_CRITICAL({
 	r = shutdown(TO_SOCKET(s), how);
 	if (r == SOCKET_ERROR)
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
     });
     return r;
 }
@@ -2133,7 +2221,7 @@ rb_w32_socket(int af, int type, int protocol)
     RUBY_CRITICAL({
 	s = socket(af, type, protocol);
 	if (s == INVALID_SOCKET) {
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
 	    fd = -1;
 	}
 	else {
@@ -2155,7 +2243,7 @@ rb_w32_gethostbyaddr (char *addr, int len, int type)
     RUBY_CRITICAL({
 	r = gethostbyaddr(addr, len, type);
 	if (r == NULL)
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
     });
     return r;
 }
@@ -2172,7 +2260,7 @@ rb_w32_gethostbyname (char *name)
     RUBY_CRITICAL({
 	r = gethostbyname(name);
 	if (r == NULL)
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
     });
     return r;
 }
@@ -2189,7 +2277,7 @@ rb_w32_gethostname (char *name, int len)
     RUBY_CRITICAL({
 	r = gethostname(name, len);
 	if (r == SOCKET_ERROR)
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
     });
     return r;
 }
@@ -2206,7 +2294,7 @@ rb_w32_getprotobyname (char *name)
     RUBY_CRITICAL({
 	r = getprotobyname(name);
 	if (r == NULL)
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
     });
     return r;
 }
@@ -2223,7 +2311,7 @@ rb_w32_getprotobynumber (int num)
     RUBY_CRITICAL({
 	r = getprotobynumber(num);
 	if (r == NULL)
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
     });
     return r;
 }
@@ -2240,7 +2328,7 @@ rb_w32_getservbyname (char *name, char *proto)
     RUBY_CRITICAL({
 	r = getservbyname(name, proto);
 	if (r == NULL)
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
     });
     return r;
 }
@@ -2257,7 +2345,7 @@ rb_w32_getservbyport (int port, char *proto)
     RUBY_CRITICAL({
 	r = getservbyport(port, proto);
 	if (r == NULL)
-	    errno = WSAGetLastError() - WSABASEERR;
+	    errno = map_errno(WSAGetLastError());
     });
     return r;
 }
@@ -2305,7 +2393,7 @@ poll_child_status(struct ChildRecord *child, int *stat_loc)
 	if (err == ERROR_INVALID_PARAMETER)
 	    errno = ECHILD;
 	else
-	    errno = map_errno();
+	    errno = map_errno(GetLastError());
 	CloseChildHandle(child);
 	return -1;
     }
@@ -2354,7 +2442,7 @@ waitpid (pid_t pid, int *stat_loc, int options)
 	    return -1;
 	}
 	if (ret > count) {
-	    errno = map_errno();
+	    errno = map_errno(GetLastError());
 	    return -1;
 	}
 
@@ -2482,7 +2570,7 @@ kill(int pid, int sig)
 		if ((err = GetLastError()) == 0)
 		    errno = EPERM;
 		else
-		    errno = map_errno();
+		    errno = map_errno(GetLastError());
 		ret = -1;
 	    }
 	});
@@ -2532,12 +2620,12 @@ link(char *from, char *to)
 	if (hKernel) {
 	    pCreateHardLink = (BOOL (WINAPI *)(LPCTSTR, LPCTSTR, LPSECURITY_ATTRIBUTES))GetProcAddress(hKernel, "CreateHardLinkA");
 	    if (!pCreateHardLink) {
-		myerrno = map_errno();
+		myerrno = map_errno(GetLastError());
 	    }
 	    CloseHandle(hKernel);
 	}
 	else {
-	    myerrno = map_errno();
+	    myerrno = map_errno(GetLastError());
 	}
     }
     if (!pCreateHardLink) {
@@ -2546,7 +2634,7 @@ link(char *from, char *to)
     }
 
     if (!pCreateHardLink(to, from, NULL)) {
-	errno = map_errno();
+	errno = map_errno(GetLastError());
 	return -1;
     }
 
@@ -2597,7 +2685,7 @@ rb_w32_rename(const char *oldpath, const char *newpath)
     newatts = GetFileAttributes(newpath);
 
     if (oldatts == -1) {
-	errno = map_errno();
+	errno = map_errno(GetLastError());
 	return -1;
     }
 
@@ -2629,7 +2717,7 @@ rb_w32_rename(const char *oldpath, const char *newpath)
 	}
 
 	if (res)
-	    errno = map_errno();
+	    errno = map_errno(GetLastError());
 	else
 	    SetFileAttributes(newpath, oldatts);
     });
@@ -2642,7 +2730,7 @@ isUNCRoot(const char *path)
 {
     if (path[0] == '\\' && path[1] == '\\') {
 	const char *p;
-	for (p = path + 3; *p; p = CharNext(p)) {
+	for (p = path + 2; *p; p = CharNext(p)) {
 	    if (*p == '\\')
 		break;
 	}
@@ -2651,7 +2739,7 @@ isUNCRoot(const char *path)
 		if (*p == '\\')
 		    break;
 	    }
-	    if (!p[0] || !p[1])
+	    if (!p[0] || !p[1] || (p[1] == '.' && !p[2]))
 		return 1;
 	}
     }
@@ -2662,7 +2750,7 @@ int
 rb_w32_stat(const char *path, struct stat *st)
 {
     const char *p;
-    char *buf1, *buf2, *s;
+    char *buf1, *s, *end;
     int len;
     int ret;
 
@@ -2683,23 +2771,21 @@ rb_w32_stat(const char *path, struct stat *st)
 	errno = ENOENT;
 	return -1;
     }
-    p = CharPrev(buf1, buf1 + len);
+    end = CharPrev(buf1, buf1 + len);
 
     if (isUNCRoot(buf1)) {
-	if (*p != '\\')
+	if (*end == '.')
+	    *end = '\0';
+	else if (*end != '\\')
 	    strcat(buf1, "\\");
-    } else if (*p == '\\' || *p == ':')
+    } else if (*end == '\\' || (buf1 + 1 == end && *end == ':'))
 	strcat(buf1, ".");
-    buf2 = ALLOCA_N(char, MAXPATHLEN);
-    if (_fullpath(buf2, buf1, MAXPATHLEN)) {
-	ret = stat(buf2, st);
-	if (ret == 0) {
-	    st->st_mode &= ~(S_IWGRP | S_IWOTH);
-	}
-	return ret;
+
+    ret = stat(buf1, st);
+    if (ret == 0) {
+	st->st_mode &= ~(S_IWGRP | S_IWOTH);
     }
-    else
-	return -1;
+    return ret;
 }
 
 static long
@@ -2822,7 +2908,7 @@ static void rb_w32_call_handler(struct handler_arg_t* h)
 	rb_jump_tag(status);
     }
     h->finished = 1;
-    Sleep(INFINITE);		/* safe on Win95? */
+    yield_until(0);
 }
 
 static struct handler_arg_t* setup_handler(struct handler_arg_t *harg,
@@ -3103,11 +3189,13 @@ void rb_w32_free_environ(char **env)
     free(env);
 }
 
+#undef getpid
 pid_t rb_w32_getpid(void)
 {
     pid_t pid;
 
-    pid = _getpid();
+    pid = getpid();
+
     if (IsWin95()) pid = -pid;
 
     return pid;
@@ -3127,7 +3215,7 @@ rb_w32_fclose(FILE *fp)
     _set_osfhnd(fd, (SOCKET)INVALID_HANDLE_VALUE);
     fclose(fp);
     if (closesocket(sock) == SOCKET_ERROR) {
-	errno = WSAGetLastError() - WSABASEERR;
+	errno = map_errno(WSAGetLastError());
 	return -1;
     }
     return 0;
@@ -3142,8 +3230,9 @@ rb_w32_close(int fd)
 	UnlockFile((HANDLE)sock, 0, 0, LK_LEN, LK_LEN);
 	return _close(fd);
     }
+    _set_osfhnd(fd, (SOCKET)INVALID_HANDLE_VALUE);
     if (closesocket(sock) == SOCKET_ERROR) {
-	errno = WSAGetLastError() - WSABASEERR;
+	errno = map_errno(WSAGetLastError());
 	return -1;
     }
     return 0;
@@ -3165,7 +3254,7 @@ unixtime_to_filetime(time_t time, FILETIME *ft)
     st.wSecond = tm->tm_sec;
     st.wMilliseconds = 0;
     if (!SystemTimeToFileTime(&st, ft)) {
-	errno = map_errno();
+	errno = map_errno(GetLastError());
 	return -1;
     }
     return 0;
@@ -3200,12 +3289,12 @@ rb_w32_utime(const char *path, struct utimbuf *times)
 	hFile = CreateFile(path, GENERIC_WRITE, 0, 0, OPEN_EXISTING,
 			   IsWin95() ? 0 : FILE_FLAG_BACKUP_SEMANTICS, 0);
 	if (hFile == INVALID_HANDLE_VALUE) {
-	    errno = map_errno();
+	    errno = map_errno(GetLastError());
 	    ret = -1;
 	}
 	else {
 	    if (!SetFileTime(hFile, NULL, &atime, &mtime)) {
-		errno = map_errno();
+		errno = map_errno(GetLastError());
 		ret = -1;
 	    }
 	    CloseHandle(hFile);
@@ -3234,3 +3323,71 @@ rb_w32_snprintf(char *buf, size_t size, const char *format, ...)
     va_end(va);
     return ret;
 }
+
+#if !defined(__BORLANDC__) && !defined(_WIN32_WCE)
+int
+rb_w32_isatty(int fd)
+{
+    if (!(_osfile(fd) & FOPEN)) {
+	errno = EBADF;
+	return 0;
+    }
+    if (!(_osfile(fd) & FDEV)) {
+	errno = ENOTTY;
+	return 0;
+    }
+    return 1;
+}
+#endif
+
+//
+// Fix bcc32's stdio bug
+//
+
+#ifdef __BORLANDC__
+static int
+too_many_files()
+{
+    FILE *f;
+    for (f = _streams; f < _streams + _nfile; f++) {
+	if (f->fd < 0) return 0;
+    }
+    return 1;
+}
+
+#undef fopen
+FILE *
+rb_w32_fopen(const char *path, const char *mode)
+{
+    FILE *f = (errno = 0, fopen(path, mode));
+    if (f == NULL && errno == 0) {
+	if (too_many_files())
+	    errno = EMFILE;
+    }
+    return f;
+}
+
+FILE *
+rb_w32_fdopen(int handle, char *type)
+{
+    FILE *f = (errno = 0, _fdopen(handle, type));
+    if (f == NULL && errno == 0) {
+	if (handle < 0)
+	    errno = EBADF;
+	else if (too_many_files())
+	    errno = EMFILE;
+    }
+    return f;
+}
+
+FILE *
+rb_w32_fsopen(const char *path, const char *mode, int shflags)
+{
+    FILE *f = (errno = 0, _fsopen(path, mode, shflags));
+    if (f == NULL && errno == 0) {
+	if (too_many_files())
+	    errno = EMFILE;
+    }
+    return f;
+}
+#endif

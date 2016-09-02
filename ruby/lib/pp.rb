@@ -1,4 +1,4 @@
-# $Id: pp.rb,v 1.1.1.1 2003/10/15 10:11:48 melville Exp $
+# $Id$
 
 =begin
 = Pretty-printer for Ruby objects.
@@ -51,8 +51,8 @@ PP#pp to print the object.
     outputs ((|obj|)) to ((|out|)) in pretty printed format of
     ((|width|)) columns in width.
 
-    If ((|out|)) is ommitted, (({$>})) is assumed.
-    If ((|width|)) is ommitted, 79 is assumed.
+    If ((|out|)) is omitted, (({$>})) is assumed.
+    If ((|width|)) is omitted, 79 is assumed.
 
     PP.pp returns ((|out|)).
 
@@ -87,6 +87,32 @@ PP#pp to print the object.
 
       text ','
       breakable
+
+--- seplist(list[, separator_proc[, iter_method]]) {|elt| ... }
+    adds a separated list.
+    The list is separated by comma with breakable space, by default.
+
+    seplist iterates the ((|list|)) using ((|iter_method|)).
+    It yields each object to the block given for seplist.
+    The procedure ((|separator_proc|)) is called between each yields.
+
+    If the iteration is zero times, ((|separator_proc|)) is not called at all.
+
+    If ((|separator_proc|)) is nil or not given,
+    (({lambda { comma_breakable }})) is used.
+    If ((|iter_method|)) is not given, (({:each})) is used.
+
+    For example, following 3 code fragments has similar effect.
+
+      q.seplist([1,2,3]) {|v| xxx v }
+
+      q.seplist([1,2,3], lambda { comma_breakable }, :each) {|v| xxx v }
+
+      xxx 1
+      q.comma_breakable
+      xxx 2
+      q.comma_breakable
+      xxx 3
 
 = Object
 --- pretty_print(pp)
@@ -135,17 +161,17 @@ end
 
 class PP < PrettyPrint
   def PP.pp(obj, out=$>, width=79)
-    pp = PP.new(out, width)
-    pp.guard_inspect_key {pp.pp obj}
-    pp.flush
-    #$pp = pp
+    q = PP.new(out, width)
+    q.guard_inspect_key {q.pp obj}
+    q.flush
+    #$pp = q
     out << "\n"
   end
 
   def PP.singleline_pp(obj, out=$>)
-    pp = SingleLine.new(out)
-    pp.guard_inspect_key {pp.pp obj}
-    pp.flush
+    q = SingleLine.new(out)
+    q.guard_inspect_key {q.pp obj}
+    q.flush
     out
   end
 
@@ -193,7 +219,9 @@ class PP < PrettyPrint
     end
 
     def object_address_group(obj, &block)
-      group(1, sprintf('#<%s:0x%x', obj.class.to_s, obj.__id__ * 2), '>', &block)
+      id = "%x" % (obj.__id__ * 2)
+      id.sub!(/\Af(?=[[:xdigit:]]{2}+\z)/, '') if id.sub!(/\A\.\./, '')
+      group(1, "\#<#{obj.class}:0x#{id}", '>', &block)
     end
 
     def comma_breakable
@@ -201,12 +229,24 @@ class PP < PrettyPrint
       breakable
     end
 
+    def seplist(list, sep=nil, iter_method=:each)
+      sep ||= lambda { comma_breakable }
+      first = true
+      list.__send__(iter_method) {|*v|
+        if first
+          first = false
+        else
+          sep.call
+        end
+        yield(*v)
+      }
+    end
+
     def pp_object(obj)
       object_address_group(obj) {
-        obj.pretty_print_instance_variables.each {|v|
-          v = v.to_s if Symbol === v
-          text ',' unless first?
+        seplist(obj.pretty_print_instance_variables, lambda { text ',' }) {|v|
           breakable
+          v = v.to_s if Symbol === v
           text v
           text '='
           group(1) {
@@ -219,8 +259,7 @@ class PP < PrettyPrint
 
     def pp_hash(obj)
       group(1, '{', '}') {
-        obj.each {|k, v|
-          comma_breakable unless first?
+        seplist(obj, nil, :each_pair) {|k, v|
           group {
             pp k
             text '=>'
@@ -246,20 +285,20 @@ class PP < PrettyPrint
     # 3. specific to_s if instance variable is empty
     # 4. generic pretty_print
 
-    def pretty_print(pp)
+    def pretty_print(q)
       if /\(Kernel\)#/ !~ method(:inspect).inspect
-        pp.text self.inspect
+        q.text self.inspect
       elsif /\(Kernel\)#/ !~ method(:to_s).inspect && instance_variables.empty?
-        pp.text self.to_s
+        q.text self.to_s
       else
-        pp.pp_object(self)
+        q.pp_object(self)
       end
     end
 
-    def pretty_print_cycle(pp)
-      pp.object_address_group(self) {
-        pp.breakable
-        pp.text '...'
+    def pretty_print_cycle(q)
+      q.object_address_group(self) {
+        q.breakable
+        q.text '...'
       }
     end
 
@@ -269,7 +308,7 @@ class PP < PrettyPrint
 
     def pretty_print_inspect
       if /\(PP::ObjectMixin\)#/ =~ method(:pretty_print).inspect
-        raise "pretty_print is not overriden."
+        raise "pretty_print is not overridden."
       end
       PP.singleline_pp(self, '')
     end
@@ -277,80 +316,78 @@ class PP < PrettyPrint
 end
 
 class Array
-  def pretty_print(pp)
-    pp.group(1, '[', ']') {
-      self.each {|v|
-        pp.comma_breakable unless pp.first?
-        pp.pp v
+  def pretty_print(q)
+    q.group(1, '[', ']') {
+      q.seplist(self) {|v|
+        q.pp v
       }
     }
   end
 
-  def pretty_print_cycle(pp)
-    pp.text(empty? ? '[]' : '[...]')
+  def pretty_print_cycle(q)
+    q.text(empty? ? '[]' : '[...]')
   end
 end
 
 class Hash
-  def pretty_print(pp)
-    pp.pp_hash self
+  def pretty_print(q)
+    q.pp_hash self
   end
 
-  def pretty_print_cycle(pp)
-    pp.text(empty? ? '{}' : '{...}')
+  def pretty_print_cycle(q)
+    q.text(empty? ? '{}' : '{...}')
   end
 end
 
 class << ENV
-  def pretty_print(pp)
-    pp.pp_hash self
+  def pretty_print(q)
+    q.pp_hash self
   end
 end
 
 class Struct
-  def pretty_print(pp)
-    pp.object_group(self) {
-      self.members.each {|member|
-        pp.text "," unless pp.first?
-        pp.breakable
-        pp.text member.to_s
-        pp.text '='
-        pp.group(1) {
-          pp.breakable ''
-          pp.pp self[member]
+  def pretty_print(q)
+    q.group(1, '#<struct ' + self.class.name, '>') {
+      q.seplist(self.members, lambda { q.text "," }) {|member|
+        q.breakable
+        q.text member.to_s
+        q.text '='
+        q.group(1) {
+          q.breakable ''
+          q.pp self[member]
         }
       }
     }
   end
 
-  def pretty_print_cycle(pp)
-    pp.text sprintf("#<%s:...>", self.class.name)
+  def pretty_print_cycle(q)
+    q.text sprintf("#<struct %s:...>", self.class.name)
   end
 end
 
 class Range
-  def pretty_print(pp)
-    pp.pp self.begin
-    pp.breakable ''
-    pp.text(self.exclude_end? ? '...' : '..')
-    pp.breakable ''
-    pp.pp self.end
+  def pretty_print(q)
+    q.pp self.begin
+    q.breakable ''
+    q.text(self.exclude_end? ? '...' : '..')
+    q.breakable ''
+    q.pp self.end
   end
 end
 
 class File
   class Stat
-    def pretty_print(pp)
+    def pretty_print(q)
       require 'etc.so'
-      pp.object_group(self) {
-        pp.breakable
-        pp.text sprintf("dev=0x%x", self.dev); pp.comma_breakable
-        pp.text "ino="; pp.pp self.ino; pp.comma_breakable
-        pp.group {
+      q.object_group(self) {
+        q.breakable
+        q.text sprintf("dev=0x%x", self.dev); q.comma_breakable
+        q.text "ino="; q.pp self.ino; q.comma_breakable
+        q.group {
           m = self.mode
-          pp.text sprintf("mode=0%o", m)
-          pp.breakable
-          pp.text sprintf("(%s %c%c%c%c%c%c%c%c%c)",
+          q.text sprintf("mode=0%o", m)
+          q.breakable
+          q.text sprintf("(%s %c%c%c%c%c%c%c%c%c)",
             self.ftype,
             (m & 0400 == 0 ? ?- : ?r),
             (m & 0200 == 0 ? ?- : ?w),
@@ -365,51 +402,51 @@ class File
             (m & 0001 == 0 ? (m & 01000 == 0 ? ?- : ?T) :
                              (m & 01000 == 0 ? ?x : ?t)))
         }
-        pp.comma_breakable
-        pp.text "nlink="; pp.pp self.nlink; pp.comma_breakable
-        pp.group {
-          pp.text "uid="; pp.pp self.uid
+        q.comma_breakable
+        q.text "nlink="; q.pp self.nlink; q.comma_breakable
+        q.group {
+          q.text "uid="; q.pp self.uid
           begin
             name = Etc.getpwuid(self.uid).name
-            pp.breakable; pp.text "(#{name})"
+            q.breakable; q.text "(#{name})"
           rescue ArgumentError
           end
         }
-        pp.comma_breakable
-        pp.group {
-          pp.text "gid="; pp.pp self.gid
+        q.comma_breakable
+        q.group {
+          q.text "gid="; q.pp self.gid
           begin
             name = Etc.getgrgid(self.gid).name
-            pp.breakable; pp.text "(#{name})"
+            q.breakable; q.text "(#{name})"
           rescue ArgumentError
           end
         }
-        pp.comma_breakable
-        pp.group {
-          pp.text sprintf("rdev=0x%x", self.rdev)
-          pp.breakable
-          pp.text sprintf('(%d, %d)', self.rdev_major, self.rdev_minor)
+        q.comma_breakable
+        q.group {
+          q.text sprintf("rdev=0x%x", self.rdev)
+          q.breakable
+          q.text sprintf('(%d, %d)', self.rdev_major, self.rdev_minor)
         }
-        pp.comma_breakable
-        pp.text "size="; pp.pp self.size; pp.comma_breakable
-        pp.text "blksize="; pp.pp self.blksize; pp.comma_breakable
-        pp.text "blocks="; pp.pp self.blocks; pp.comma_breakable
-        pp.group {
+        q.comma_breakable
+        q.text "size="; q.pp self.size; q.comma_breakable
+        q.text "blksize="; q.pp self.blksize; q.comma_breakable
+        q.text "blocks="; q.pp self.blocks; q.comma_breakable
+        q.group {
           t = self.atime
-          pp.text "atime="; pp.pp t
-          pp.breakable; pp.text "(#{t.tv_sec})"
+          q.text "atime="; q.pp t
+          q.breakable; q.text "(#{t.tv_sec})"
         }
-        pp.comma_breakable
-        pp.group {
+        q.comma_breakable
+        q.group {
           t = self.mtime
-          pp.text "mtime="; pp.pp t
-          pp.breakable; pp.text "(#{t.tv_sec})"
+          q.text "mtime="; q.pp t
+          q.breakable; q.text "(#{t.tv_sec})"
         }
-        pp.comma_breakable
-        pp.group {
+        q.comma_breakable
+        q.group {
           t = self.ctime
-          pp.text "ctime="; pp.pp t
-          pp.breakable; pp.text "(#{t.tv_sec})"
+          q.text "ctime="; q.pp t
+          q.breakable; q.text "(#{t.tv_sec})"
         }
       }
     end
@@ -417,12 +454,11 @@ class File
 end
 
 class MatchData
-  def pretty_print(pp)
-    pp.object_group(self) {
-      pp.breakable
-      1.upto(self.size) {|i|
-        pp.breakable unless pp.first?
-        pp.pp self[i-1]
+  def pretty_print(q)
+    q.object_group(self) {
+      q.breakable
+      q.seplist(1..self.size, lambda { q.breakable }) {|i|
+        q.pp self[i-1]
       }
     }
   end
@@ -434,8 +470,16 @@ end
 
 [Numeric, Symbol, FalseClass, TrueClass, NilClass, Module].each {|c|
   c.class_eval {
-    def pretty_print_cycle(pp)
-      pp.text inspect
+    def pretty_print_cycle(q)
+      q.text inspect
+    end
+  }
+}
+
+[Numeric, FalseClass, TrueClass, Module].each {|c|
+  c.class_eval {
+    def pretty_print(q)
+      q.text inspect
     end
   }
 }
@@ -468,10 +512,10 @@ if __FILE__ == $0
       @a = a
     end
 
-    def pretty_print(pp)
-      pp.text "<pretty_print:"
-      pp.pp @a
-      pp.text ">"
+    def pretty_print(q)
+      q.text "<pretty_print:"
+      q.pp @a
+      q.text ">"
     end
   end
 
@@ -484,10 +528,10 @@ if __FILE__ == $0
       return "<inspect:#{@a.inspect}>"
     end
 
-    def pretty_print(pp)
-      pp.text "<pretty_print:"
-      pp.pp @a
-      pp.text ">"
+    def pretty_print(q)
+      q.text "<pretty_print:"
+      q.pp @a
+      q.text ">"
     end
   end
 
@@ -519,7 +563,7 @@ if __FILE__ == $0
       a = PrettyPrintInspect.new(1)
       assert_equal("<pretty_print:1>", a.inspect)
       a = PrettyPrintInspectWithoutPrettyPrint.new
-      assert_raises(RuntimeError) { a.inspect }
+      assert_raise(RuntimeError) { a.inspect }
     end
 
     def test_proc
@@ -534,6 +578,10 @@ if __FILE__ == $0
       result = PP.pp(a, '')
       assert_equal("#{a.inspect}\n", result)
       assert_match(/\A#<Object.*>\n\z/m, result)
+      a = 1.0
+      a.instance_eval { @a = nil }
+      result = PP.pp(a, '')
+      assert_equal("#{a.inspect}\n", result)
     end
     
     def test_to_s_without_iv
@@ -550,19 +598,22 @@ if __FILE__ == $0
       a = []
       a << a
       assert_equal("[[...]]\n", PP.pp(a, ''))
+      assert_equal("#{a.inspect}\n", PP.pp(a, ''))
     end
 
     def test_hash
       a = {}
       a[0] = a
       assert_equal("{0=>{...}}\n", PP.pp(a, ''))
+      assert_equal("#{a.inspect}\n", PP.pp(a, ''))
     end
 
     S = Struct.new("S", :a, :b)
     def test_struct
       a = S.new(1,2)
       a.b = a
-      assert_equal("#<Struct::S a=1, b=#<Struct::S:...>>\n", PP.pp(a, ''))
+      assert_equal("#<struct Struct::S a=1, b=#<struct Struct::S:...>>\n", PP.pp(a, ''))
+      assert_equal("#{a.inspect}\n", PP.pp(a, ''))
     end
 
     def test_object
@@ -580,6 +631,7 @@ if __FILE__ == $0
       a = []
       a << HasInspect.new(a)
       assert_equal("[<inspect:[...]>]\n", PP.pp(a, ''))
+      assert_equal("#{a.inspect}\n", PP.pp(a, ''))
     end
 
     def test_share_nil
@@ -590,6 +642,13 @@ if __FILE__ == $0
       ensure
         PP.sharing_detection = false
       end
+    end
+  end
+
+  class PPSingleLineTest < Test::Unit::TestCase
+    def test_hash
+      assert_equal("{1=>1}", PP.singleline_pp({ 1 => 1}, '')) # [ruby-core:02699]
+      assert_equal("[1#{', 1'*99}]", PP.singleline_pp([1]*100, ''))
     end
   end
 end

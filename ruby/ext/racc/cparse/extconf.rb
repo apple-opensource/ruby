@@ -1,4 +1,4 @@
-# $Id: extconf.rb,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+# $Id: extconf.rb,v 1.1 2002/03/22 07:20:31 aamine Exp $
 
 require 'mkmf'
 create_makefile 'racc/cparse'

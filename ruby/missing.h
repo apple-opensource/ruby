@@ -3,8 +3,8 @@
   missing.h - prototype for *.c in ./missing, and
   	      for missing timeval struct
 
-  $Author: melville $
-  $Date: 2003/10/15 10:11:46 $
+  $Author: nobu $
+  $Date: 2003/12/22 08:23:54 $
   created at: Sat May 11 23:46:03 JST 2002
 
 ************************************************/
@@ -60,7 +60,11 @@ extern double erfc _((double));
 #endif
 
 #ifndef HAVE_ISINF
+# if defined(HAVE_FINITE) && defined(HAVE_ISNAN)
+# define isinf(x) (!finite(x) && !isnan(x))
+# else
 extern int isinf _((double));
+# endif
 #endif
 
 #ifndef HAVE_ISNAN
@@ -74,7 +78,7 @@ extern int memcmp _((char *, char *, int));
 */
 
 #ifndef HAVE_MEMMOVE
-extern char *memmove _((char *, char *, int));
+extern void *memmove _((void *, void *, int));
 #endif
 
 #ifndef HAVE_MKDIR
@@ -96,8 +100,8 @@ extern int strncasecmp _((char *, char *, int));
 #endif
 
 #ifndef HAVE_STRCHR
-extern int strchr _((char *, int));
-extern int strrchr _((char *, int));
+extern char *strchr _((char *, int));
+extern char *strrchr _((char *, int));
 #endif
 
 #ifndef HAVE_STRERROR
@@ -128,8 +132,8 @@ extern unsigned long strtoul _((char *, char **, int));
 # else
 #  include <varargs.h>
 # endif
-extern snprintf __((char *, size_t n, char const *, ...));
-extern vsnprintf _((char *, size_t n, char const *, va_list));
+extern int snprintf __((char *, size_t n, char const *, ...));
+extern int vsnprintf _((char *, size_t n, char const *, va_list));
 #endif
 
 #endif /* MISSING_H */

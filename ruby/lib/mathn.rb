@@ -1,8 +1,8 @@
 #
 #   mathn.rb - 
 #   	$Release Version: 0.5 $
-#   	$Revision: 1.1.1.2 $
-#   	$Date: 2003/10/15 10:11:48 $
+#   	$Revision: 1.1.1.1.4.1 $
+#   	$Date: 1998/01/16 12:36:05 $
 #   	by Keiju ISHITSUKA(SHL Japan Inc.)
 #
 # --
@@ -125,7 +125,7 @@ class Rational
   def ** (other)
     if other.kind_of?(Rational)
       if self < 0
-	return Complex(self, 0) ** other
+	return Complex.new!(self, 0) ** other
       elsif other == 0
 	return Rational(1,1)
       elsif self == 0

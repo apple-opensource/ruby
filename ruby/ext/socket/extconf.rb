@@ -51,6 +51,7 @@ if $ipv6
 EOF
     $ipv6type = "inria"
     $CFLAGS="-DINET6 "+$CFLAGS
+    $CPPFLAGS="-DINET6 "+$CPPFLAGS
   elsif macro_defined?("__KAME__", <<EOF)
 #include <netinet/in.h>
 EOF
@@ -65,6 +66,7 @@ EOF
     $ipv6lib="inet6"
     $ipv6libdir="/usr/inet6/lib"
     $CFLAGS="-DINET6 -I/usr/inet6/include "+$CFLAGS
+    $CPPFLAGS="-DINET6 -I/usr/inet6/include "+$CPPFLAGS
   elsif macro_defined?("_TOSHIBA_INET6", <<EOF)
 #include <sys/param.h>
 EOF
@@ -72,6 +74,7 @@ EOF
     $ipv6lib="inet6"
     $ipv6libdir="/usr/local/v6/lib"
     $CFLAGS="-DINET6 "+$CFLAGS
+    $CPPFLAGS="-DINET6 "+$CPPFLAGS
   elsif macro_defined?("__V6D__", <<EOF)
 #include </usr/local/v6/include/sys/v6config.h>
 EOF
@@ -79,6 +82,7 @@ EOF
     $ipv6lib="v6"
     $ipv6libdir="/usr/local/v6/lib"
     $CFLAGS="-DINET6 -I/usr/local/v6/include "+$CFLAGS
+    $CPPFLAGS="-DINET6 -I/usr/local/v6/include "+$CPPFLAGS
   elsif macro_defined?("_ZETA_MINAMI_INET6", <<EOF)
 #include <sys/param.h>
 EOF
@@ -153,6 +157,7 @@ main()
 }
 EOF
     $CFLAGS="-DHAVE_SOCKADDR_STORAGE "+$CFLAGS
+    $CPPFLAGS="-DHAVE_SOCKADDR_STORAGE "+$CPPFLAGS
 else      #   doug's fix, NOW add -Dss_family... only if required!
 $CPPFLAGS += " -Dss_family=__ss_family -Dss_len=__ss_len"
   if try_link(<<EOF)
@@ -175,6 +180,7 @@ main()
 }
 EOF
     $CFLAGS="-DHAVE_SOCKADDR_STORAGE "+$CFLAGS
+    $CPPFLAGS="-DHAVE_SOCKADDR_STORAGE "+$CPPFLAGS
 end
 end
 
@@ -200,9 +206,9 @@ end
 have_header("netinet/tcp.h") if not /cygwin/ =~ RUBY_PLATFORM # for cygwin 1.1.5
 have_header("netinet/udp.h")
 
-if have_func("sendmsg") or have_func("recvmsg")
-  have_struct_member('struct msghdr', 'msg_control', header=['sys/types.h', 'sys/socket.h'])
-  have_struct_member('struct msghdr', 'msg_accrights', header=['sys/types.h', 'sys/socket.h'])
+if have_func("sendmsg") | have_func("recvmsg")
+  have_struct_member('struct msghdr', 'msg_control', ['sys/types.h', 'sys/socket.h'])
+  have_struct_member('struct msghdr', 'msg_accrights', ['sys/types.h', 'sys/socket.h'])
 end
 
 $getaddr_info_ok = false
@@ -327,8 +333,36 @@ end
 
 $objs = ["socket.#{$OBJEXT}"]
     
-if $getaddr_info_ok and have_func("getaddrinfo") and have_func("getnameinfo")
+if $getaddr_info_ok and have_func("getaddrinfo", "netdb.h") and have_func("getnameinfo", "netdb.h")
   have_getaddrinfo = true
+else
+  if try_link(<<EOF)
+#ifndef _WIN32
+#  include <sys/types.h>
+#  include <netdb.h>
+#  include <string.h>
+#  include <sys/socket.h>
+#  include <netinet/in.h>
+#else
+#  include <windows.h>
+#  ifdef _WIN32_WCE
+#    include <winsock.h>
+#  else
+#    include <winsock.h>
+#  endif
+#endif
+int
+main()
+{
+   struct in6_addr addr;
+   unsigned char c;
+   c = addr.s6_addr8;
+   return 0;
+}
+EOF
+    $CFLAGS="-DHAVE_ADDR8 "+$CFLAGS
+    $CPPFLAGS="-DHAVE_ADDR8 "+$CPPFLAGS
+  end
 end
 
 if have_getaddrinfo
@@ -369,6 +403,7 @@ have_header("sys/uio.h")
 
 if have_func(test_func)
   have_func("hsterror")
+  have_func("getipnodebyname") or have_func("gethostbyname2")
   unless have_func("gethostname")
     have_func("uname")
   end

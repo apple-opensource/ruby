@@ -1,8 +1,8 @@
 #
 #   irb/slex.rb - symple lex analizer
 #   	$Release Version: 0.9$
-#   	$Revision: 1.1.1.2 $
-#   	$Date: 2003/10/15 10:11:49 $
+#   	$Revision: 1.6.2.1 $
+#   	$Date: 2004/03/28 14:10:39 $
 #   	by Keiju ISHITSUKA(keiju@ishituska.com)
 #
 # --
@@ -13,7 +13,7 @@
 require "e2mmap"
 
 class SLex
-  @RCS_ID='-$Id: slex.rb,v 1.1.1.2 2003/10/15 10:11:49 melville Exp $-'
+  @RCS_ID='-$Id: slex.rb,v 1.6.2.1 2004/03/28 14:10:39 akr Exp $-'
 
   extend Exception2MessageMapper
   def_exception :ErrNodeNothing, "node nothing"
@@ -119,7 +119,7 @@ class SLex
 	  p node
 	  SLex.fail ErrNodeAlreadyExists
 	else
-	  print "Warn: change abstruct node to real node\n" if SLex.debug?
+	  print "Warn: change abstract node to real node\n" if SLex.debug?
 	  @preproc = preproc
 	  @postproc = postproc
 	end
@@ -136,7 +136,7 @@ class SLex
 	    p chrs
 	    SLex.fail ErrNodeAlreadyExists
 	  else
-	    print "Warn: change abstruct node to real node\n" if SLex.debug?
+	    print "Warn: change abstract node to real node\n" if SLex.debug?
 	    node.preproc = preproc
 	    node.postproc = postproc
 	  end

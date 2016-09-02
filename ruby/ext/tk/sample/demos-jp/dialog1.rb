@@ -2,6 +2,9 @@
 # a dialog box with a local grab (called by 'widget')
 #
 class TkDialog_Demo1 < TkDialog
+  ###############
+  private
+  ###############
   def title
     "Dialog with local grab"
   end
@@ -31,5 +34,5 @@ when 0
 when 1
   print "あなたは「キャンセル」を押しましたね。\n"
 when 2
-  showCode dialog1
+  showCode 'dialog1'
 end

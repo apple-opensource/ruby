@@ -1,8 +1,8 @@
 #
 #   irb/version.rb - irb version definition file
 #   	$Release Version: 0.9$
-#   	$Revision: 1.1.1.2 $
-#   	$Date: 2003/10/15 10:11:49 $
+#   	$Revision: 1.4 $
+#   	$Date: 2002/07/09 11:17:16 $
 #   	by Keiju ISHITSUKA(keiju@ishitsuka.com)
 #
 # --

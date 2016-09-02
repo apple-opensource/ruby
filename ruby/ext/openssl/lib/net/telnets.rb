@@ -11,7 +11,7 @@
   (See the file 'LICENCE'.)
 
 = Version
-  $Id: telnets.rb,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+  $Id: telnets.rb,v 1.1.2.1 2004/12/20 03:49:16 gotoyuzo Exp $
   
   2001/11/06: Contiributed to Ruby/OpenSSL project.
 
@@ -124,9 +124,7 @@ module Net
         elsif SB[0] == $1[0]    # respond to "IAC SB xxx IAC SE"
           if    OPT_STARTTLS[0] == $1[1] && TLS_FOLLOWS[0] == $2[0]
             @sock = OpenSSL::SSL::SSLSocket.new(@sock)
-            @sock.cert_file       = @options['CertFile']
             @sock.cert            = @options['Cert'] unless @sock.cert
-            @sock.key_file        = @options['KeyFile']
             @sock.key             = @options['Key'] unless @sock.key
             @sock.ca_cert         = @options['CACert']
             @sock.ca_file         = @options['CAFile']

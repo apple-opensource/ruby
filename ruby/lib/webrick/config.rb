@@ -23,7 +23,6 @@ module WEBrick
       :ServerName     => Utils::getservername,
       :BindAddress    => nil,   # "0.0.0.0" or "::" or nil
       :Port           => nil,   # users MUST specifiy this!!
-      :Listen         => [],    # list of pairs of alt addr/port.
       :MaxClients     => 100,   # maximum number of the concurrent connections
       :ServerType     => nil,   # default: WEBrick::SimpleServer
       :Logger         => nil,   # default: WEBrick::Log.new
@@ -46,14 +45,15 @@ module WEBrick
       :DirectoryIndex => ["index.html","index.htm","index.cgi","index.rhtml"],
       :DocumentRoot   => nil,
       :DocumentRootOptions => { :FancyIndexing => true },
-
       :RequestHandler => nil,
+      :RequestCallback => nil,  # alias of :RequestHandler
+      :ServerAlias    => nil,
+
+      # for HTTPProxyServer
       :ProxyAuthProc  => nil,
       :ProxyContentHandler => nil,
       :ProxyVia       => true,
       :ProxyTimeout   => true,
-
-      # upstream proxy server
       :ProxyURI       => nil,
 
       :CGIInterpreter => nil,
@@ -65,13 +65,14 @@ module WEBrick
     )
 
     FileHandler = {
-      :NondisclosureName => ".ht*",
+      :NondisclosureName => [".ht*", "*~"],
       :FancyIndexing     => false,
       :HandlerTable      => {},
       :HandlerCallback   => nil,
       :DirectoryCallback => nil,
       :FileCallback      => nil,
       :UserDir           => "public_html",
+      :AcceptableLanguages => []  # ["en", "ja", ... ]
     }
 
     BasicAuth = {

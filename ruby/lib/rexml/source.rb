@@ -28,10 +28,9 @@ module REXML
 
 		# Constructor
 		# @param arg must be a String, and should be a valid XML document
-		def initialize arg
+		def initialize(arg)
 			@orig = @buffer = arg
 			self.encoding = check_encoding( @buffer )
-			#@buffer = decode(@buffer) unless @encoding == UTF_8
 			@line = 0
 		end
 
@@ -39,10 +38,6 @@ module REXML
 		# Overridden to support optimized en/decoding
 		def encoding=(enc)
 			super
-			eval <<-EOL
-				alias :encode :to_#{encoding.tr('-', '_').downcase}
-				alias :decode :from_#{encoding.tr('-', '_').downcase}
-			EOL
 			@line_break = encode( '>' )
 			if enc != UTF_8
 				@buffer = decode(@buffer)
@@ -68,25 +63,39 @@ module REXML
 		# everything after it in the Source.
 		# @return the pattern, if found, or nil if the Source is empty or the
 		# pattern is not found.
-		def scan pattern, consume=false
+		def scan(pattern, cons=false)
 			return nil if @buffer.nil?
 			rv = @buffer.scan(pattern)
-			@buffer = $' if consume and rv.size>0
+			@buffer = $' if cons and rv.size>0
 			rv
 		end
 
 		def read
 		end
 
-		def match pattern, consume=false
-			md = pattern.match @buffer
-			@buffer = $' if consume and md
+		def consume( pattern )
+			@buffer = $' if pattern.match( @buffer )
+		end
+
+		def match_to( char, pattern )
+			return pattern.match(@buffer)
+		end
+
+		def match_to_consume( char, pattern )
+			md = pattern.match(@buffer)
+			@buffer = $'
+			return md
+		end
+
+		def match(pattern, cons=false)
+			md = pattern.match(@buffer)
+			@buffer = $' if cons and md
 			return md
 		end
 
 		# @return true if the Source is exhausted
 		def empty?
-			@buffer.nil? or @buffer.strip.nil?
+			@buffer == ""
 		end
 
 		# @return the current line in the source
@@ -103,19 +112,28 @@ module REXML
 	class IOSource < Source
 		#attr_reader :block_size
 
-		def initialize arg, block_size=500
+    # block_size has been deprecated
+		def initialize(arg, block_size=500)
 			@er_source = @source = arg
 			@to_utf = false
-			# READLINE OPT
-			# The following was commented out when IOSource started using readline
-			# to pull the data from the stream.
-			#@block_size = block_size
-			#super @source.read(@block_size)
-			@line_break = '>'
-			super @source.readline( @line_break )
+      # Determining the encoding is a deceptively difficult issue to resolve.
+      # First, we check the first two bytes for UTF-16.  Then we
+      # assume that the encoding is at least ASCII enough for the '>', and
+      # we read until we get one of those.  This gives us the XML declaration,
+      # if there is one.  If there isn't one, the file MUST be UTF-8, as per
+      # the XML spec.  If there is one, we can determine the encoding from
+      # it.
+      str = @source.read( 2 )
+      if (str[0] == 254 && str[1] == 255) || (str[0] == 255 && str[1] == 254)
+        @encoding = check_encoding( str )
+        @line_break = encode( '>' )
+      else
+        @line_break = '>'
+      end
+      super str+@source.readline( @line_break )
 		end
 
-		def scan pattern, consume=false
+		def scan(pattern, cons=false)
 			rv = super
 			# You'll notice that this next section is very similar to the same
 			# section in match(), but just a liiittle different.  This is
@@ -142,24 +160,28 @@ module REXML
 
 		def read
 			begin
-				str = @source.readline('>')
+        str = @source.readline(@line_break)
 				str = decode(str) if @to_utf and str 
 				@buffer << str
-			rescue
+			rescue Exception, NameError
 				@source = nil
 			end
 		end
 
-		def match pattern, consume=false
+		def consume( pattern )
+			match( pattern, true )
+		end
+
+		def match( pattern, cons=false )
 			rv = pattern.match(@buffer)
-			@buffer = $' if consume and rv
+			@buffer = $' if cons and rv
 			while !rv and @source
 				begin
-					str = @source.readline('>')
+          str = @source.readline(@line_break)
 					str = decode(str) if @to_utf and str
 					@buffer << str
 					rv = pattern.match(@buffer)
-					@buffer = $' if consume and rv
+					@buffer = $' if cons and rv
 				rescue
 					@source = nil
 				end
@@ -174,17 +196,22 @@ module REXML
 
 		# @return the current line in the source
 		def current_line
-			pos = @er_source.pos				# The byte position in the source
-			lineno = @er_source.lineno	# The XML < position in the source
-			@er_source.rewind
-			line = 0										# The \r\n position in the source
-			begin
-				while @er_source.pos < pos
-					@er_source.readline
-					line += 1
-				end
-			rescue
-			end
+      begin
+        pos = @er_source.pos				# The byte position in the source
+        lineno = @er_source.lineno	# The XML < position in the source
+        @er_source.rewind
+        line = 0										# The \r\n position in the source
+        begin
+          while @er_source.pos < pos
+            @er_source.readline
+            line += 1
+          end
+        rescue
+        end
+      rescue IOError
+        pos = -1
+        line = -1
+      end
 			[pos, lineno, line]
 		end
 	end

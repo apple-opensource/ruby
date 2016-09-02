@@ -1,7 +1,5 @@
-# :nodoc:
-#
 # Author:: Nathaniel Talbott.
-# Copyright:: Copyright (c) 2000-2002 Nathaniel Talbott. All rights reserved.
+# Copyright:: Copyright (c) 2000-2003 Nathaniel Talbott. All rights reserved.
 # License:: Ruby license.
 
 require 'test/unit/ui/testrunnermediator'
@@ -10,28 +8,18 @@ require 'test/unit/ui/testrunnerutilities'
 module Test
   module Unit
     module UI
-      module Console # :nodoc:
+      module Console
 
         # Runs a Test::Unit::TestSuite on the console.
         class TestRunner
           extend TestRunnerUtilities
-          
-          SILENT = 0
-          PROGRESS_ONLY = 1
-          NORMAL = 2
-          VERBOSE = 3
-
-          # Creates a new TestRunner and runs the suite.
-          def self.run(suite, output_level=NORMAL)
-            return new(suite, output_level).start
-          end
 
           # Creates a new TestRunner for running the passed
           # suite. If quiet_mode is true, the output while
           # running is limited to progress dots, errors and
           # failures, and the final result. io specifies
           # where runner output should go to; defaults to
-          # STDERR.
+          # STDOUT.
           def initialize(suite, output_level=NORMAL, io=STDOUT)
             if (suite.respond_to?(:suite))
               @suite = suite.suite
@@ -52,7 +40,7 @@ module Test
           end
 
           private
-          def setup_mediator # :nodoc:
+          def setup_mediator
             @mediator = create_mediator(@suite)
             suite_name = @suite.to_s
             if ( @suite.kind_of?(Module) )
@@ -61,11 +49,11 @@ module Test
             output("Loaded suite #{suite_name}")
           end
           
-          def create_mediator(suite) # :nodoc:
+          def create_mediator(suite)
             return TestRunnerMediator.new(suite)
           end
           
-          def attach_to_mediator # :nodoc:
+          def attach_to_mediator
             @mediator.add_listener(TestResult::FAULT, &method(:add_fault))
             @mediator.add_listener(TestRunnerMediator::STARTED, &method(:started))
             @mediator.add_listener(TestRunnerMediator::FINISHED, &method(:finished))
@@ -73,11 +61,11 @@ module Test
             @mediator.add_listener(TestCase::FINISHED, &method(:test_finished))
           end
           
-          def start_mediator # :nodoc:
+          def start_mediator
             return @mediator.run_suite
           end
           
-          def add_fault(fault) # :nodoc:
+          def add_fault(fault)
             @faults << fault
             output_single(fault.single_character_display, PROGRESS_ONLY)
             @already_outputted = true

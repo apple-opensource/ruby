@@ -1,3 +1,4 @@
+<!-- saved from url=(0022)http://internet.e-mail -->
 <HTML>
 <HEAD>
 <META HTTP-EQUIV="Content-Type" CONTENT="text/html">
@@ -90,12 +91,17 @@ In 32 bits integer system,every 4 digits(in decimal) are computed simultaneously
 This means the number of significant digits in BigDecimal is always a multiple of 4.
 <P>
 Some more methods are available in Ruby code (not C code). 
-To use them,just require util.rb as:
+Functions such as sin,cos ...,are in math.rb in bigdecimal directory.
+To use them,require math.rb as:
+<CODE><PRE>
+require "bigdecimal/math.rb"
+</PRE></CODE>
+For details,see the math.rb code and comments.
+Other utility methods are in util.rb.
+To use util.rb, require it as:
 <CODE><PRE>
 require "bigdecimal/util.rb"
 </PRE></CODE>
-String to BigDecimal conversion, BigDecimal to String conversion 
-(in "nnnnnn.mmmm" form not in "0.xxxxxEn" form) etc are defined.
 For details,see the util.rb code.
 
 <H4><U>Class methods</U></H4>
@@ -105,7 +111,8 @@ For details,see the util.rb code.
 a=BigDecimal::new(s[,n]) or<BR>
 a=BigDecimal(s[,n]) or<BR>
 where:<BR>
-s: Initial value string.<BR>
+s: Initial value string. Spaces will be ignored. Any unrecognizable character for 
+representing initial value terminates the string.<BR>
 n: Maximum number of significant digits of a. n must be a Fixnum object.
 If n is omitted or is equal to 0,then the maximum number of significant digits of a is determined from the length of s.
 Actual number of digits handled in computations are usually gretaer than n.<BR>
@@ -118,7 +125,10 @@ but the resulting digits obtained may differ in future version.
 </BLOCKQUOTE>
 
 <LI><B>mode</B></LI><BLOCKQUOTE>
-mode method controls BigDecimal computation.Following usage are defined.<BR>
+f = BigDecimal.mode(s[,v])<BR>
+mode method controls BigDecimal computation. If the second argument is not given or is nil,then the value
+of current setting is returned.
+Following usage are defined.<BR>
 <P><B>[EXCEPTION control]</B><P>
 Actions when computation results NaN or Infinity can be defined as follows.
 <P>
@@ -148,8 +158,8 @@ EXCEPTION_ZERODIVIDE results to +Infinity or -Infinity<BR>
 </BLOCKQUOTE>
 EXCEPTION_INFINITY,EXCEPTION_OVERFLOW, and EXCEPTION_ZERODIVIDE are
  currently the same.<BR>
-The return value of mode method is the previous value set.<BR>
-nil is returned if any argument is wrong.<BR>
+The return value of mode method is the value set.<BR>
+If nil is specified for the second argument,then current setting is returned.<BR>
 Suppose the return value of the mode method is f,then 
  f &amp; BigDecimal::EXCEPTION_NaN !=0 means EXCEPTION_NaN is set to on.
 <P>
@@ -169,20 +179,18 @@ where flag must be one of:
 <TR><TD>ROUND_CEILING</TD><TD>round towards positive infinity(ceil).</TD></TR>
 <TR><TD>ROUND_FLOOR</TD><TD>round towards negative infinity(floor).</TD></TR>
 </TABLE>
-New rounding mode is returned,nil is returned if any argument is not an integer.
-Bad specification is ignored.<BR>
+New rounding mode is returned. If nil is specified for the second argument,then current setting is returned.<BR>
 The digit location for rounding operation can not be specified by this mode method,
 use truncate/round/ceil/floor/add/sub/mult/div mthods for each instance instead.
 </BLOCKQUOTE>
 
 <LI><B>limit[(n)]</B></LI><BLOCKQUOTE>
-Limits the maximum digits that the newly created BigDecimal objects can hold
-never exceed n+? (Currently,? can not be determined beforehand,but not so big).
+Limits the maximum digits that the newly created BigDecimal objects can hold never exceed n.
 This means the rounding operation specified by BigDecimal.mode is 
 performed if necessary.
-limit returns maximum value before set.
+limit returns the value before set if n is nil or is not specified.
 Zero,the default value,means no upper limit.<BR>
-Except for zero,the limit has more priority than instance methods such as truncate,round,ceil,floor,add,sub,mult,and div. <BR>
+The limit has no more priority than instance methods such as truncate,round,ceil,floor,add,sub,mult,and div. <BR>
 mf = BigDecimal::limit(n)<BR>
 </BLOCKQUOTE>
 
@@ -235,30 +243,33 @@ For the resulting number of significant digits of c,see <A HREF="#PREC">Resultin
 
 <LI><B>add(b,n)</B></LI><BLOCKQUOTE>
 c = a.add(b,n)<BR>
-c = a.add(b,n) performs c = a + b.
+c = a.add(b,n) performs c = a + b.<BR>
 If n is less than the actual significant digits of a + b,
-then c is rounded properly according to the BigDecimal.limit.
-
+then c is rounded properly according to the BigDecimal.limit.<BR>
+If n is zero,then the result is the same as +'s.
 </BLOCKQUOTE>
 <LI><B>sub(b,n)</B></LI><BLOCKQUOTE>
 c = a.sub(b,n)<BR>
-c = a.sub(b,n) performs c = a - b.
+c = a.sub(b,n) performs c = a - b.<BR>
 If n is less than the actual significant digits of a - b,
-then c is rounded properly according to the BigDecimal.limit.
+then c is rounded properly according to the BigDecimal.limit.<BR>
+If n is zero,then the result is the same as -'s.
 
 </BLOCKQUOTE>
 <LI><B>mult(b,n)</B></LI><BLOCKQUOTE>
 c = a.mult(b,n)<BR>
-c = a.mult(b,n) performs c = a * b.
+c = a.mult(b,n) performs c = a * b.<BR>
 If n is less than the actual significant digits of a * b,
-then c is rounded properly according to the BigDecimal.limit.
+then c is rounded properly according to the BigDecimal.limit.<BR>
+If n is zero,then the result is the same as *'s.
 
 </BLOCKQUOTE>
 <LI><B>div(b[,n])</B></LI><BLOCKQUOTE>
 c = a.div(b,n)<BR>
-c = a.div(b,n) performs c = a / b.
+c = a.div(b,n) performs c = a / b.<BR>
 If n is less than the actual significant digits of a / b,
 then c is rounded properly according to the BigDecimal.limit.<BR>
+If n is zero,then the result is the same as /'s.
 If n is not given,then the result will be an integer(BigDecimal) like Float#div.
 </BLOCKQUOTE>
 
@@ -359,10 +370,35 @@ If a is Infinity or NaN,then i becomes to nil.
 
 </BLOCKQUOTE>
 <LI><B>to_s[(n)]</B></LI><BLOCKQUOTE>
-converts to string(results look like "0.xxxxxEn").<BR>
-s = a.to_s<BR>
-If n is given,then a space is inserted after every n digits for readability.<BR>
-s = a.to_s(n)
+converts to string(default results look like "0.xxxxxEn").
+<CODE><PRE>
+BigDecimal("1.23456").to_s  #  ==> "0.123456E1"
+</PRE></CODE>
+If n(>0) is given,then a space is inserted to each of two parts divided by the decimal point 
+after every n digits for readability.
+<CODE><PRE>
+BigDecimal("0.1234567890123456789").to_s(10)   #  ==> "0.1234567890 123456789E0"
+</PRE></CODE>
+n can be an string representing a positive integer number.
+<CODE><PRE>
+BigDecimal("0.1234567890123456789").to_s("10") #  ==> "0.1234567890 123456789E0"
+</PRE></CODE>
+If the first character is '+'(or ' '),then '+'(or ' ') will be set before value string
+when the value is positive.
+<CODE><PRE>
+BigDecimal("0.1234567890123456789").to_s(" 10") #  ==> " 0.1234567890 123456789E0"
+BigDecimal("0.1234567890123456789").to_s("+10") #  ==> "+0.1234567890 123456789E0"
+BigDecimal("-0.1234567890123456789").to_s("10") #  ==> "-0.1234567890 123456789E0"
+</PRE></CODE>
+
+At the end of the string,'E'(or 'e') or 'F'(or 'f') can be specified to change 
+number representation.
+<CODE><PRE>
+BigDecimal("1234567890.123456789").to_s("E")  #  ==> "0.1234567890123456789E10"
+BigDecimal("1234567890.123456789").to_s("F")  #  ==> "1234567890.123456789"
+BigDecimal("1234567890.123456789").to_s("5E") #  ==> "0.12345 67890 12345 6789E10"
+BigDecimal("1234567890.123456789").to_s("5F") #  ==> "12345 67890.12345 6789"
+</PRE></CODE>
 
 </BLOCKQUOTE>
 <LI><B>exponent</B></LI><BLOCKQUOTE>
@@ -371,8 +407,8 @@ n = a.exponent <BR>
 means a = 0.xxxxxxx*10**n.
 </BLOCKQUOTE>
 
-<LI><B>prec</B></LI><BLOCKQUOTE>
-n,m = a.prec <BR>
+<LI><B>precs</B></LI><BLOCKQUOTE>
+n,m = a.precs <BR>
 prec returns number of significant digits (n) and maximum number of 
 significant digits (m) of a.
 </BLOCKQUOTE>
@@ -483,42 +519,7 @@ same as ==,used in case statement.
 <LI>&gt;=</LI>
 </UL>
 
-<H4><U>Class methods(trial version)</U></H4>
-Following class methods are in trial stage, and not usable in default.
-Uncomment /* #define ENABLE_TRIAL_METHOD */ in bigdecimal.c, compile and install 
-again if you want to use.
-<UL>
-<LI><B>E</B></LI><BLOCKQUOTE>
-e = BigDecimal::E(n)<BR>
-where e(=2.718281828....) is the base value of natural logarithm.<BR>
-n specifies the length of significant digits of e.
-
-</BLOCKQUOTE>
-<LI><B>PI</B></LI><BLOCKQUOTE>
-e = BigDecimal::PI(n)<BR>
-returns at least n digits of the ratio of the circumference of a circle to its diameter
-(pi=3.14159265358979....) using J.Machin's formula.<BR>
-</BLOCKQUOTE>
-</UL>
-
-<H4><U>Instance methods(trial version)</U></H4>
-Following instance methods are in trial stage, and not usable in default.
-Uncomment /* #define ENABLE_TRIAL_METHOD */ in bigdecimal.c, compile and install 
-again if you want to use.
-<UL>
-<LI><B>sincos</B></LI><BLOCKQUOTE>
-computes and returns sine and cosine value of a with significant digit number n at least.<BR>
-sin,cos = a.sincos(n)<BR>
-Computation may return bad results unless |a|<2*3.1415..... 
-</BLOCKQUOTE>
-<LI><B>exp</B></LI><BLOCKQUOTE>
-c = a.exp(n)<BR>
-computes the base of natural logarithm value(e=2.718281828....) powered by a
-with significant digit number n at least.<BR>
-</BLOCKQUOTE>
-</UL>
 <HR>
-
 <H3>About 'coerce'</H3>
 <B>For the binary operation like A op B:</B>
 <DL>

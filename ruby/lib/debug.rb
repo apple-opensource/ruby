@@ -174,8 +174,7 @@ class Context
 
   def debug_silent_eval(str, binding)
     begin
-      val = eval(str, binding)
-      val
+      eval(str, binding)
     rescue StandardError, ScriptError
       nil
     end
@@ -190,10 +189,10 @@ class Context
 
   def debug_variable_info(input, binding)
     case input
-    when /^\s*g(?:lobal)?$/
+    when /^\s*g(?:lobal)?\s*$/
       var_list(global_variables, binding)
 
-    when /^\s*l(?:ocal)?$/
+    when /^\s*l(?:ocal)?\s*$/
       var_list(eval("local_variables", binding), binding)
 
     when /^\s*i(?:nstance)?\s+/
@@ -261,7 +260,7 @@ class Context
     binding_file = file
     binding_line = line
     previous_line = nil
-    if (ENV['EMACS'] == 't')
+    if ENV['EMACS']
       stdout.printf "\032\032%s:%d:\n", binding_file, binding_line
     else
       stdout.printf "%s:%d:%s", binding_file, binding_line,
@@ -273,6 +272,7 @@ class Context
     while prompt and input = readline("(rdb:%d) "%thnum(), true)
       catch(:debug_error) do
 	if input == ""
+          next unless DEBUG_LAST_CMD[0]
 	  input = DEBUG_LAST_CMD[0]
 	  stdout.print input, "\n"
 	else
@@ -302,8 +302,10 @@ class Context
 
 	when /^\s*b(?:reak)?\s+(?:(.+):)?([^.:]+)$/
 	  pos = $2
-	  file = $1 || file
-	  klass = debug_silent_eval($1, binding)
+          if $1
+            klass = debug_silent_eval($1, binding)
+            file = $1
+          end
 	  if pos =~ /^\d+$/
 	    pname = pos
 	    pos = pos.to_i
@@ -527,7 +529,7 @@ class Context
 
 	else
 	  v = debug_eval(input, binding)
-	  stdout.printf "%s\n", v.inspect unless (v == nil)
+	  stdout.printf "%s\n", v.inspect
 	end
       end
     end

@@ -1,5 +1,5 @@
 /*
- * $Id: ossl_x509req.c,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+ * $Id: ossl_x509req.c,v 1.5.2.1 2004/12/15 01:54:38 matz Exp $
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2001-2002  Michal Rokos <m.rokos@sh.cvut.cz>
  * All rights reserved.
@@ -56,6 +56,16 @@ ossl_x509req_new(X509_REQ *req)
 }
 
 X509_REQ *
+GetX509ReqPtr(VALUE obj)
+{
+    X509_REQ *req;
+
+    SafeGetX509Req(obj, req);
+
+    return req;
+}
+
+X509_REQ *
 DupX509ReqPtr(VALUE obj)
 {
     X509_REQ *req, *new;
@@ -84,40 +94,26 @@ ossl_x509req_alloc(VALUE klass)
 
     return obj;
 }
-DEFINE_ALLOC_WRAPPER(ossl_x509req_alloc)
 
 static VALUE 
 ossl_x509req_initialize(int argc, VALUE *argv, VALUE self)
 {
     BIO *in;
     X509_REQ *req;
-    VALUE buffer;
+    VALUE arg;
 
-    if (rb_scan_args(argc, argv, "01", &buffer) == 0) {
+    if (rb_scan_args(argc, argv, "01", &arg) == 0) {
 	return self;
     }
-    StringValue(buffer);
-    
-    in = BIO_new_mem_buf(RSTRING(buffer)->ptr, RSTRING(buffer)->len);
-    if (!in) {
-	ossl_raise(eX509ReqError, NULL);
-    }
-    /*
-     * TODO:
-     * Check if we should
-     X509_REQ_free(DATA_PTR(self));
-    */
+    arg = ossl_to_der_if_possible(arg);
+    in = ossl_obj2bio(arg);
     req = PEM_read_bio_X509_REQ(in, (X509_REQ **)&DATA_PTR(self), NULL, NULL);
     if (!req) {
 	BIO_reset(in);
-
 	req = d2i_X509_REQ_bio(in, (X509_REQ **)&DATA_PTR(self));
     }
-    if (!req) {
-	BIO_free(in);
-	ossl_raise(eX509ReqError, NULL);
-    }
     BIO_free(in);
+    if (!req) ossl_raise(eX509ReqError, NULL);
 
     return self;
 }
@@ -159,6 +155,26 @@ ossl_x509req_to_pem(VALUE self)
     BIO_get_mem_ptr(out, &buf);
     str = rb_str_new(buf->data, buf->length);
     BIO_free(out);
+
+    return str;
+}
+
+static VALUE
+ossl_x509req_to_der(VALUE self)
+{
+    X509_REQ *req;
+    VALUE str;
+    long len;
+    unsigned char *p;
+
+    GetX509Req(self, req);
+    if ((len = i2d_X509_REQ(req, NULL)) <= 0)
+	ossl_raise(eX509CertError, NULL);
+    str = rb_str_new(0, len);
+    p = RSTRING(str)->ptr;
+    if (i2d_X509_REQ(req, &p) <= 0)
+	ossl_raise(eX509ReqError, NULL);
+    ossl_str_adjust(str, p);
 
     return str;
 }
@@ -224,10 +240,10 @@ ossl_x509req_set_version(VALUE self, VALUE version)
     X509_REQ *req;
     long ver;
 
-    GetX509Req(self, req);
     if ((ver = FIX2LONG(version)) < 0) {
 	ossl_raise(eX509ReqError, "version must be >= 0!");
     }
+    GetX509Req(self, req);
     if (!X509_REQ_set_version(req, ver)) {
 	ossl_raise(eX509ReqError, NULL);
     }
@@ -384,13 +400,13 @@ ossl_x509req_set_attributes(VALUE self, VALUE ary)
     X509_REQ *req;
     X509_ATTRIBUTE *attr;
     int i;
-    VALUE item;
+    VALUE tmp, item;
 
-    GetX509Req(self, req);
     Check_Type(ary, T_ARRAY);
     for (i=0;i<RARRAY(ary)->len; i++) {
 	OSSL_Check_Kind(RARRAY(ary)->ptr[i], cX509Attr);
     }
+    GetX509Req(self, req);
     sk_X509_ATTRIBUTE_pop_free(req->req_info->attributes, X509_ATTRIBUTE_free);
     req->req_info->attributes = NULL;
     for (i=0;i<RARRAY(ary)->len; i++) {
@@ -431,6 +447,7 @@ Init_ossl_x509req()
     rb_define_copy_func(cX509Req, ossl_x509req_copy);
 	
     rb_define_method(cX509Req, "to_pem", ossl_x509req_to_pem, 0);
+    rb_define_method(cX509Req, "to_der", ossl_x509req_to_der, 0);
     rb_define_alias(cX509Req, "to_s", "to_pem");
     rb_define_method(cX509Req, "to_text", ossl_x509req_to_text, 0);
     rb_define_method(cX509Req, "version", ossl_x509req_get_version, 0);

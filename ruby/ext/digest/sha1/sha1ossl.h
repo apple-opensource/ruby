@@ -1,4 +1,4 @@
-/* $Id: sha1ossl.h,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $ */
+/* $Id: sha1ossl.h,v 1.1 2002/09/26 17:44:33 knu Exp $ */
 
 #ifndef SHA1OSSL_H_INCLUDED
 #define SHA1OSSL_H_INCLUDED

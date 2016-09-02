@@ -15,7 +15,7 @@
   You can get it from RAA or Ruby's CVS repository.
 
 = Version
-  $Id: protocols.rb,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+  $Id: protocols.rb,v 1.5.2.1 2004/12/20 03:49:16 gotoyuzo Exp $
   
   2001/11/06: Contiributed to Ruby/OpenSSL project.
 =end
@@ -29,8 +29,7 @@ module Net
     extend Forwardable
 
     def_delegators(:@ssl_context,
-                   :key=, :cert=, :key_file=, :cert_file=,
-                   :ca_file=, :ca_path=,
+                   :key=, :cert=, :ca_file=, :ca_path=,
                    :verify_mode=, :verify_callback=, :verify_depth=,
                    :timeout=, :cert_store=)
 
@@ -40,14 +39,13 @@ module Net
     end
 
     def ssl_connect()
-      @raw_socket = @socket
-      @socket = OpenSSL::SSL::SSLSocket.new(@raw_socket, @ssl_context)
+      unless @ssl_context.verify_mode
+        warn "warning: peer certificate won't be verified in this SSL session."
+        @ssl_context.verify_mode = OpenSSL::SSL::VERIFY_NONE
+      end
+      @socket = OpenSSL::SSL::SSLSocket.new(@socket, @ssl_context)
+      @socket.sync_close = true
       @socket.connect
-    end
-
-    def close
-      super
-      @raw_socket.close if @raw_socket
     end
 
     def peer_cert

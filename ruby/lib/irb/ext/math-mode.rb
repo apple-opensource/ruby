@@ -1,8 +1,8 @@
 #
 #   math-mode.rb - 
 #   	$Release Version: 0.9$
-#   	$Revision: 1.1.1.1 $
-#   	$Date: 2003/10/15 10:11:49 $
+#   	$Revision: 1.2 $
+#   	$Date: 2003/02/07 19:00:21 $
 #   	by Keiju ISHITSUKA(Nihon Rational Software Co.,Ltd)
 #
 # --

@@ -1,14 +1,14 @@
 /*
  * node.c
  *
- * $Author: melville $
- * $Date: 2003/10/15 10:11:48 $
+ * $Author: why $
+ * $Date: 2004/05/16 16:09:40 $
  *
  * Copyright (C) 2003 why the lucky stiff
  */
 
-#include "syck.h"
 #include "ruby.h"
+#include "syck.h"
 
 /*
  * Node allocation functions
@@ -83,6 +83,7 @@ syck_alloc_str()
     s = S_ALLOC( struct SyckStr );
     s->len = 0;
     s->ptr = NULL;
+    s->style = scalar_none;
 
     n = syck_alloc_node( syck_str_kind );
     n->data.str = s;
@@ -91,19 +92,20 @@ syck_alloc_str()
 }
 
 SyckNode *
-syck_new_str( char *str )
+syck_new_str( char *str, enum scalar_style style )
 {
-    return syck_new_str2( str, strlen( str ) );
+    return syck_new_str2( str, strlen( str ), style );
 }
 
 SyckNode *
-syck_new_str2( char *str, long len )
+syck_new_str2( char *str, long len, enum scalar_style style )
 {
     SyckNode *n;
 
     n = syck_alloc_str();
     n->data.str->ptr = S_ALLOC_N( char, len + 1 );
     n->data.str->len = len;
+    n->data.str->style = style;
     memcpy( n->data.str->ptr, str, len );
     n->data.str->ptr[len] = '\0';
 
@@ -297,27 +299,38 @@ syck_seq_read( SyckNode *seq, long idx )
 void
 syck_free_members( SyckNode *n )
 {
+    if ( n == NULL ) return;
+
     switch ( n->kind  )
     {
         case syck_str_kind:
-            if ( n->data.str->ptr != NULL ) 
+            if ( n->data.str != NULL ) 
             {
                 S_FREE( n->data.str->ptr );
                 n->data.str->ptr = NULL;
                 n->data.str->len = 0;
                 S_FREE( n->data.str );
+                n->data.str = NULL;
             }
         break;
 
         case syck_seq_kind:
-            S_FREE( n->data.list->items );
-            S_FREE( n->data.list );
+            if ( n->data.list != NULL )
+            {
+                S_FREE( n->data.list->items );
+                S_FREE( n->data.list );
+                n->data.list = NULL;
+            }
         break;
 
         case syck_map_kind:
-            S_FREE( n->data.pairs->keys );
-            S_FREE( n->data.pairs->values );
-            S_FREE( n->data.pairs );
+            if ( n->data.pairs != NULL )
+            {
+                S_FREE( n->data.pairs->keys );
+                S_FREE( n->data.pairs->values );
+                S_FREE( n->data.pairs );
+                n->data.pairs = NULL;
+            }
         break;
     }
 }

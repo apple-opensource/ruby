@@ -1,8 +1,8 @@
 #
 #   irb/ruby-lex.rb - ruby lexcal analizer
 #   	$Release Version: 0.9$
-#   	$Revision: 1.1.1.2 $
-#   	$Date: 2003/10/15 10:11:49 $
+#   	$Revision: 1.22.2.2 $
+#   	$Date: 2004/11/04 01:20:50 $
 #   	by Keiju ISHITSUKA(keiju@ishitsuka.com)
 #
 # --
@@ -15,7 +15,7 @@ require "irb/slex"
 require "irb/ruby-token"
 
 class RubyLex
-  @RCS_ID='-$Id: ruby-lex.rb,v 1.1.1.2 2003/10/15 10:11:49 melville Exp $-'
+  @RCS_ID='-$Id: ruby-lex.rb,v 1.22.2.2 2004/11/04 01:20:50 matz Exp $-'
 
   extend Exception2MessageMapper
   def_exception(:AlreadyDefinedToken, "Already defined token(%s)")
@@ -55,6 +55,9 @@ class RubyLex
     @skip_space = false
     @readed_auto_clean_up = false
     @exception_on_syntax_error = true
+    @prompt = nil
+    @here_header = nil
+    @lex_state = nil
   end
 
   attr_accessor :skip_space
@@ -300,7 +303,9 @@ class RubyLex
     "Q" => "\"",
     "x" => "\`",
     "r" => "\/",
-    "w" => "]"
+    "w" => "]",
+    "W" => "]",
+    "s" => ":"
   }
   
   PERCENT_PAREN = {
@@ -315,7 +320,8 @@ class RubyLex
     "\"" => TkSTRING,
     "\`" => TkXSTRING,
     "\/" => TkREGEXP,
-    "]" => TkDSTRING
+    "]" => TkDSTRING,
+    ":" => TkSYMBOL
   }
   DLtype2Token = {
     "\"" => TkDSTRING,
@@ -389,7 +395,7 @@ class RubyLex
 
     @OP.def_rules("!", "!=", "!~") do
       |op, io|
-      #@lex_state = EXPR_BEG
+      @lex_state = EXPR_BEG
       Token(op)
     end
 
@@ -788,8 +794,7 @@ class RubyLex
 	      valid = true
 	      case token
 	      when "class"
-		valid = false unless peek_match?(/^\s*(<<|\w)/)
-
+		valid = false unless peek_match?(/^\s*(<<|\w|::)/)
 	      when "def"
 		valid = false if peek_match?(/^\s*(([+-\/*&\|^]|<<|>>|\|\||\&\&)=|\&\&|\|\|)/)
 #		valid = false if peek_match?(/^\s*(([+-\/*&\|^]|<<|>>|\|\||\&\&)?=|\&\&|\|\|)/)
@@ -971,7 +976,7 @@ class RubyLex
       while ch = getc
 	if @quoted == ch and nest == 0
 	  break
-	elsif @ltype != "'" && @ltype != "]" and ch == "#"
+	elsif @ltype != "'" && @ltype != "]" && @ltype != ":" and ch == "#"
 	  subtype = true
 	elsif ch == '\\' #'
 	  read_escape

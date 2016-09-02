@@ -5,37 +5,43 @@ dir_config("iconv")
 conf = File.exist?(File.join($srcdir, "config.charset"))
 conf = with_config("config-charset", enable_config("config-charset", conf))
 
-if have_header("iconv.h")
-  if !try_compile("", "-Werror") or checking_for("iconv() 2nd argument is const") do
-      !try_compile('
-#include <iconv.h>
-size_t
-test(iconv_t cd, char **inptr, size_t *inlen, char **outptr, size_t *outlen)
-{
-    return iconv(cd, inptr, inlen, outptr, outlen);
-}
-', "-Werror")
+if have_func("iconv", "iconv.h") or
+    have_library("iconv", "iconv") {|s| s.sub(/(?=\n\/\*top\*\/)/, "#include <iconv.h>")}
+  if checking_for("const of iconv() 2nd argument") do
+      create_tmpsrc(cpp_include("iconv.h") + "---> iconv(cd,0,0,0,0) <---")
+      src = xpopen(cpp_command("")) {|f|f.read}
+      if !(func = src[/^--->\s*(\w+).*\s*<---/, 1])
+        Logging::message "iconv function name not found"
+        false
+      elsif !(second = src[%r"\b#{func}\s*\(.*?,(.*?),.*?\)\s*;"m, 1])
+        Logging::message "prototype for #{func}() not found"
+        false
+      else
+        Logging::message $&+"\n"
+        /\bconst\b/ =~ second
+      end
     end
     $defs.push('-DICONV_INPTR_CAST=""')
   else
     $defs.push('-DICONV_INPTR_CAST="(char **)"')
   end
-  have_library("iconv")
   if conf
     prefix = '$(srcdir)'
     prefix =  $nmake ? "{#{prefix}}" : "#{prefix}/"
-    $INSTALLFILES = [["./iconv.rb", "$(RUBYLIBDIR)"]]
+    wrapper = "./iconv.rb"
+    $INSTALLFILES = [[wrapper, "$(RUBYARCHDIR)"]]
     if String === conf
       require 'uri'
       scheme = URI.parse(conf).scheme
     else
       conf = prefix + "config.charset"
     end
+    $cleanfiles << wrapper
   end
   create_makefile("iconv")
   if conf
     open("Makefile", "a") do |mf|
-      mf.print("\nall: iconv.rb\n\niconv.rb: ", prefix, "charset_alias.rb")
+      mf.print("\nall: #{wrapper}\n\n#{wrapper}: #{prefix}charset_alias.rb")
       mf.print(" ", conf) unless scheme
       mf.print("\n\t$(RUBY) ", prefix, "charset_alias.rb ", conf, " $@\n")
     end

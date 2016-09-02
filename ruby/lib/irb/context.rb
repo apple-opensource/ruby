@@ -1,8 +1,8 @@
 #
 #   irb/context.rb - irb context
 #   	$Release Version: 0.9$
-#   	$Revision: 1.1.1.2 $
-#   	$Date: 2003/10/15 10:11:49 $
+#   	$Revision: 1.8 $
+#   	$Date: 2003/10/15 02:25:48 $
 #   	by Keiju ISHITSUKA(keiju@ishitsuka.com)
 #
 # --
@@ -58,7 +58,7 @@ module IRB
 
       case input_method
       when nil
-	if (defined? (ReadlineInputMethod) &&
+	if (defined?(ReadlineInputMethod) &&
             (use_readline? || IRB.conf[:PROMPT_MODE] != :INF_RUBY && STDIN.tty?))
 	  @io = ReadlineInputMethod.new
 	else

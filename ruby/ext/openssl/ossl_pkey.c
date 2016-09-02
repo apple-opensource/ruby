@@ -1,5 +1,5 @@
 /*
- * $Id: ossl_pkey.c,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+ * $Id: ossl_pkey.c,v 1.4.2.1 2004/01/08 12:30:37 gotoyuzo Exp $
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2001-2002  Michal Rokos <m.rokos@sh.cvut.cz>
  * All rights reserved.
@@ -17,6 +17,21 @@ VALUE mPKey;
 VALUE cPKey;
 VALUE ePKeyError;
 ID id_private_q;
+
+/*
+ * callback for generating keys
+ */
+void
+ossl_generate_cb(int p, int n, void *arg)
+{
+    VALUE ary;
+
+    ary = rb_ary_new2(2);
+    rb_ary_store(ary, 0, INT2NUM(p));
+    rb_ary_store(ary, 1, INT2NUM(n));
+
+    rb_yield(ary);
+}
 
 /*
  * Public
@@ -119,7 +134,6 @@ ossl_pkey_alloc(VALUE klass)
 
     return obj;
 }
-DEFINE_ALLOC_WRAPPER(ossl_pkey_alloc)
 
 static VALUE
 ossl_pkey_initialize(VALUE self)
@@ -131,37 +145,10 @@ ossl_pkey_initialize(VALUE self)
 }
 
 static VALUE
-ossl_pkey_to_der(VALUE self)
-{
-    EVP_PKEY *pkey;
-    VALUE str;
-    BIO *out;
-    BUF_MEM *buf;
-    
-    GetPKey(self, pkey);
-
-    out = BIO_new(BIO_s_mem());
-    if (!out) ossl_raise(ePKeyError, NULL);
-
-    if (!i2d_PUBKEY_bio(out, pkey)) {
-	BIO_free(out);
-	ossl_raise(ePKeyError, NULL);
-    }
-    
-    BIO_get_mem_ptr(out, &buf);
-    str = rb_str_new(buf->data, buf->length);
-
-    BIO_free(out);
-
-    return str;
-}
-
-static VALUE
 ossl_pkey_sign(VALUE self, VALUE digest, VALUE data)
 {
     EVP_PKEY *pkey;
     EVP_MD_CTX ctx;
-    char *buf;
     int buf_len;
     VALUE str;
 
@@ -172,15 +159,12 @@ ossl_pkey_sign(VALUE self, VALUE digest, VALUE data)
     EVP_SignInit(&ctx, GetDigestPtr(digest));
     StringValue(data);
     EVP_SignUpdate(&ctx, RSTRING(data)->ptr, RSTRING(data)->len);
-    if (!(buf = OPENSSL_malloc(EVP_PKEY_size(pkey) + 16))) {
+    str = rb_str_new(0, EVP_PKEY_size(pkey)+16);
+    if (!EVP_SignFinal(&ctx, RSTRING(str)->ptr, &buf_len, pkey))
 	ossl_raise(ePKeyError, NULL);
-    }
-    if (!EVP_SignFinal(&ctx, buf, &buf_len, pkey)) {
-	OPENSSL_free(buf);
-	ossl_raise(ePKeyError, NULL);
-    }	
-    str = rb_str_new(buf, buf_len);
-    OPENSSL_free(buf);
+    assert(buf_len <= RSTRING(str)->len);
+    RSTRING(str)->len = buf_len;
+    RSTRING(str)->ptr[buf_len] = 0;
 
     return str;
 }
@@ -222,7 +206,6 @@ Init_ossl_pkey()
     rb_define_alloc_func(cPKey, ossl_pkey_alloc);
     rb_define_method(cPKey, "initialize", ossl_pkey_initialize, 0);
 
-    rb_define_method(cPKey, "to_der", ossl_pkey_to_der, 0);
     rb_define_method(cPKey, "sign", ossl_pkey_sign, 2);
     rb_define_method(cPKey, "verify", ossl_pkey_verify, 3);
 	

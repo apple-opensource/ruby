@@ -32,11 +32,12 @@ module REXML
 		#	 # <!DOCTYPE foo '-//I/Hate/External/IDs'>
 		#	 dt = DocType.new( doctype_to_clone )
 		#	 # Incomplete.  Shallow clone of doctype
-		#	 source = Source.new( '<!DOCTYPE foo "bar">' )
-		#	 dt = DocType.new( source )
-		#	 # <!DOCTYPE foo "bar">
-		#	 dt = DocType.new( source, some_document )
-		#	 # Creates a doctype, and adds to the supplied document
+    #
+    # +Note+ that the constructor: 
+    #
+    #  Doctype.new( Source.new( "<!DOCTYPE foo 'bar'>" ) )
+    #
+    # is _deprecated_.  Do not use it.  It will probably disappear.
 		def initialize( first, parent=nil )
 			@entities = DEFAULT_ENTITIES
 			@long_name = @uri = nil
@@ -54,6 +55,15 @@ module REXML
 				@external_id = first[1]
 				@long_name = first[2]
 				@uri = first[3]
+      elsif first.kind_of? Source
+        super( parent )
+        parser = Parsers::BaseParser.new( first )
+        event = parser.pull
+        if event[0] == :start_doctype
+          @name, @external_id, @long_name, @uri, = event[1..-1]
+        end
+      else
+        super()
 			end
 		end
 
@@ -92,7 +102,10 @@ module REXML
 		#   indentation will be this number of spaces, and children will be
 		#   indented an additional amount.
 		# transitive::
-		#   Who knows?
+		#   If transitive is true and indent is >= 0, then the output will be
+		#   pretty-printed in such a way that the added whitespace does not affect
+		#   the absolute *value* of the document -- that is, it leaves the value
+		#   and number of Text nodes in the document unchanged.
 		# ie_hack::
 		#   Internet Explorer is the worst piece of crap to have ever been
 		#   written, with the possible exception of Windows itself.  Since IE is
@@ -109,7 +122,7 @@ module REXML
 			output << " #@long_name" if @long_name
 			output << " #@uri" if @uri
 			unless @children.empty?
-				next_indent = indent + 2
+				next_indent = indent + 1
 				output << ' ['
 				child = nil		# speed
 				@children.each { |child|
@@ -122,6 +135,10 @@ module REXML
 			end
 			output << STOP
 		end
+
+    def context
+      @parent.context
+    end
 
 		def entity( name )
 			@entities[name].unnormalized if @entities[name]
@@ -163,6 +180,20 @@ module REXML
 		end
 	end
 
+	class ExternalEntity < Child
+		def initialize( src )
+			super()
+			@entity = src
+		end
+		def to_s
+			@entity
+		end
+		def write( output, indent )
+			output << @entity
+			output << "\n"
+		end
+	end
+
 	class NotationDecl < Child
 		def initialize name, middle, rest
 			@name = name
@@ -171,7 +202,7 @@ module REXML
 		end
 
 		def to_s
-			"<!NOTATION #@name #@middle #@rest>"
+			"<!NOTATION #@name '#@middle #@rest'>"
 		end
 
 		def write( output, indent=-1 )

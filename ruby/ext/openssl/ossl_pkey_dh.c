@@ -1,5 +1,5 @@
 /*
- * $Id: ossl_pkey_dh.c,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+ * $Id: ossl_pkey_dh.c,v 1.4.2.2 2004/06/30 18:34:59 gotoyuzo Exp $
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2001-2002  Michal Rokos <m.rokos@sh.cvut.cz>
  * All rights reserved.
@@ -19,7 +19,14 @@
     } \
 } while (0)
 
-#define DH_PRIVATE(dh) ((dh)->priv_key)
+#define DH_HAS_PRIVATE(dh) ((dh)->priv_key)
+
+#ifdef OSSL_ENGINE_ENABLED
+#  define DH_PRIVATE(dh) (DH_HAS_PRIVATE(dh) || (dh)->engine)
+#else
+#  define DH_PRIVATE(dh) DH_HAS_PRIVATE(dh)
+#endif
+
 
 /*
  * Classes
@@ -74,34 +81,16 @@ ossl_dh_new(EVP_PKEY *pkey)
 /*
  * Private
  */
-/*
- * CB for yielding when generating DH params
- */
-static void
-ossl_dh_generate_cb(int p, int n, void *arg)
-{
-    VALUE ary;
-
-    ary = rb_ary_new2(2);
-    rb_ary_store(ary, 0, INT2NUM(p));
-    rb_ary_store(ary, 1, INT2NUM(n));
-
-    rb_yield(ary);
-}
-
 static DH *
 dh_generate(int size, int gen)
 {
     DH *dh;
-    void (*cb)(int, int, void *) = NULL;
+    
+    dh = DH_generate_parameters(size, gen,
+	    rb_block_given_p() ? ossl_generate_cb : NULL,
+	    NULL);
+    if (!dh) return 0;
 
-    if (rb_block_given_p()) {
-	cb = ossl_dh_generate_cb;
-    }
-    /* arg to cb = NULL */
-    if (!(dh = DH_generate_parameters(size, gen, cb, NULL))) {
-	return 0;
-    }
     if (!DH_generate_key(dh)) {
 	DH_free(dh);
 	return 0;
@@ -137,32 +126,34 @@ ossl_dh_initialize(int argc, VALUE *argv, VALUE self)
     DH *dh;
     int g = 2;
     BIO *in;
-    VALUE buffer, gen;
+    VALUE arg, gen;
 
     GetPKey(self, pkey);
-    rb_scan_args(argc, argv, "11", &buffer, &gen);
-    if (FIXNUM_P(buffer)) {
+    if(rb_scan_args(argc, argv, "02", &arg, &gen) == 0) {
+      dh = DH_new();
+    }
+    else if (FIXNUM_P(arg)) {
 	if (!NIL_P(gen)) {
 	    g = FIX2INT(gen);
 	}
-	if (!(dh = dh_generate(FIX2INT(buffer), g))) {
+	if (!(dh = dh_generate(FIX2INT(arg), g))) {
 	    ossl_raise(eDHError, NULL);
 	}
-    } else {
-	StringValue(buffer);
-	in = BIO_new_mem_buf(RSTRING(buffer)->ptr, RSTRING(buffer)->len);
-	if (!in){
-	    ossl_raise(eDHError, NULL);
-	}
-	if (!(dh = PEM_read_bio_DHparams(in, NULL, NULL, NULL))) {
-	    BIO_free(in);
-	    ossl_raise(eDHError, NULL);
+    }
+    else {
+	arg = ossl_to_der_if_possible(arg);
+	in = ossl_obj2bio(arg);
+	dh = PEM_read_bio_DHparams(in, NULL, NULL, NULL);
+	if (!dh){
+	    BIO_reset(in);
+	    dh = d2i_DHparams_bio(in, NULL);
 	}
 	BIO_free(in);
+	if (!dh) ossl_raise(eDHError, NULL);
     }
     if (!EVP_PKEY_assign_DH(pkey, dh)) {
 	DH_free(dh);
-	ossl_raise(eRSAError, NULL);
+	ossl_raise(eDHError, NULL);
     }
     return self;
 }
@@ -195,7 +186,6 @@ ossl_dh_export(VALUE self)
 {
     EVP_PKEY *pkey;
     BIO *out;
-    BUF_MEM *buf;
     VALUE str;
 
     GetPKeyDH(self, pkey);
@@ -206,9 +196,27 @@ ossl_dh_export(VALUE self)
 	BIO_free(out);
 	ossl_raise(eDHError, NULL);
     }
-    BIO_get_mem_ptr(out, &buf);
-    str = rb_str_new(buf->data, buf->length);
-    BIO_free(out);
+    str = ossl_membio2str(out);
+
+    return str;
+}
+
+static VALUE
+ossl_dh_to_der(VALUE self)
+{       
+    EVP_PKEY *pkey;
+    unsigned char *p;
+    long len;
+    VALUE str;
+
+    GetPKeyDH(self, pkey);
+    if((len = i2d_DHparams(pkey->pkey.dh, NULL)) <= 0)
+	ossl_raise(eDHError, NULL);
+    str = rb_str_new(0, len);
+    p = RSTRING(str)->ptr;
+    if(i2d_DHparams(pkey->pkey.dh, &p) < 0)
+	ossl_raise(eDHError, NULL);
+    ossl_str_adjust(str, p);
 
     return str;
 }
@@ -246,7 +254,6 @@ ossl_dh_to_text(VALUE self)
 {
     EVP_PKEY *pkey;
     BIO *out;
-    BUF_MEM *buf;
     VALUE str;
 
     GetPKeyDH(self, pkey);
@@ -257,9 +264,7 @@ ossl_dh_to_text(VALUE self)
 	BIO_free(out);
 	ossl_raise(eDHError, NULL);
     }
-    BIO_get_mem_ptr(out, &buf);
-    str = rb_str_new(buf->data, buf->length);
-    BIO_free(out);
+    str = ossl_membio2str(out);
 
     return str;
 }
@@ -324,27 +329,25 @@ ossl_dh_compute_key(VALUE self, VALUE pub)
     BIGNUM *pub_key;
     VALUE str;
     int len;
-    char *buf;
 
     GetPKeyDH(self, pkey);
     dh = pkey->pkey.dh;
     pub_key = GetBNPtr(pub);
-
     len = DH_size(dh);
-    if (!(buf = OPENSSL_malloc(len))) {
-	ossl_raise(eDHError, "Cannot allocate mem for shared secret");
-    }
-
-    if ((len = DH_compute_key(buf, pub_key, dh)) < 0) {
-	OPENSSL_free(buf);
+    str = rb_str_new(0, len);
+    if ((len = DH_compute_key(RSTRING(str)->ptr, pub_key, dh)) < 0) {
 	ossl_raise(eDHError, NULL);
     }
-
-    str = rb_str_new(buf, len);
-    OPENSSL_free(buf);
+    RSTRING(str)->len = len;
+    RSTRING(str)->ptr[len] = 0;
 
     return str;
 }
+
+OSSL_PKEY_BN(dh, p);
+OSSL_PKEY_BN(dh, g);
+OSSL_PKEY_BN(dh, pub_key);
+OSSL_PKEY_BN(dh, priv_key);
 
 /*
  * INIT
@@ -365,11 +368,17 @@ Init_ossl_dh()
     rb_define_method(cDH, "export", ossl_dh_export, 0);
     rb_define_alias(cDH, "to_pem", "export");
     rb_define_alias(cDH, "to_s", "export");
+    rb_define_method(cDH, "to_der", ossl_dh_to_der, 0);
     rb_define_method(cDH, "public_key", ossl_dh_to_public_key, 0);
 
     rb_define_method(cDH, "params_ok?", ossl_dh_check_params, 0);
     rb_define_method(cDH, "generate_key!", ossl_dh_generate_key, 0);
     rb_define_method(cDH, "compute_key", ossl_dh_compute_key, 1);
+
+    DEF_OSSL_PKEY_BN(cDH, dh, p);
+    DEF_OSSL_PKEY_BN(cDH, dh, g);
+    DEF_OSSL_PKEY_BN(cDH, dh, pub_key);
+    DEF_OSSL_PKEY_BN(cDH, dh, priv_key);
 
     rb_define_method(cDH, "params", ossl_dh_get_params, 0);
 }

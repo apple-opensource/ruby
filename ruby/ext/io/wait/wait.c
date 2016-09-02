@@ -2,8 +2,8 @@
 
   io/wait.c -
 
-  $Author: melville $
-  $Date: 2003/10/15 10:11:47 $
+  $Author: knu $
+  $Date: 2003/11/01 11:24:40 $
   created at: Tue Aug 28 09:08:06 JST 2001
 
   All the files in this distribution are covered under the Ruby's

@@ -42,13 +42,13 @@ module REXML
 			end
 
 			def write( output, indent )
-				output << ('   '*indent) if indent > 0
+        indent( output, indent )
 				output << to_s
 			end
 
 			def EntityDecl.parse_source source, listener
 				md = source.match( PATTERN_RE, true )
-				thing = md[0].squeeze " \t\n\r"
+				thing = md[0].squeeze(" \t\n\r")
 				listener.send inspect.downcase, thing 
 			end
 		end

@@ -1,7 +1,7 @@
 #
 # tmpdir - retrieve temporary directory path
 #
-# $Id: tmpdir.rb,v 1.1.1.1 2003/10/15 10:11:48 melville Exp $
+# $Id: tmpdir.rb,v 1.5 2003/07/26 15:38:58 eban Exp $
 #
 
 class Dir

@@ -2,8 +2,8 @@
 
   range.c -
 
-  $Author: melville $
-  $Date: 2003/10/15 10:11:46 $
+  $Author: matz $
+  $Date: 2004/10/19 10:25:20 $
   created at: Thu Aug 19 17:46:47 JST 1993
 
   Copyright (C) 1993-2003 Yukihiro Matsumoto
@@ -66,6 +66,15 @@ rb_range_new(beg, end, exclude_end)
     return range;
 }
 
+/*
+ *  call-seq:
+ *     Range.new(start, end, exclusive=false)    => range
+ *  
+ *  Constructs a range using the given <i>start</i> and <i>end</i>. If the third
+ *  parameter is omitted or is <code>false</code>, the <i>range</i> will include
+ *  the end object; otherwise, it will be excluded.
+ */
+
 static VALUE
 range_initialize(argc, argv, range)
     int argc;
@@ -83,12 +92,35 @@ range_initialize(argc, argv, range)
     return Qnil;
 }
 
+
+/*
+ *  call-seq:
+ *     rng.exclude_end?    => true or false
+ *  
+ *  Returns <code>true</code> if <i>rng</i> excludes its end value.
+ */
+
 static VALUE
 range_exclude_end_p(range)
     VALUE range;
 {
     return EXCL(range) ? Qtrue : Qfalse;
 }
+
+
+/*
+ *  call-seq:
+ *     rng == obj    => true or false
+ *  
+ *  Returns <code>true</code> only if <i>obj</i> is a Range, has equivalent
+ *  beginning and end items (by comparing them with <code>==</code>), and has
+ *  the same #exclude_end? setting as <i>rng</t>.
+ *     
+ *    (0..2) == (0..2)            #=> true
+ *    (0..2) == Range.new(0,2)    #=> true
+ *    (0..2) == (0...2)           #=> false
+ *     
+ */
 
 static VALUE
 range_eq(range, obj)
@@ -123,13 +155,30 @@ static int
 r_le(a, b)
     VALUE a, b;
 {
+    int c;
     VALUE r = rb_funcall(a, id_cmp, 1, b);
 
     if (NIL_P(r)) return Qfalse;
-    if (rb_cmpint(r, a, b) <= 0) return Qtrue;
+    c = rb_cmpint(r, a, b);
+    if (c == 0) return INT2FIX(0);
+    if (c < 0) return Qtrue;
     return Qfalse;
 }
 
+
+/*
+ *  call-seq:
+ *     rng.eql?(obj)    => true or false
+ *  
+ *  Returns <code>true</code> only if <i>obj</i> is a Range, has equivalent
+ *  beginning and end items (by comparing them with #eql?), and has the same
+ *  #exclude_end? setting as <i>rng</i>.
+ *     
+ *    (0..2) == (0..2)            #=> true
+ *    (0..2) == Range.new(0,2)    #=> true
+ *    (0..2) == (0...2)           #=> false
+ *     
+ */
 
 static VALUE
 range_eql(range, obj)
@@ -148,6 +197,15 @@ range_eql(range, obj)
 
     return Qtrue;
 }
+
+/*
+ * call-seq:
+ *   rng.hash    => fixnum
+ *
+ * Generate a hash value such that two ranges with the same start and
+ * end points, and the same value for the "exclude end" flag, generate
+ * the same hash value.
+ */
 
 static VALUE
 range_hash(range)
@@ -172,6 +230,30 @@ str_step(args)
     return rb_str_upto(args[0], args[1], EXCL(args[2]));
 }
 
+static void
+range_each_func(range, func, v, e, arg)
+    VALUE range;
+    void (*func) _((VALUE, void*));
+    VALUE v, e;
+    void *arg;
+{
+    int c;
+
+    if (EXCL(range)) {
+	while (r_lt(v, e)) {
+	    (*func)(v, arg);
+	    v = rb_funcall(v, id_succ, 0, 0);
+	}
+    }
+    else {
+	while (RTEST(c = r_le(v, e))) {
+	    (*func)(v, arg);
+	    if (c == INT2FIX(0)) break;
+	    v = rb_funcall(v, id_succ, 0, 0);
+	}
+    }
+}
+
 static VALUE
 step_i(i, iter)
     VALUE i;
@@ -185,26 +267,33 @@ step_i(i, iter)
     return Qnil;
 }
 
-static void
-range_each_func(range, func, v, e, arg)
-    VALUE range;
-    VALUE (*func) _((VALUE, void*));
-    VALUE v, e;
-    void *arg;
-{
-    if (EXCL(range)) {
-	while (r_lt(v, e)) {
-	    (*func)(v, arg);
-	    v = rb_funcall(v, id_succ, 0, 0);
-	}
-    }
-    else {
-	while (r_le(v, e)) {
-	    (*func)(v, arg);
-	    v = rb_funcall(v, id_succ, 0, 0);
-	}
-    }
-}
+/*
+ *  call-seq:
+ *     rng.step(n=1) {| obj | block }    => rng
+ *  
+ *  Iterates over <i>rng</i>, passing each <i>n</i>th element to the block. If
+ *  the range contains numbers or strings, natural ordering is used.  Otherwise
+ *  <code>step</code> invokes <code>succ</code> to iterate through range
+ *  elements. The following code uses class <code>Xs</code>, which is defined
+ *  in the class-level documentation.
+ *     
+ *     range = Xs.new(1)..Xs.new(10)
+ *     range.step(2) {|x| puts x}
+ *     range.step(3) {|x| puts x}
+ *     
+ *  <em>produces:</em>
+ *     
+ *      1 x
+ *      3 xxx
+ *      5 xxxxx
+ *      7 xxxxxxx
+ *      9 xxxxxxxxx
+ *      1 x
+ *      4 xxxx
+ *      7 xxxxxxx
+ *     10 xxxxxxxxxx
+ */
+
 
 static VALUE
 range_step(argc, argv, range)
@@ -246,7 +335,8 @@ range_step(argc, argv, range)
 	    if (unit == 0) rb_raise(rb_eArgError, "step can't be 0");
 	    args[0] = b; args[1] = e; args[2] = range;
 	    iter[0] = 1; iter[1] = unit;
-	    rb_iterate((VALUE(*)_((VALUE)))str_step, (VALUE)args, step_i, (VALUE)iter);
+	    rb_iterate((VALUE(*)_((VALUE)))str_step, (VALUE)args, step_i,
+			(VALUE)iter);
 	}
 	else if (rb_obj_is_kind_of(b, rb_cNumeric)) {
 	    ID c = rb_intern(EXCL(range) ? "<" : "<=");
@@ -274,13 +364,31 @@ range_step(argc, argv, range)
     return range;
 }
 
-static VALUE
+static void
 each_i(v, arg)
     VALUE v;
     void *arg;
 {
-    return rb_yield(v);
+    rb_yield(v);
 }
+
+/*
+ *  call-seq:
+ *     rng.each {| i | block } => rng
+ *  
+ *  Iterates over the elements <i>rng</i>, passing each in turn to the
+ *  block. You can only iterate if the start object of the range
+ *  supports the +succ+ method (which means that you can't iterate over
+ *  ranges of +Float+ objects).
+ *     
+ *     (10..15).each do |n|
+ *        print n, ' '
+ *     end
+ *     
+ *  <em>produces:</em>
+ *     
+ *     10 11 12 13 14 15
+ */
 
 static VALUE
 range_each(range)
@@ -310,7 +418,8 @@ range_each(range)
 
 	args[0] = beg; args[1] = end; args[2] = range;
 	iter[0] = 1; iter[1] = 1;
-	rb_iterate((VALUE(*)_((VALUE)))str_step, (VALUE)args, step_i, (VALUE)iter);
+	rb_iterate((VALUE(*)_((VALUE)))str_step, (VALUE)args, step_i,
+		   (VALUE)iter);
     }
     else {
 	range_each_func(range, each_i, beg, end, NULL);
@@ -318,12 +427,33 @@ range_each(range)
     return range;
 }
 
+/*
+ *  call-seq:
+ *     rng.first    => obj
+ *     rng.begin    => obj
+ *  
+ *  Returns the first object in <i>rng</i>.
+ */
+
 static VALUE
 range_first(range)
     VALUE range;
 {
     return rb_ivar_get(range, id_beg);
 }
+
+
+/*
+ *  call-seq:
+ *     rng.end    => obj
+ *     rng.last   => obj
+ *  
+ *  Returns the object that defines the end of <i>rng</i>.
+ *     
+ *     (1..10).end    #=> 10
+ *     (1...10).end   #=> 10
+ */
+
 
 static VALUE
 range_last(range)
@@ -352,14 +482,12 @@ rb_range_beg_len(range, begp, lenp, len, err)
     }
     if (err == 0 || err == 2) {
 	if (beg > len) goto out_of_range;
-	if (end > len)
-	    end = len;
+	if (end > len) end = len;
     }
     if (end < 0) end += len;
     if (!EXCL(range)) end++;	/* include end point */
-    if (end < 0) goto out_of_range;
     len = end - beg;
-    if (len < 0) goto out_of_range;
+    if (len < 0) len = 0;
 
     *begp = beg;
     *lenp = len;
@@ -372,6 +500,13 @@ rb_range_beg_len(range, begp, lenp, len, err)
     }
     return Qnil;
 }
+
+/*
+ * call-seq:
+ *   rng.to_s   => string
+ *
+ * Convert this range object to a printable form.
+ */
 
 static VALUE
 range_to_s(range)
@@ -389,6 +524,16 @@ range_to_s(range)
     return str;
 }
 
+/*
+ * call-seq:
+ *   rng.inspect  => string
+ *
+ * Convert this range object to a printable form (using 
+ * <code>inspect</code> to convert the start and end
+ * objects).
+ */
+
+
 static VALUE
 range_inspect(range)
     VALUE range;
@@ -405,35 +550,27 @@ range_inspect(range)
     return str;
 }
 
-static void
-member_i(v, args)
-    VALUE v;
-    VALUE *args;
-{
-    if (rb_equal(v, args[0])) {
-	args[1] = Qtrue;
-    }
-}
-
-static VALUE
-range_member(range, val)
-    VALUE range, val;
-{
-    VALUE beg, end;
-    VALUE args[2];
-
-    beg = rb_ivar_get(range, id_beg);
-    end = rb_ivar_get(range, id_end);
-
-    if (!rb_respond_to(beg, id_succ)) {
-	rb_raise(rb_eTypeError, "cannot iterate from %s",
-		 rb_obj_classname(beg));
-    }
-    args[0] = val;
-    args[1] = Qfalse;
-    range_each_func(range, member_i, beg, end, args);
-    return args[1];
-}
+/*
+ *  call-seq:
+ *     rng === obj       =>  true or false
+ *     rng.member?(val)  =>  true or false
+ *     rng.include?(val) =>  true or false
+ *  
+ *  Returns <code>true</code> if <i>obj</i> is an element of
+ *  <i>rng</i>, <code>false</code> otherwise. Conveniently,
+ *  <code>===</code> is the comparison operator used by
+ *  <code>case</code> statements.
+ *     
+ *     case 79
+ *     when 1..50   then   print "low\n"
+ *     when 51..75  then   print "medium\n"
+ *     when 76..100 then   print "high\n"
+ *     end
+ *     
+ *  <em>produces:</em>
+ *     
+ *     high
+ */
 
 static VALUE
 range_include(range, val)
@@ -453,6 +590,59 @@ range_include(range, val)
     }
     return Qfalse;
 }
+
+
+/*  A <code>Range</code> represents an interval---a set of values with a
+ *  start and an end. Ranges may be constructed using the
+ *  <em>s</em><code>..</code><em>e</em> and
+ *  <em>s</em><code>...</code><em>e</em> literals, or with
+ *  <code>Range::new</code>. Ranges constructed using <code>..</code>
+ *  run from the start to the end inclusively. Those created using
+ *  <code>...</code> exclude the end value. When used as an iterator,
+ *  ranges return each value in the sequence.
+ *     
+ *     (-1..-5).to_a      #=> []
+ *     (-5..-1).to_a      #=> [-5, -4, -3, -2, -1]
+ *     ('a'..'e').to_a    #=> ["a", "b", "c", "d", "e"]
+ *     ('a'...'e').to_a   #=> ["a", "b", "c", "d"]
+ *     
+ *  Ranges can be constructed using objects of any type, as long as the
+ *  objects can be compared using their <code><=></code> operator and
+ *  they support the <code>succ</code> method to return the next object
+ *  in sequence.
+ *     
+ *     class Xs                # represent a string of 'x's
+ *       include Comparable
+ *       attr :length
+ *       def initialize(n)
+ *         @length = n
+ *       end
+ *       def succ
+ *         Xs.new(@length + 1)
+ *       end
+ *       def <=>(other)
+ *         @length <=> other.length
+ *       end
+ *       def to_s
+ *         sprintf "%2d #{inspect}", @length
+ *       end
+ *       def inspect
+ *         'x' * @length
+ *       end
+ *     end
+ *     
+ *     r = Xs.new(3)..Xs.new(6)   #=> xxx..xxxxxx
+ *     r.to_a                     #=> [xxx, xxxx, xxxxx, xxxxxx]
+ *     r.member?(Xs.new(5))       #=> true
+ *     
+ *  In the previous code example, class <code>Xs</code> includes the
+ *  <code>Comparable</code> module. This is because
+ *  <code>Enumerable#member?</code> checks for equality using
+ *  <code>==</code>. Including <code>Comparable</code> ensures that the
+ *  <code>==</code> method is defined in terms of the <code><=></code>
+ *  method implemented in <code>Xs</code>.
+ *     
+ */
 
 void
 Init_Range()
@@ -475,7 +665,7 @@ Init_Range()
 
     rb_define_method(rb_cRange, "exclude_end?", range_exclude_end_p, 0);
 
-    rb_define_method(rb_cRange, "member?", range_member, 1);
+    rb_define_method(rb_cRange, "member?", range_include, 1);
     rb_define_method(rb_cRange, "include?", range_include, 1);
 
     id_cmp = rb_intern("<=>");

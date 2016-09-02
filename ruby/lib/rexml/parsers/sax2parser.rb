@@ -1,3 +1,7 @@
+require 'rexml/parsers/baseparser'
+require 'rexml/parseexception'
+require 'rexml/namespace'
+
 module REXML
 	module Parsers
 		class SAX2Parser
@@ -10,6 +14,10 @@ module REXML
 				@tag_stack = []
 			end
 			
+      def add_listener( listener )
+        @parser.add_listener( listener )
+      end
+
 			# Listen arguments:
 			#
 			# Symbol, Array, Block
@@ -41,7 +49,7 @@ module REXML
 					if args.size == 2
 						args[1].each { |match| @procs << [args[0], match, blok] }
 					else
-						add( [args[0], /.*/, blok] )
+						add( [args[0], nil, blok] )
 					end
 				elsif args[0].kind_of? Array
 					if args.size == 2
@@ -50,7 +58,7 @@ module REXML
 						args[0].each { |match| add( [ :start_element, match, blok ] ) }
 					end
 				else
-					add([nil, /.*/, args[0]])
+					add([nil, nil, args[0]])
 				end
 			end
 			
@@ -85,7 +93,8 @@ module REXML
 						if procs or listeners
 							# break out the namespace declarations
 							# The attributes live in event[2]
-							nsdecl = event[2].find_all { |n, value| n =~ /^xmlns:/ }
+							event[2].each {|n, v| event[2][n] = @parser.normalize(v)}
+							nsdecl = event[2].find_all { |n, value| n =~ /^xmlns(:|$)/ }
 							nsdecl.collect! { |n, value| [ n[6..-1], value ] }
 							@namespace_stack.push({})
 							nsdecl.each do |n,v|
@@ -160,9 +169,10 @@ module REXML
 			def get_procs( symbol, name )
 				return nil if @procs.size == 0
 				@procs.find_all do |sym, match, block|
+          #puts sym.inspect+"=="+symbol.inspect+ "\t"+match.inspect+"=="+name.inspect+ "\t"+( (sym.nil? or symbol == sym) and ((name.nil? and match.nil?) or match.nil? or ( (name == match) or (match.kind_of? Regexp and name =~ match)))).to_s
 					(
 						(sym.nil? or symbol == sym) and 
-						(name.nil? or (
+						((name.nil? and match.nil?) or match.nil? or (
 							(name == match) or
 							(match.kind_of? Regexp and name =~ match)
 							)
@@ -175,7 +185,7 @@ module REXML
 				@listeners.find_all do |sym, match, block|
 					(
 						(sym.nil? or symbol == sym) and 
-						(name.nil? or (
+						((name.nil? and match.nil?) or match.nil? or (
 							(name == match) or
 							(match.kind_of? Regexp and name =~ match)
 							)
@@ -194,10 +204,9 @@ module REXML
 			end
 
 			def get_namespace( prefix ) 
-				uri = @namespace_stack.find do |ns|
-					not ns[prefix].nil?
-				end
-				uri[prefix] unless uri.nil?
+        uris = (@namespace_stack.find_all { |ns| not ns[prefix].nil? }) ||
+					(@namespace_stack.find { |ns| not ns[nil].nil? })
+				uris[-1][prefix] unless uris.nil? or 0 == uris.size
 			end
 		end
 	end

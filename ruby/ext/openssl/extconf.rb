@@ -11,7 +11,7 @@
   (See the file 'LICENCE'.)
 
 = Version
-  $Id: extconf.rb,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+  $Id: extconf.rb,v 1.21.2.3 2004/07/01 03:01:07 gotoyuzo Exp $
 =end
 
 require "mkmf"
@@ -33,13 +33,12 @@ if with_config("debug") or enable_config("debug")
   end
 end
 
-
-
 message "=== Checking for system dependent stuff... ===\n"
 have_library("nsl", "t_open")
 have_library("socket", "socket")
 have_header("unistd.h")
 have_header("sys/time.h")
+have_header("assert.h")
 
 message "=== Checking for required stuff... ===\n"
 if $mingw
@@ -57,36 +56,61 @@ if !result
   end
 end
 
+unless have_header("openssl/conf_api.h")
+  message "OpenSSL 0.9.6 or later required.\n"
+  exit 1
+end
+
 message "=== Checking for OpenSSL features... ===\n"
+have_func("BN_mod_add")
+have_func("BN_mod_sqr")
+have_func("BN_mod_sub")
+have_func("BN_pseudo_rand_range")
+have_func("BN_rand_range")
+have_func("CONF_get1_default_config_file")
+have_func("EVP_CIPHER_CTX_copy")
+have_func("EVP_CIPHER_CTX_set_padding")
+have_func("EVP_CipherFinal_ex")
+have_func("EVP_CipherInit_ex")
+have_func("EVP_DigestFinal_ex")
+have_func("EVP_DigestInit_ex")
+have_func("EVP_MD_CTX_cleanup")
+have_func("EVP_MD_CTX_create")
+have_func("EVP_MD_CTX_destroy")
+have_func("EVP_MD_CTX_init")
+have_func("HMAC_CTX_cleanup")
 have_func("HMAC_CTX_copy")
+have_func("HMAC_CTX_init")
+have_func("PEM_def_callback")
+have_func("X509V3_set_nconf")
+have_func("X509_CRL_add0_revoked")
+have_func("X509_CRL_set_issuer_name")
+have_func("X509_CRL_set_version")
+have_func("X509_CRL_sort")
 have_func("X509_STORE_get_ex_data")
 have_func("X509_STORE_set_ex_data")
-have_func("EVP_MD_CTX_create")
-have_func("EVP_MD_CTX_cleanup")
-have_func("EVP_MD_CTX_destroy")
-have_func("PEM_def_callback")
-have_func("EVP_MD_CTX_init")
-have_func("HMAC_CTX_init")
-have_func("HMAC_CTX_cleanup")
-have_func("X509_CRL_set_version")
-have_func("X509_CRL_set_issuer_name")
-have_func("X509_CRL_sort")
-have_func("X509_CRL_add0_revoked")
-have_func("CONF_get1_default_config_file")
-have_func("BN_mod_sqr")
-have_func("BN_mod_add")
-have_func("BN_mod_sub")
-have_func("BN_rand_range")
-have_func("BN_pseudo_rand_range")
-have_func("CONF_get1_default_config_file")
-if try_cpp("#define FOO(a, ...) foo(a, ##__VA_ARGS__)\n int x(){FOO(1,2);}\n")
+if try_compile("#define FOO(a, ...) foo(a, ##__VA_ARGS__)\n int x(){FOO(1);FOO(1,2);FOO(1,2,3);}\n")
   $defs.push("-DHAVE_VA_ARGS_MACRO")
 end
-have_header("openssl/ocsp.h")
+if have_header("openssl/engine.h")
+  have_func("ENGINE_add")
+  have_func("ENGINE_load_builtin_engines")
+  have_func("ENGINE_load_openbsd_dev_crypto")
+  have_func("ENGINE_get_digest")
+  have_func("ENGINE_get_cipher")
+  have_func("ENGINE_cleanup")
+end
+if try_compile(<<SRC)
+#include <openssl/opensslv.h>
+#if OPENSSL_VERSION_NUMBER < 0x00907000L
+# error "OpenSSL version is less than 0.9.7."
+#endif
+SRC
+  have_header("openssl/ocsp.h")
+end
 have_struct_member("EVP_CIPHER_CTX", "flags", "openssl/evp.h")
-
-message "=== Checking for Ruby features... ===\n"
-have_func("rb_obj_init_copy", "ruby.h")
+have_struct_member("EVP_CIPHER_CTX", "engine", "openssl/evp.h")
+have_struct_member("X509_ATTRIBUTE", "single", "openssl/x509.h")
 
 message "=== Checking done. ===\n"
 $distcleanfiles << "GNUmakefile" << "dep"
@@ -103,8 +127,8 @@ test-link: $(OBJS)
 	@$(RM) .testlink
 	@echo "Done."
 
-dep: $(SRCS)
-	$(CC) $(CFLAGS) $(CPPFLAGS) -c $^ -MM | \\
+dep:
+	$(CC) $(CFLAGS) $(CPPFLAGS) -c $(SRCS) -MM | \\
 	$(RUBY) -p -e 'BEGIN{S = []' \\
 		-e 'while !ARGV.empty? and /^(\\w+)=(.*)/ =~ ARGV[0]' \\
 		  -e 'S << [/\#{Regexp.quote($$2)}\\//, "$$(\#{$$1})/"]' \\

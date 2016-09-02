@@ -72,13 +72,15 @@ module WEBrick
       def make_partial_content(req, res, filename, filesize)
         mtype = HTTPUtils::mime_type(filename, @config[:MimeTypes])
         unless ranges = HTTPUtils::parse_range_header(req['range'])
-          raise BadRequest, "Unrecognized range-spec: \"#{range}\""
+          raise HTTPStatus::BadRequest,
+            "Unrecognized range-spec: \"#{req['range']}\""
         end
         open(filename, "rb"){|io|
           if ranges.size > 1
+            time = Time.now
             boundary = "#{time.sec}_#{time.usec}_#{Process::pid}"
             body = ''
-            ranges.each{|r|
+            ranges.each{|range|
               first, last = prepare_range(range, filesize)
               next if first < 0
               io.pos = first
@@ -92,6 +94,8 @@ module WEBrick
             }
             raise HTTPStatus::RequestRangeNotSatisfiable if body.empty?
             body << "--" << boundary << "--" << CRLF
+            res["content-type"] = "multipart/byteranges; boundary=#{boundary}"
+            res.body = body
           elsif range = ranges[0]
             first, last = prepare_range(range, filesize)
             raise HTTPStatus::RequestRangeNotSatisfiable if first < 0
@@ -122,7 +126,7 @@ module WEBrick
     end
 
     class FileHandler < AbstractServlet
-      HandlerTable = Hash.new(DefaultFileHandler)
+      HandlerTable = Hash.new
 
       def self.add_handler(suffix, handler)
         HandlerTable[suffix] = handler
@@ -135,7 +139,7 @@ module WEBrick
       def initialize(server, root, options={}, default=Config::FileHandler)
         @config = server.config
         @logger = @config[:Logger]
-        @root = root
+        @root = File.expand_path(root)
         if options == true || options == false
           options = { :FancyIndexing => options }
         end
@@ -197,8 +201,7 @@ module WEBrick
       def exec_handler(req, res)
         raise HTTPStatus::NotFound, "`#{req.path}' not found" unless @root
         if set_filename(req, res)
-          suffix = (/\.(\w+)$/ =~ res.filename) && $1
-          handler = @options[:HandlerTable][suffix] || HandlerTable[suffix]
+          handler = get_handler(req)
           call_callback(:HandlerCallback, req, res)
           h = handler.get_instance(@config, res.filename)
           h.service(req, res)
@@ -208,45 +211,110 @@ module WEBrick
         return false
       end
 
+      def get_handler(req)
+        suffix1 = (/\.(\w+)$/ =~ req.script_name) && $1.downcase
+        suffix2 = (/\.(\w+)\.[\w\-]+$/ =~ req.script_name) && $1.downcase
+        handler_table = @options[:HandlerTable]
+        return handler_table[suffix1] || handler_table[suffix2] ||
+               HandlerTable[suffix1] || HandlerTable[suffix2] ||
+               DefaultFileHandler
+      end
+
       def set_filename(req, res)
-        handler = nil
         res.filename = @root.dup
         path_info = req.path_info.scan(%r|/[^/]*|)
 
-        while name = path_info.shift
-          if name == "/"
-            indices = @config[:DirectoryIndex]
-            index = indices.find{|i| FileTest::file?("#{res.filename}/#{i}") }
-            name = "/#{index}" if index
-          end
-          res.filename << name
-          req.script_name << name
-          req.path_info = path_info.join
+        path_info.unshift("")  # dummy for checking @root dir
+        while base = path_info.first
+          check_filename(req, res, base)
+          break if base == "/"
+          break unless File.directory?(res.filename + base)
+          shift_path_info(req, res, path_info)
+          call_callback(:DirectoryCallback, req, res)
+        end
 
-          if File::fnmatch("/#{@options[:NondisclosureName]}", name)
-            @logger.log(Log::WARN,
-               "the request refers nondisclosure name `#{name}'.")
-            raise HTTPStatus::Forbidden, "`#{req.path}' not found."
-          end
-          st = (File::stat(res.filename) rescue nil)
-          raise HTTPStatus::NotFound, "`#{req.path}' not found." unless st
-          raise HTTPStatus::Forbidden,
-            "no access permission to `#{req.path}'." unless st.readable?
-
-          if st.directory?
-            call_callback(:DirectoryCallback, req, res)
-          else
+        if base = path_info.first
+          check_filename(req, res, base)
+          if base == "/"
+            if file = search_index_file(req, res)
+              shift_path_info(req, res, path_info, file)
+              call_callback(:FileCallback, req, res)
+              return true
+            end
+            shift_path_info(req, res, path_info)
+          elsif file = search_file(req, res, base)
+            shift_path_info(req, res, path_info, file)
             call_callback(:FileCallback, req, res)
             return true
+          else
+            raise HTTPStatus::NotFound, "`#{req.path}' not found."
           end
         end
+
         return false
+      end
+
+      def check_filename(req, res, name)
+        @options[:NondisclosureName].each{|pattern|
+          if File.fnmatch("/#{pattern}", name)
+            @logger.warn("the request refers nondisclosure name `#{name}'.")
+            raise HTTPStatus::NotFound, "`#{req.path}' not found."
+          end
+        }
+      end
+
+      def shift_path_info(req, res, path_info, base=nil)
+        tmp = path_info.shift
+        base = base || tmp
+        req.path_info = path_info.join
+        req.script_name << base
+        res.filename << base
+      end
+
+      def search_index_file(req, res)
+        @config[:DirectoryIndex].each{|index|
+          if file = search_file(req, res, "/"+index)
+            return file
+          end
+        }
+        return nil
+      end
+
+      def search_file(req, res, basename)
+        langs = @options[:AcceptableLanguages]
+        path = res.filename + basename
+        if File.file?(path)
+          return basename
+        elsif langs.size > 0
+          req.accept_language.each{|lang|
+            path_with_lang = path + ".#{lang}"
+            if langs.member?(lang) && File.file?(path_with_lang)
+              return basename + ".#{lang}"
+            end
+          }
+          (langs - req.accept_language).each{|lang|
+            path_with_lang = path + ".#{lang}"
+            if File.file?(path_with_lang)
+              return basename + ".#{lang}"
+            end
+          }
+        end
+        return nil
       end
 
       def call_callback(callback_name, req, res)
         if cb = @options[callback_name]
           cb.call(req, res)
         end
+      end
+
+      def nondisclosure_name?(name)
+        @options[:NondisclosureName].each{|pattern|
+          if File.fnmatch(pattern, name)
+            return true
+          end
+        }
+        return false
       end
 
       def set_dir_list(req, res)
@@ -257,7 +325,7 @@ module WEBrick
         local_path = res.filename
         list = Dir::entries(local_path).collect{|name|
           next if name == "." || name == ".."
-          next if File::fnmatch(@options[:NondisclosureName], name)
+          next if nondisclosure_name?(name)
           st = (File::stat(local_path + name) rescue nil)
           if st.nil?
             [ name, nil, -1 ]
@@ -318,7 +386,7 @@ module WEBrick
         res.body << <<-_end_of_html_    
     <ADDRESS>
      #{HTMLUtils::escape(@config[:ServerSoftware])}<BR>
-     at #{req.request_uri.host}:#{@config[:Port]}
+     at #{req.host}:#{req.port}
     </ADDRESS>
   </BODY>
 </HTML>

@@ -1,5 +1,5 @@
 /*
- * $Id: ossl_ocsp.c,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+ * $Id: ossl_ocsp.c,v 1.4.2.1 2004/12/15 01:54:39 matz Exp $
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2003  Michal Rokos <m.rokos@sh.cvut.cz>
  * Copyright (C) 2003  GOTOU Yuuzou <gotoyuzo@notwork.org>
@@ -98,22 +98,22 @@ ossl_ocspreq_alloc(VALUE klass)
 
     return obj;
 }
-DEFINE_ALLOC_WRAPPER(ossl_ocspreq_alloc)
 
 static VALUE
 ossl_ocspreq_initialize(int argc, VALUE *argv, VALUE self)
 {
     VALUE arg;
-    BIO *bio;
+    unsigned char *p;
 
     rb_scan_args(argc, argv, "01", &arg);
     if(!NIL_P(arg)){
-	bio = ossl_obj2bio(arg);
-	if(!d2i_OCSP_REQUEST_bio(bio, (OCSP_REQUEST**)&DATA_PTR(self))){
-	    BIO_free(bio);
+	arg = ossl_to_der_if_possible(arg);
+	StringValue(arg);
+	p = (unsigned char*)RSTRING(arg)->ptr;
+	if(!d2i_OCSP_REQUEST((OCSP_REQUEST**)&DATA_PTR(self), &p,
+			     RSTRING(arg)->len)){
 	    ossl_raise(eOCSPError, "cannot load DER encoded request");
 	}
-	BIO_free(bio);
     }
 
     return self;
@@ -127,11 +127,13 @@ ossl_ocspreq_add_nonce(int argc, VALUE *argv, VALUE self)
     int ret;
 
     rb_scan_args(argc, argv, "01", &val);
-    GetOCSPReq(self, req);
-    if(NIL_P(val))
+    if(NIL_P(val)) {
+	GetOCSPReq(self, req);
 	ret = OCSP_request_add1_nonce(req, NULL, -1);
+    }
     else{
 	StringValue(val);
+	GetOCSPReq(self, req);
 	ret = OCSP_request_add1_nonce(req, RSTRING(val)->ptr, RSTRING(val)->len);
     }
     if(!ret) ossl_raise(eOCSPError, NULL);
@@ -211,10 +213,9 @@ ossl_ocspreq_sign(int argc, VALUE *argv, VALUE self)
     EVP_PKEY *key;
     STACK_OF(X509) *x509s;
     unsigned long flg;
-    int ret, status = 0;
+    int ret;
 
     rb_scan_args(argc, argv, "22", &signer_cert, &signer_key, &certs, &flags);
-    GetOCSPReq(self, req);
     signer = GetX509CertPtr(signer_cert);
     key = GetPrivPKeyPtr(signer_key);
     flg = NIL_P(flags) ? 0 : NUM2INT(flags);
@@ -222,11 +223,8 @@ ossl_ocspreq_sign(int argc, VALUE *argv, VALUE self)
 	x509s = sk_X509_new_null();
 	flags |= OCSP_NOCERTS;
     }
-    else x509s = ossl_protect_x509_ary2sk(certs, &status);
-    if(status){
-	sk_X509_pop_free(x509s, X509_free);
-	rb_jump_tag(status);
-    }
+    else x509s = ossl_x509_ary2sk(certs);
+    GetOCSPReq(self, req);
     ret = OCSP_request_sign(req, signer, key, EVP_sha1(), x509s, flg);
     sk_X509_pop_free(x509s, X509_free);
     if(!ret) ossl_raise(eOCSPError, NULL);
@@ -244,10 +242,10 @@ ossl_ocspreq_verify(int argc, VALUE *argv, VALUE self)
     int flg, result;
 
     rb_scan_args(argc, argv, "21", &certs, &store, &flags);
-    GetOCSPReq(self, req);
     x509st = GetX509StorePtr(store);
     flg = NIL_P(flags) ? 0 : INT2NUM(flags);
     x509s = ossl_x509_ary2sk(certs);
+    GetOCSPReq(self, req);
     result = OCSP_request_verify(req, x509s, x509st, flg);
     sk_X509_pop_free(x509s, X509_free);
     if(!result) rb_warn("%s", ERR_error_string(ERR_peek_error(), NULL));
@@ -259,16 +257,18 @@ static VALUE
 ossl_ocspreq_to_der(VALUE self)
 {
     OCSP_REQUEST *req;
-    BIO *bio;
     VALUE str;
-    int status = 0;
+    unsigned char *p;
+    long len;
 
+    if((len = i2d_OCSP_REQUEST(req, NULL)) <= 0)
+	ossl_raise(eOCSPError, NULL);
+    str = rb_str_new(0, len);
+    p = RSTRING(str)->ptr;
     GetOCSPReq(self, req);
-    if(!(bio = BIO_new(BIO_s_mem()))) rb_raise(eOCSPError, NULL);
-    i2d_OCSP_REQUEST_bio(bio, req);
-    str = ossl_protect_membio2str(bio, &status);
-    BIO_free(bio);
-    if(status) rb_jump_tag(status);
+    if(i2d_OCSP_REQUEST(req, &p) <= 0)
+	ossl_raise(eOCSPError, NULL);
+    ossl_str_adjust(str, p);
 
     return str;
 }
@@ -282,10 +282,11 @@ ossl_ocspres_s_create(VALUE klass, VALUE status, VALUE basic_resp)
     OCSP_BASICRESP *bs;
     OCSP_RESPONSE *res;
     VALUE obj;
+    int st = NUM2INT(status);
 
     if(NIL_P(basic_resp)) bs = NULL;
     else GetOCSPBasicRes(basic_resp, bs); /* NO NEED TO DUP */
-    if(!(res = OCSP_response_create(NUM2INT(status), bs)))
+    if(!(res = OCSP_response_create(st, bs)))
 	ossl_raise(eOCSPError, NULL);
     WrapOCSPRes(klass, obj, res);
 
@@ -304,21 +305,23 @@ ossl_ocspres_alloc(VALUE klass)
 
     return obj;
 }
-DEFINE_ALLOC_WRAPPER(ossl_ocspreq_alloc)
 
 static VALUE
 ossl_ocspres_initialize(int argc, VALUE *argv, VALUE self)
 {
     VALUE arg;
-    BIO *bio;
+    unsigned char *p;
 
     rb_scan_args(argc, argv, "01", &arg);
-    bio = ossl_obj2bio(arg);
-    if(!d2i_OCSP_RESPONSE_bio(bio, (OCSP_RESPONSE**)&DATA_PTR(self))){
-	BIO_free(bio);
-	ossl_raise(eOCSPError, "cannot load DER encoded response");
+    if(!NIL_P(arg)){
+	arg = ossl_to_der_if_possible(arg);
+	StringValue(arg);
+	p = RSTRING(arg)->ptr;
+	if(!d2i_OCSP_RESPONSE((OCSP_RESPONSE**)&DATA_PTR(self), &p,
+			      RSTRING(arg)->len)){
+	    ossl_raise(eOCSPError, "cannot load DER encoded response");
+	}
     }
-    BIO_free(bio);
 
     return self;
 }
@@ -366,16 +369,18 @@ static VALUE
 ossl_ocspres_to_der(VALUE self)
 {
     OCSP_RESPONSE *res;
-    BIO *bio;
     VALUE str;
-    int status = 0;
+    long len;
+    unsigned char *p;
 
     GetOCSPRes(self, res);
-    if(!(bio = BIO_new(BIO_s_mem()))) rb_raise(eOCSPError, NULL);
-    i2d_OCSP_RESPONSE_bio(bio, res);
-    str = ossl_protect_membio2str(bio, &status);
-    BIO_free(bio);
-    if(status) rb_jump_tag(status);
+    if((len = i2d_OCSP_RESPONSE(res, NULL)) <= 0)
+	ossl_raise(eOCSPError, NULL);
+    str = rb_str_new(0, len);
+    p = RSTRING(str)->ptr;
+    if(i2d_OCSP_RESPONSE(res, NULL) <= 0)
+	ossl_raise(eOCSPError, NULL);
+    ossl_str_adjust(str, p);
 
     return str;
 }
@@ -395,7 +400,6 @@ ossl_ocspbres_alloc(VALUE klass)
 
     return obj;
 }
-DEFINE_ALLOC_WRAPPER(ossl_ocspbres_alloc)
 
 static VALUE
 ossl_ocspbres_initialize(int argc, VALUE *argv, VALUE self)
@@ -424,12 +428,14 @@ ossl_ocspbres_add_nonce(int argc, VALUE *argv, VALUE self)
     VALUE val;
     int ret;
 
-    GetOCSPBasicRes(self, bs);
     rb_scan_args(argc, argv, "01", &val);
-    if(NIL_P(val))
+    if(NIL_P(val)) {
+	GetOCSPBasicRes(self, bs);
 	ret = OCSP_basic_add1_nonce(bs, NULL, -1);
+    }
     else{
 	StringValue(val);
+	GetOCSPBasicRes(self, bs);
 	ret = OCSP_basic_add1_nonce(bs, RSTRING(val)->ptr, RSTRING(val)->len);
     }
     if(!ret) ossl_raise(eOCSPError, NULL);
@@ -450,8 +456,6 @@ ossl_ocspbres_add_status(VALUE self, VALUE cid, VALUE status,
     int error, i, rstatus = 0;
     VALUE tmp;
 
-    GetOCSPBasicRes(self, bs);
-    SafeGetOCSPCertId(cid, id);
     st = NUM2INT(status);
     rsn = NIL_P(status) ? 0 : NUM2INT(reason);
     if(!NIL_P(ext)){
@@ -475,6 +479,8 @@ ossl_ocspbres_add_status(VALUE self, VALUE cid, VALUE status,
     if(rstatus) goto err;
     nxt = X509_gmtime_adj(NULL, NUM2INT(tmp));
 
+    GetOCSPBasicRes(self, bs);
+    SafeGetOCSPCertId(cid, id);
     if(!(single = OCSP_basic_add1_status(bs, id, st, rsn, rev, ths, nxt))){
 	error = 1;
 	goto err;
@@ -559,10 +565,9 @@ ossl_ocspbres_sign(int argc, VALUE *argv, VALUE self)
     EVP_PKEY *key;
     STACK_OF(X509) *x509s;
     unsigned long flg;
-    int ret, status = 0;
+    int ret;
 
     rb_scan_args(argc, argv, "22", &signer_cert, &signer_key, &certs, &flags);
-    GetOCSPBasicRes(self, bs);
     signer = GetX509CertPtr(signer_cert);
     key = GetPrivPKeyPtr(signer_key);
     flg = NIL_P(flags) ? 0 : NUM2INT(flags);
@@ -571,9 +576,9 @@ ossl_ocspbres_sign(int argc, VALUE *argv, VALUE self)
 	flg |= OCSP_NOCERTS;
     }
     else{
-	x509s = ossl_protect_x509_ary2sk(certs, &status);
-	if(status) rb_jump_tag(status);
+	x509s = ossl_x509_ary2sk(certs);
     }
+    GetOCSPBasicRes(self, bs);
     ret = OCSP_basic_sign(bs, signer, key, EVP_sha1(), x509s, flg);
     sk_X509_pop_free(x509s, X509_free);
     if(!ret) ossl_raise(eOCSPError, NULL);
@@ -591,10 +596,10 @@ ossl_ocspbres_verify(int argc, VALUE *argv, VALUE self)
     int flg, result;
 
     rb_scan_args(argc, argv, "21", &certs, &store, &flags);
-    GetOCSPBasicRes(self, bs);
     x509st = GetX509StorePtr(store);
     flg = NIL_P(flags) ? 0 : INT2NUM(flags);
     x509s = ossl_x509_ary2sk(certs);
+    GetOCSPBasicRes(self, bs);
     result = OCSP_basic_verify(bs, x509s, x509st, flg);
     sk_X509_pop_free(x509s, X509_free);
     if(!result) rb_warn("%s", ERR_error_string(ERR_peek_error(), NULL));
@@ -617,7 +622,6 @@ ossl_ocspcid_alloc(VALUE klass)
 
     return obj;
 }
-DEFINE_ALLOC_WRAPPER(ossl_ocspcid_alloc)
 
 static VALUE
 ossl_ocspcid_initialize(VALUE self, VALUE subject, VALUE issuer)
@@ -625,11 +629,11 @@ ossl_ocspcid_initialize(VALUE self, VALUE subject, VALUE issuer)
     OCSP_CERTID *id, *newid;
     X509 *x509s, *x509i;
 
-    GetOCSPCertId(self, id);
     x509s = GetX509CertPtr(subject); /* NO NEED TO DUP */
     x509i = GetX509CertPtr(issuer); /* NO NEED TO DUP */
     if(!(newid = OCSP_cert_to_id(NULL, x509s, x509i)))
 	ossl_raise(eOCSPError, NULL);
+    GetOCSPCertId(self, id);
     OCSP_CERTID_free(id);
     RDATA(self)->data = newid;
 

@@ -9,6 +9,7 @@ require "rexml/parseexception"
 require "rexml/output"
 require "rexml/parsers/baseparser"
 require "rexml/parsers/streamparser"
+require "rexml/parsers/treeparser"
 
 module REXML
   # Represents a full XML document, including PIs, a doctype, etc.  A
@@ -19,7 +20,9 @@ module REXML
 	class Document < Element
 		# A convenient default XML declaration.  If you want an XML declaration,
 		# the easiest way to add one is mydoc << Document::DECLARATION
-		DECLARATION = XMLDecl.new( "1.0", "UTF-8" )
+    # +DEPRECATED+
+    # Use: mydoc << XMLDecl.default
+		DECLARATION = XMLDecl.default
 
 		# Constructor
 		# @param source if supplied, must be a Document, String, or IO. 
@@ -102,30 +105,27 @@ module REXML
 		# @return the XMLDecl of this document; if no XMLDecl has been
 		# set, the default declaration is returned.
 		def xml_decl
-			rv = @children.find { |item| item.kind_of? XMLDecl }
-			rv = DECLARATION if rv.nil?
-			rv
+			rv = @children[0]
+      return rv if rv.kind_of? XMLDecl
+      rv = @children.unshift(XMLDecl.default)[0]
 		end
 
 		# @return the XMLDecl version of this document as a String.
 		# If no XMLDecl has been set, returns the default version.
 		def version
-			decl = xml_decl()
-			decl.nil? ? XMLDecl.DEFAULT_VERSION : decl.version
+			xml_decl().version
 		end
 
 		# @return the XMLDecl encoding of this document as a String.
 		# If no XMLDecl has been set, returns the default encoding.
 		def encoding
-			decl = xml_decl()
-			decl.nil? or decl.encoding.nil? ? XMLDecl.DEFAULT_ENCODING : decl.encoding
+			xml_decl().encoding
 		end
 
 		# @return the XMLDecl standalone value of this document as a String.
 		# If no XMLDecl has been set, returns the default setting.
 		def stand_alone?
-			decl = xml_decl()
-			decl.nil? ? XMLDecl.DEFAULT_STANDALONE : decl.stand_alone?
+			xml_decl().stand_alone?
 		end
 
 		# Write the XML tree out, optionally with indent.  This writes out the
@@ -146,7 +146,10 @@ module REXML
 		#   indentation will be this number of spaces, and children will be
 		#   indented an additional amount.  Defaults to -1
 		# transitive::
-		#   What the heck does this do? Defaults to false
+		#   If transitive is true and indent is >= 0, then the output will be
+		#   pretty-printed in such a way that the added whitespace does not affect
+		#   the absolute *value* of the document -- that is, it leaves the value
+		#   and number of Text nodes in the document unchanged.
 		# ie_hack::
 		#   Internet Explorer is the worst piece of crap to have ever been
 		#   written, with the possible exception of Windows itself.  Since IE is
@@ -154,10 +157,12 @@ module REXML
 		#   that IE's limited abilities can handle.  This hack inserts a space 
 		#   before the /> on empty tags.  Defaults to false
 		def write( output=$stdout, indent=-1, transitive=false, ie_hack=false )
-			output = Output.new( output, xml_decl.encoding ) if xml_decl.encoding != "UTF-8"
+			output = Output.new( output, xml_decl.encoding ) if xml_decl.encoding != "UTF-8" && !output.kind_of?(Output)
 			@children.each { |node|
-				node.write( output, indent, transitive, ie_hack )
-				output << "\n" unless indent<0 or node == @children[-1]
+				indent( output, indent ) if node.node_type == :element
+				if node.write( output, indent, transitive, ie_hack )
+          output << "\n" unless indent<0 or node == @children[-1]
+        end
 			}
 		end
 
@@ -168,70 +173,7 @@ module REXML
 
 		private
 		def build( source )
-			build_context = self
-			parser = Parsers::BaseParser.new( source )
-			tag_stack = []
-			in_doctype = false
-			entities = nil
-			while true
-				event = parser.pull
-				case event[0]
-				when :end_document
-					return
-				when :start_element
-					tag_stack.push(event[1])
-					# find the observers for namespaces
-					build_context = build_context.add_element( event[1], event[2] )
-				when :end_element
-					tag_stack.pop
-					build_context = build_context.parent
-				when :text
-					if not in_doctype
-						if build_context[-1].instance_of? Text
-							build_context[-1] << event[1]
-						else
-							build_context.add( 
-								Text.new( event[1], true, nil, true ) 
-							) unless (
-								event[1].strip.size == 0 and 
-								build_context.ignore_whitespace_nodes
-							)
-						end
-					end
-				when :comment
-					c = Comment.new( event[1] )
-					build_context.add( c )
-				when :cdata
-					c = CData.new( event[1] )
-					build_context.add( c )
-				when :processing_instruction
-					build_context.add( Instruction.new( event[1], event[2] ) )
-				when :end_doctype
-					in_doctype = false
-					entities.each { |k,v| entities[k] = build_context.entities[k].value }
-					build_context = build_context.parent
-				when :start_doctype
-					doctype = DocType.new( event[1..-1], build_context )
-					build_context = doctype
-					entities = {}
-					in_doctype = true
-				when :attlistdecl
-					n = AttlistDecl.new( event[1..-1] )
-					build_context.add( n )
-				when :elementdecl
-					n = ElementDecl.new( event[1] )
-					build_context.add(n)
-				when :entitydecl
-					entities[ event[1] ] = event[2] unless event[2] =~ /PUBLIC|SYSTEM/
-					build_context.add(Entity.new(event))
-				when :notationdecl
-					n = NotationDecl.new( *event[1..-1] )
-					build_context.add( n )
-				when :xmldecl
-					x = XMLDecl.new( event[1], event[2], event[3] )
-					build_context.add( x )
-				end
-			end
+      Parsers::TreeParser.new( source, self ).parse
 		end
 	end
 end

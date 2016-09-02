@@ -1,7 +1,10 @@
 # 
-# = net/ftp.rb
+# = net/ftp.rb - FTP Client Library
 # 
 # Written by Shugo Maeda <shugo@ruby-lang.org>.
+#
+# Documentation by Gavin Sinclair, sourced from "Programming Ruby" (Hunt/Thomas)
+# and "Ruby In a Nutshell" (Matsumoto), used with permission.
 # 
 # This library is distributed under the terms of the Ruby license.
 # You can freely distribute/modify this library.
@@ -16,11 +19,13 @@ require "monitor"
 
 module Net
 
+  # :stopdoc:
   class FTPError < StandardError; end
   class FTPReplyError < FTPError; end
-  class FTPTempError < FTPError; end
-  class FTPPermError < FTPError; end
+  class FTPTempError < FTPError; end 
+  class FTPPermError < FTPError; end 
   class FTPProtoError < FTPError; end
+  # :startdoc:
 
   #
   # This class implements the File Transfer Protocol.  If you have used a
@@ -31,6 +36,8 @@ module Net
   # == Example
   # 
   #   require 'net/ftp'
+  #
+  # === Example 1
   #  
   #   ftp = Net::FTP.new('ftp.netlab.co.jp')
   #   ftp.login
@@ -39,16 +46,25 @@ module Net
   #   ftp.getbinaryfile('nif.rb-0.91.gz', 'nif.gz', 1024)
   #   ftp.close
   #
+  # === Example 2
+  #
+  #   Net::FTP.open('ftp.netlab.co.jp') do |ftp|
+  #     ftp.login
+  #     files = ftp.chdir('pub/lang/ruby/contrib')
+  #     files = ftp.list('n*')
+  #     ftp.getbinaryfile('nif.rb-0.91.gz', 'nif.gz', 1024)
+  #   end
+  #
   # == Major Methods
   #
   # The following are the methods most likely to be useful to users:
-  # - #connect
-  # - #login (note: <tt>FTP.new</tt> can do both connect and login instead)
+  # - FTP.open
   # - #getbinaryfile
   # - #gettextfile
   # - #putbinaryfile
   # - #puttextfile
   # - #chdir
+  # - #nlst
   # - #size
   # - #rename
   # - #delete
@@ -56,15 +72,16 @@ module Net
   class FTP
     include MonitorMixin
     
+    # :stopdoc:
     FTP_PORT = 21
     CRLF = "\r\n"
-
     DEFAULT_BLOCKSIZE = 4096
+    # :startdoc:
     
     # When +true+, transfers are performed in binary mode.  Default: +true+.
     attr_accessor :binary
 
-    # When +true+, the connection is in passive mode.  Default: false.
+    # When +true+, the connection is in passive mode.  Default: +false+.
     attr_accessor :passive
 
     # When +true+, all traffic to and from the server is written
@@ -86,7 +103,7 @@ module Net
     attr_reader :last_response
     
     #
-    # A synonym for +FTP.new+, but with a mandatory host parameter.
+    # A synonym for <tt>FTP.new</tt>, but with a mandatory host parameter.
     #
     # If a block is given, it is passed the +FTP+ object, which will be closed
     # when the block finishes, or when an exception is raised.
@@ -123,11 +140,13 @@ module Net
       end
     end
 
+    # Obsolete
     def return_code
       $stderr.puts("warning: Net::FTP#return_code is obsolete and do nothing")
       return "\n"
     end
 
+    # Obsolete
     def return_code=(s)
       $stderr.puts("warning: Net::FTP#return_code= is obsolete and do nothing")
     end
@@ -146,7 +165,7 @@ module Net
     # Establishes an FTP connection to host, optionally overriding the default
     # port. If the environment variable +SOCKS_SERVER+ is set, sets up the
     # connection through a SOCKS proxy. Raises an exception (typically
-    # +Errno::ECONNREFUSED+) if the connection cannot be established.
+    # <tt>Errno::ECONNREFUSED</tt>) if the connection cannot be established.
     #
     def connect(host, port = FTP_PORT)
       if @debug_mode
@@ -524,7 +543,7 @@ module Net
     # data in +blocksize+ chunks.
     #
     def putbinaryfile(localfile, remotefile = File.basename(localfile),
-		      blocksize = DEFAULT_BLOCKSIZE, &block) # :yield: line/data
+		      blocksize = DEFAULT_BLOCKSIZE, &block) # :yield: data
       if @resume
         begin
           rest_offset = size(remotefile)
@@ -558,7 +577,7 @@ module Net
     end
 
     #
-    # Tranfers +localfile+ to the server in whatever mode the session is set
+    # Transfers +localfile+ to the server in whatever mode the session is set
     # (text or binary).  See #puttextfile and #putbinaryfile.
     #
     def put(localfile, remotefile = File.basename(localfile),
@@ -670,7 +689,7 @@ module Net
       return resp[3..-1].strip.to_i
     end
     
-    MDTM_REGEXP = /^(\d\d\d\d)(\d\d)(\d\d)(\d\d)(\d\d)(\d\d)$/
+    MDTM_REGEXP = /^(\d\d\d\d)(\d\d)(\d\d)(\d\d)(\d\d)(\d\d)/  # :nodoc:
     
     #
     # Returns the last modification time of the (remote) file.  If +local+ is

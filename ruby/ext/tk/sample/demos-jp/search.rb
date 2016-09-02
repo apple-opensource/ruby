@@ -8,9 +8,9 @@
 # not affected, however.
 #
 # Arguments:
-# w -		The window into which to load the file.  Must be a
-#		text widget.
-# file -	The name of the file to load.  Must be readable.
+# w -           The window into which to load the file.  Must be a
+#               text widget.
+# file -        The name of the file to load.  Must be readable.
 
 def textLoadFile(w,file)
   w.delete('1.0', 'end')
@@ -26,10 +26,10 @@ end
 # apply a given tag to each instance found.
 #
 # Arguments:
-# w -		The window in which to search.  Must be a text widget.
-# string -	The string to search for.  The search is done using
-#		exact matching only;  no special characters.
-# tag -		Tag to apply to each instance of a matching string.
+# w -           The window in which to search.  Must be a text widget.
+# string -      The string to search for.  The search is done using
+#               exact matching only;  no special characters.
+# tag -         Tag to apply to each instance of a matching string.
 
 def textSearch(w, string, tag)
   tag.remove('0.0', 'end')
@@ -50,15 +50,15 @@ end
 # deleted) then it doesn't reschedule itself.
 #
 # Arguments:
-# cmd1 -	Command to execute when method is called.
-# sleep1 -	Ms to sleep after executing cmd1 before executing cmd2.
-# cmd2 -	Command to execute in the *next* invocation of this method.
-# sleep2 -	Ms to sleep after executing cmd2 before executing cmd1 again.
+# cmd1 -        Command to execute when method is called.
+# sleep1 -      Ms to sleep after executing cmd1 before executing cmd2.
+# cmd2 -        Command to execute in the *next* invocation of this method.
+# sleep2 -      Ms to sleep after executing cmd2 before executing cmd1 again.
 
 def textToggle(cmd1,sleep1,cmd2,sleep2)
   sleep_list = [sleep2, sleep1]
   TkAfter.new(proc{sleep = sleep_list.shift; sleep_list.push(sleep); sleep}, 
-	      -1, cmd1, cmd2).start(sleep1)
+              -1, cmd1, cmd2).start(sleep1)
 end
 
 # toplevel widget が存在すれば削除する
@@ -77,7 +77,8 @@ $search_demo = TkToplevel.new {|w|
 # frame 生成
 $search_buttons = TkFrame.new($search_demo) {|frame|
   TkButton.new(frame) {
-    text '了解'
+    #text '了解'
+    text '閉じる'
     command proc{
       tmppath = $search_demo
       $search_demo = nil
@@ -95,35 +96,35 @@ $search_buttons.pack('side'=>'bottom', 'fill'=>'x', 'pady'=>'2m')
 # frame 生成
 TkFrame.new($search_demo) {|f|
   TkLabel.new(f, 'text'=>'ファイル名:', 
-	      'width'=>13, 'anchor'=>'w').pack('side'=>'left')
+              'width'=>13, 'anchor'=>'w').pack('side'=>'left')
   $search_fileName = TkVariable.new
   TkEntry.new(f, 'width'=>40, 
-	      'textvariable'=>$search_fileName) {
+              'textvariable'=>$search_fileName) {
     pack('side'=>'left')
     bind('Return', proc{textLoadFile($search_text, $search_fileName.value)
-	                $search_string_entry.focus})
+                        $search_string_entry.focus})
     focus
   }
   TkButton.new(f, 'text'=>'読み込み', 
-	       'command'=>proc{textLoadFile($search_text, 
-					    $search_fileName.value)})\
+               'command'=>proc{textLoadFile($search_text, 
+                                            $search_fileName.value)})\
   .pack('side'=>'left', 'pady'=>5, 'padx'=>10)
 }.pack('side'=>'top', 'fill'=>'x')
 
 TkFrame.new($search_demo) {|f|
   TkLabel.new(f, 'text'=>'検索文字列:', 
-	      'width'=>13, 'anchor'=>'w').pack('side'=>'left')
+              'width'=>13, 'anchor'=>'w').pack('side'=>'left')
   $search_searchString = TkVariable.new
   $search_string_entry = TkEntry.new(f, 'width'=>40, 
-				     'textvariable'=>$search_searchString) {
+                                     'textvariable'=>$search_searchString) {
     pack('side'=>'left')
     bind('Return', proc{textSearch($search_text, $search_searchString.value, 
-				   $search_Tag)})
+                                   $search_Tag)})
   }
   TkButton.new(f, 'text'=>'反転', 
-	       'command'=>proc{textSearch($search_text, 
-					  $search_searchString.value, 
-					  $search_Tag)}) {
+               'command'=>proc{textSearch($search_text, 
+                                          $search_searchString.value, 
+                                          $search_Tag)}) {
     pack('side'=>'left', 'pady'=>5, 'padx'=>10)
   }
 }.pack('side'=>'top', 'fill'=>'x')
@@ -141,45 +142,33 @@ $search_text = TkText.new($search_demo, 'setgrid'=>true) {|t|
 
 if TkWinfo.depth($search_demo) > 1
   textToggle(proc{
-	       begin
-		 $search_Tag.configure('background'=>'#ce5555', 
-				       'foreground'=>'white')
-	       rescue
-	       end
-	     },
-	     800, 
-	     proc{
-	       begin
-		 $search_Tag.configure('background'=>'', 'foreground'=>'')
-	       rescue
-	       end
-	     },
-	     200 )
+               $search_Tag.configure('background'=>'#ce5555', 
+                                     'foreground'=>'white')
+             },
+             800, 
+             proc{
+               $search_Tag.configure('background'=>'', 'foreground'=>'')
+             },
+             200 )
 else
   textToggle(proc{
-	       begin
-		 $search_Tag.configure('background'=>'black', 
-				       'foreground'=>'white')
-	       rescue
-	       end
-	     },
-	     800, 
-	     proc{
-	       begin
-		 $search_Tag.configure('background'=>'', 'foreground'=>'')
-	       rescue
-	       end
-	     },
-	     200 )
+               $search_Tag.configure('background'=>'black', 
+                                     'foreground'=>'white')
+             },
+             800, 
+             proc{
+               $search_Tag.configure('background'=>'', 'foreground'=>'')
+             },
+             200 )
 end
-$search_text.insert('1.0', '\
-このウィンドウは検索機構を実現するのにテキスト widget のタグ機能がどの
-ように使われるのかをデモするものです。まず上のエントリにファイル名を入
-れ、<リターン> を押すか「ロード」ボタンを押してください。次にその下の
-エントリに文字列を入力し、<リターン> を押すか「反転」ボタンを押してく
-ださい。するとファイル中の、検索文字列と一致する部分に全て "search_Tag"
-というタグがつけられ、タグの表示属性としてその文字列が点滅するように
-設定されます。')
+$search_text.insert('1.0', "\
+このウィンドウは検索機構を実現するのにテキスト widget のタグ機能がどの \
+ように使われるのかをデモするものです。まず上のエントリにファイル名を入 \
+れ、<リターン> を押すか「ロード」ボタンを押してください。次にその下の \
+エントリに文字列を入力し、<リターン> を押すか「反転」ボタンを押してく \
+ださい。するとファイル中の、検索文字列と一致する部分に全て \"search_Tag\" \
+というタグがつけられ、タグの表示属性としてその文字列が点滅するように \
+設定されます。")
 $search_text.set_insert '0.0'
 
 $search_fileName.value = ''

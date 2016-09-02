@@ -27,7 +27,8 @@ msg.pack('side'=>'top')
 # frame 生成
 TkFrame.new($label_demo) {|frame|
   TkButton.new(frame) {
-    text '了解'
+    #text '了解'
+    text '閉じる'
     command proc{
       tmppath = $label_demo
       $label_demo = nil
@@ -46,17 +47,17 @@ TkFrame.new($label_demo) {|frame|
 f_left = TkFrame.new($label_demo)
 f_right = TkFrame.new($label_demo)
 [f_left, f_right].each{|w| w.pack('side'=>'left', 'expand'=>'yes', 
-				  'padx'=>10, 'pady'=>10, 'fill'=>'both')}
+                                  'padx'=>10, 'pady'=>10, 'fill'=>'both')}
 
 # label 生成
 [ TkLabel.new(f_left, 'text'=>'最初のラベル'),
   TkLabel.new(f_left, 'text'=>'2 番目。ちょっと浮き上がらせてみました', 
-	      'relief'=>'raised'),
+              'relief'=>'raised'),
   TkLabel.new(f_left, 'text'=>'3 番目。沈んでいます ', 'relief'=>'sunken')
 ].each{|w| w.pack('side'=>'top', 'expand'=>'yes', 'pady'=>2, 'anchor'=>'w')}
 
 TkLabel.new(f_right) {
-  bitmap('@' + [$demo_dir,'images','face.bmp'].join(File::Separator))
+  bitmap('@' + [$demo_dir,'..','images','face.xbm'].join(File::Separator))
   borderwidth 2
   relief 'sunken'
 }.pack('side'=>'top')

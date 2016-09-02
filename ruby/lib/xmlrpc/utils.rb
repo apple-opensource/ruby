@@ -6,7 +6,7 @@
 # 
 # Copyright (C) 2001, 2002, 2003 by Michael Neumann (mneumann@ntecs.de)
 #
-# $Id: utils.rb,v 1.1.1.1 2003/10/15 10:11:49 melville Exp $ 
+# $Id: utils.rb,v 1.2 2003/08/14 17:20:14 matz Exp $ 
 #
 
 module XMLRPC
@@ -113,7 +113,7 @@ module XMLRPC
     def initialize(prefix, &p)
       raise "No interface specified" if p.nil?
       super(prefix)
-      instance_eval &p
+      instance_eval(&p)
     end
 
     def get_methods(obj, delim=".") 

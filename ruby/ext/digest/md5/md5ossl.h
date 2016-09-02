@@ -1,4 +1,4 @@
-/* $Id: md5ossl.h,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $ */
+/* $Id: md5ossl.h,v 1.1 2002/09/26 16:27:23 knu Exp $ */
 
 #ifndef MD5OSSL_H_INCLUDED
 #define MD5OSSL_H_INCLUDED

@@ -1,8 +1,8 @@
 /*
  * syck.h
  *
- * $Author: melville $
- * $Date: 2003/10/15 10:11:48 $
+ * $Author: why $
+ * $Date: 2004/08/07 15:40:47 $
  *
  * Copyright (C) 2003 why the lucky stiff
  */
@@ -13,7 +13,7 @@
 #define SYCK_YAML_MAJOR 1
 #define SYCK_YAML_MINOR 0
 
-#define SYCK_VERSION    "0.38"
+#define SYCK_VERSION    "0.45"
 #define YAML_DOMAIN     "yaml.org,2002"
 
 #include <stdio.h>
@@ -47,7 +47,7 @@ extern "C" {
 #endif
 
 #define ALLOC_CT 8
-#define SYCK_BUFFERSIZE 262144
+#define SYCK_BUFFERSIZE 4096
 #define S_ALLOC_N(type,n) (type*)malloc(sizeof(type)*(n))
 #define S_ALLOC(type) (type*)malloc(sizeof(type))
 #define S_REALLOC_N(var,type,n) (var)=(type*)realloc((char*)(var),sizeof(type)*(n))
@@ -84,6 +84,14 @@ enum map_part {
     map_value
 };
 
+enum scalar_style {
+    scalar_none,
+    scalar_plain,
+    scalar_1quote,
+    scalar_2quote,
+    scalar_block
+};
+
 /*
  * Node metadata struct
  */
@@ -112,6 +120,7 @@ struct _syck_node {
         } *list;
         /* Storage for string data */
         struct SyckStr {
+            enum scalar_style style;
             char *ptr;
             long len;
         } *str;
@@ -139,9 +148,17 @@ enum syck_io_type {
     syck_io_file
 };
 
+enum syck_parser_input {
+    syck_yaml_utf8,
+    syck_yaml_utf16,
+    syck_yaml_utf32,
+    syck_bytecode_utf8
+};
+
 enum syck_level_status {
     syck_lvl_header,
     syck_lvl_doc,
+    syck_lvl_open,
     syck_lvl_seq,
     syck_lvl_map,
     syck_lvl_block,
@@ -152,8 +169,29 @@ enum syck_level_status {
 };
 
 /*
- * Parser struct
+ * Parser structs
  */
+struct _syck_file {
+    /* File pointer */
+    FILE *ptr;
+    /* Function which FILE -> buffer */
+    SyckIoFileRead read;
+};
+
+struct _syck_str {
+    /* String buffer pointers */
+    char *beg, *ptr, *end;
+    /* Function which string -> buffer */
+    SyckIoStrRead read;
+};
+
+struct _syck_level {
+    int spaces;
+    int ncount;
+    char *domain;
+    enum syck_level_status status;
+};
+
 struct _syck_parser {
     /* Root node */
     SYMID root, root_on_error;
@@ -165,6 +203,8 @@ struct _syck_parser {
     SyckErrorHandler error_handler;
     /* InvalidAnchor handler */
     SyckBadAnchorHandler bad_anchor_handler;
+    /* Parser input type */
+    enum syck_parser_input input_type;
     /* IO type */
     enum syck_io_type io_type;
     /* Custom buffer size */
@@ -180,25 +220,15 @@ struct _syck_parser {
     /* EOF flag */
     int eof;
     union {
-        struct _syck_file {
-            FILE *ptr;
-            SyckIoFileRead read;
-        } *file;
-        struct _syck_str {
-            char *beg, *ptr, *end;
-            SyckIoStrRead read;
-        } *str;
+        SyckIoFile *file;
+        SyckIoStr *str;
     } io;
     /* Symbol table for anchors */
     st_table *anchors, *bad_anchors;
     /* Optional symbol table for SYMIDs */
     st_table *syms;
     /* Levels of indentation */
-    struct _syck_level {
-        int spaces;
-        char *domain;
-        enum syck_level_status status;
-    } *levels;
+    SyckLevel *levels;
     int lvl_idx;
     int lvl_capa;
     void *bonus;
@@ -335,6 +365,8 @@ long syck_parser_readlen( SyckParser *, long );
 void syck_parser_init( SyckParser *, int );
 SYMID syck_parse( SyckParser * );
 void syck_default_error_handler( SyckParser *, char * );
+SYMID syck_yaml2byte_handler( SyckParser *, SyckNode * );
+char *syck_yaml2byte( char * );
 
 /*
  * Allocation prototypes
@@ -344,8 +376,8 @@ SyckNode *syck_alloc_seq();
 SyckNode *syck_alloc_str();
 void syck_free_node( SyckNode * );
 void syck_free_members( SyckNode * );
-SyckNode *syck_new_str( char * );
-SyckNode *syck_new_str2( char *, long );
+SyckNode *syck_new_str( char *, enum scalar_style );
+SyckNode *syck_new_str2( char *, long, enum scalar_style );
 void syck_str_blow_away_commas( SyckNode * );
 char *syck_str_read( SyckNode * );
 SyckNode *syck_new_map( SYMID, SYMID );
@@ -364,8 +396,7 @@ void apply_seq_in_map( SyckParser *, SyckNode * );
 /*
  * Lexer prototypes
  */
-int syckparse( void * );
-void syckerror( char *msg );
+void syckerror( char * );
 
 #ifndef ST_DATA_T_DEFINED
 typedef long st_data_t;

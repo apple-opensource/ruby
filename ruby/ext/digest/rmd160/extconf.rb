@@ -1,5 +1,5 @@
 # $RoughId: extconf.rb,v 1.3 2001/08/14 19:54:51 knu Exp $
-# $Id: extconf.rb,v 1.3 2003/10/15 12:07:44 melville Exp $
+# $Id: extconf.rb,v 1.4.2.1 2004/01/21 07:01:43 nobu Exp $
 
 require "mkmf"
 
@@ -13,7 +13,6 @@ dir_config("openssl")
 if !with_config("bundled-rmd160") &&
     have_library("crypto") && have_header("openssl/ripemd.h")
   $objs << "rmd160ossl.#{$OBJEXT}"
-  $libs << " -lcrypto"
 else
   $objs << "rmd160.#{$OBJEXT}" << "rmd160hl.#{$OBJEXT}"
 end

@@ -20,16 +20,14 @@ $extlist = []
 $:.replace ["."]
 require 'rbconfig'
 
-srcdir = Config::CONFIG["srcdir"]
+srcdir = File.dirname(File.dirname(__FILE__))
 
 $:.replace [srcdir, srcdir+"/lib", "."]
 
 require 'mkmf'
-require 'ftools'
-require 'shellwords'
 require 'getopts'
 
-$topdir = File.expand_path(".")
+$topdir = "."
 $top_srcdir = srcdir
 $hdrdir = $top_srcdir
 
@@ -55,20 +53,30 @@ def extmake(target)
 
   begin
     dir = Dir.pwd
-    File.mkpath target unless File.directory?(target)
+    FileUtils.mkpath target unless File.directory?(target)
     Dir.chdir target
+    top_srcdir = $top_srcdir
+    topdir = $topdir
+    prefix = "../" * (target.count("/")+1)
+    if File.expand_path(top_srcdir) != File.expand_path(top_srcdir, dir)
+      $hdrdir = $top_srcdir = prefix + top_srcdir
+    end
+    $topdir = prefix + $topdir
     $target = target
     $mdir = target
     $srcdir = File.join($top_srcdir, "ext", $mdir)
+    $preload = nil
+    makefile = "./Makefile"
     unless $ignore
       if $static ||
-	 !(t = modified?("./Makefile", MTIMES)) ||
+	 !(t = modified?(makefile, MTIMES)) ||
 	 %W<#{$srcdir}/makefile.rb #{$srcdir}/extconf.rb
-	    #{$srcdir}/depend #{$srcdir}/MANIFEST>.any? {|f| modified?(f, [t])}
+	    #{$srcdir}/depend>.any? {|f| modified?(f, [t])}
       then
 	$defs = []
 	Logging::logfile 'mkmf.log'
 	Config::CONFIG["srcdir"] = $srcdir
+	rm_f makefile
 	begin
 	  if File.exist?($0 = "#{$srcdir}/makefile.rb")
 	    load $0
@@ -77,6 +85,7 @@ def extmake(target)
 	  else
 	    create_makefile(target)
 	  end
+	  File.exist?(makefile)
 	rescue SystemExit
 	  # ignore
 	ensure
@@ -84,29 +93,35 @@ def extmake(target)
 	  $0 = $PROGRAM_NAME
 	  Config::CONFIG["srcdir"] = $top_srcdir
 	end
-      end
-    end
-    if File.exist?("./Makefile")
-      if $static
-	$extlist.push [$static, $target, File.basename($target)]
-      end
-      unless system($make, *sysquote($mflags))
-	$ignore or $continue or return false
+      else
+	true
       end
     else
-      open("./Makefile", "w") {|f|
-        f.print dummy_makefile($srcdir)
-      }
+      File.exist?(makefile)
+    end or open(makefile, "w") do |f|
+      f.print dummy_makefile($srcdir)
+      return true
+    end
+    args = sysquote($mflags)
+    if $static
+      args += ["static"]
+      $extlist.push [$static, $target, File.basename($target), $preload]
+    end
+    unless system($make, *args)
+      $ignore or $continue or return false
     end
     if $static
       $extflags ||= ""
-      $extlibs ||= ""
-      $extflags += " " + $DLDFLAGS if $DLDFLAGS
-      $extflags += " " + $LDFLAGS unless $LDFLAGS == ""
-      $extlibs += " " + $libs unless $libs == ""
-      $extlibs += " " + $LOCAL_LIBS unless $LOCAL_LIBS == ""
+      $extlibs ||= []
+      $extpath ||= []
+      $extflags += " " + $DLDFLAGS unless $DLDFLAGS.empty?
+      $extflags += " " + $LDFLAGS unless $LDFLAGS.empty?
+      $extlibs = merge_libs($extlibs, $libs.split, $LOCAL_LIBS.split)
+      $extpath |= $LIBPATH
     end
   ensure
+    $hdrdir = $top_srcdir = top_srcdir
+    $topdir = topdir
     Dir.chdir dir
   end
   true
@@ -178,7 +193,7 @@ end
 $ruby << " -I$(topdir) -I$(hdrdir)/lib"
 $config_h = '$(topdir)/config.h'
 
-MTIMES = [File.mtime(__FILE__)]
+MTIMES = [__FILE__, 'rbconfig.rb', srcdir+'/lib/mkmf.rb'].collect {|f| File.mtime(f)}
 
 # get static-link modules
 $static_ext = {}
@@ -208,15 +223,22 @@ for dir in ["ext", File::join($top_srcdir, "ext")]
   end
 end
 
-File::makedirs('ext')
+dir = Dir.pwd
+FileUtils::makedirs('ext')
 Dir::chdir('ext')
 
+if File.expand_path(srcdir) != File.expand_path(srcdir, dir)
+  $hdrdir = $top_srcdir = "../" + srcdir
+end
+$topdir = ".."
 ext_prefix = "#{$top_srcdir}/ext"
-Dir.glob("#{ext_prefix}/**/MANIFEST") do |d|
+Dir.glob("#{ext_prefix}/*/**/extconf.rb") do |d|
   d = File.dirname(d)
   d.slice!(0, ext_prefix.length + 1)
   extmake(d) or exit(1)
 end
+$hdrdir = $top_srcdir = srcdir
+$topdir = "."
 
 if $ignore
   Dir.chdir ".."
@@ -226,26 +248,43 @@ end
 if $extlist.size > 0
   $extinit ||= ""
   $extobjs ||= ""
-  for s,t,i in $extlist
+  list = $extlist.dup
+  built = []
+  while e = list.shift
+    s,t,i,r = e
+    if r and !(r -= built).empty?
+      l = list.size
+      if (while l > 0; break true if r.include?(list[l-=1][1]) end)
+        list.insert(l + 1, e)
+      end
+      next
+    end
     f = format("%s/%s.%s", s, i, $LIBEXT)
     if File.exist?(f)
-      $extinit += "\tInit_#{i}();\n\trb_provide(\"#{t}.so\");\n"
+      $extinit += "\tinit(Init_#{i}, \"#{t}.so\");\n"
       $extobjs += "ext/#{f} "
+      built << t
     end
   end
 
-  src = "void Init_ext() {\n#$extinit}\n"
+  src = <<SRC
+extern char *ruby_sourcefile, *rb_source_filename();
+#define init(func, name) (ruby_sourcefile = src = rb_source_filename(name), func(), rb_provide(src))
+void Init_ext() {\n\tchar* src;\n#$extinit}
+SRC
   if !modified?("extinit.c", MTIMES) || IO.read("extinit.c") != src
     open("extinit.c", "w") {|f| f.print src}
   end
 
   $extobjs = "ext/extinit.#{$OBJEXT} " + $extobjs
   if RUBY_PLATFORM =~ /m68k-human|beos/
-    $extlibs.gsub!("-L/usr/local/lib", "") if $extlibs
+    $extflags.delete("-L/usr/local/lib")
   end
+  $extpath.delete("$(topdir)")
+  $extflags = libpathflag($extpath) << " " << $extflags.strip
   conf = [
-    ['SETUP', $setup], ['EXTOBJS', $extobjs],
-    ['EXTLIBS', $extlibs], ['EXTLDFLAGS', $extflags]
+    ['SETUP', $setup], [$enable_shared ? 'DLDOBJS' : 'EXTOBJS', $extobjs],
+    ['EXTLIBS', $extlibs.join(' ')], ['EXTLDFLAGS', $extflags]
   ].map {|n, v|
     "#{n}=#{v}" if v and !(v = v.strip).empty?
   }.compact
@@ -255,7 +294,7 @@ if $extlist.size > 0
 end
 rubies = []
 %w[RUBY RUBYW].each {|r|
-  r = CONFIG[r+"_INSTALL_NAME"] and !r.empty? and rubies << r+EXEEXT
+  config_string(r+"_INSTALL_NAME") {|r| rubies << r+EXEEXT}
 }
 
 Dir.chdir ".."

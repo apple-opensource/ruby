@@ -1,53 +1,17 @@
+#
 # = net/imap.rb
 #
-#--
 # Copyright (C) 2000  Shugo Maeda <shugo@ruby-lang.org>
 #
 # This library is distributed under the terms of the Ruby license.
 # You can freely distribute/modify this library.
-#++
 #
-# Client functionality for the IMAP mail protocol.  
-# See the Net::IMAP class for details and examples of use.
+# Documentation: Shugo Maeda, with RDoc conversion and overview by William
+# Webber.
 #
-# == References
+# See Net::IMAP for documentation. 
 #
-# [[IMAP]]
-#    M. Crispin, "INTERNET MESSAGE ACCESS PROTOCOL - VERSION 4rev1",
-#    RFC 2060, December 1996.  (Note: since obsoleted by RFC 3501)
-#
-# [[LANGUAGE-TAGS]]
-#    Alvestrand, H., "Tags for the Identification of
-#    Languages", RFC 1766, March 1995.
-#
-# [[MD5]]
-#    Myers, J., and M. Rose, "The Content-MD5 Header Field", RFC
-#    1864, October 1995.
-#
-# [[MIME-IMB]]
-#    Freed, N., and N. Borenstein, "MIME (Multipurpose Internet
-#    Mail Extensions) Part One: Format of Internet Message Bodies", RFC
-#    2045, November 1996.
-#
-# [[RFC-822]]
-#    Crocker, D., "Standard for the Format of ARPA Internet Text
-#    Messages", STD 11, RFC 822, University of Delaware, August 1982.
-#
-# [[RFC-2087]]
-#    Myers, J., "IMAP4 QUOTA extension", RFC 2087, January 1997.
-#
-# [[RFC-2086]]
-#    Myers, J., "IMAP4 ACL extension", RFC 2086, January 1997.
-#
-# [[SORT-THREAD-EXT]]
-#    Crispin, M., "INTERNET MESSAGE ACCESS PROTOCOL - SORT and THREAD
-#    Extensions", draft-ietf-imapext-sort, May 2003.
-#
-# [[OSSL]]
-#    http://www.openssl.org
-#
-# [[RSSL]]
-#    http://savannah.gnu.org/projects/rubypki
+
 
 require "socket"
 require "monitor"
@@ -59,10 +23,11 @@ end
 
 module Net
 
+  #
   # Net::IMAP implements Internet Message Access Protocol (IMAP) client
   # functionality.  The protocol is described in [IMAP].
   #
-  # == IMAP OVERVIEW
+  # == IMAP Overview
   #
   # An IMAP client connects to a server, and then authenticates
   # itself using either #authenticate() or #login().  Having
@@ -100,11 +65,11 @@ module Net
   # UIDs have to be reassigned.  An IMAP client cannot thus
   # rearrange message orders.
   #
-  # == EXAMPLES OF USAGE
+  # == Examples of Usage
   #
   # === List sender and subject of all recent messages in the default mailbox
   #
-  #   imap = Net::IMAP.new('mail.example.com', 143)
+  #   imap = Net::IMAP.new('mail.example.com')
   #   imap.authenticate('LOGIN', 'joe_user', 'joes_password')
   #   imap.examine('INBOX')
   #   imap.search(["RECENT"]).each do |message_id|
@@ -114,7 +79,7 @@ module Net
   #
   # === Move all messages from April 2003 from "Mail/sent-mail" to "Mail/sent-apr03"
   #
-  #   imap = Net::IMAP.new('mail.example.com', 143)
+  #   imap = Net::IMAP.new('mail.example.com')
   #   imap.authenticate('LOGIN', 'joe_user', 'joes_password')
   #   imap.select('Mail/sent-mail')
   #   if not imap.list('Mail/', 'sent-apr03')
@@ -126,7 +91,7 @@ module Net
   #   end
   #   imap.expunge
   # 
-  # == THREAD-SAFENESS
+  # == Thread Safety
   #
   # Net::IMAP supports concurrent threads. For example,
   # 
@@ -140,7 +105,7 @@ module Net
   # 
   # This script invokes the FETCH command and the SEARCH command concurrently.
   #
-  # == ERRORS
+  # == Errors
   #
   # An IMAP server can send three different types of responses to indicate
   # failure:
@@ -183,6 +148,54 @@ module Net
   # is found to be in an incorrect format (for instance, when converting
   # between UTF-8 and UTF-16), and Net::IMAP::ResponseParseError is 
   # thrown if a server response is non-parseable. 
+  #
+  #
+  # == References
+  #
+  # [[IMAP]]
+  #    M. Crispin, "INTERNET MESSAGE ACCESS PROTOCOL - VERSION 4rev1",
+  #    RFC 2060, December 1996.  (Note: since obsoleted by RFC 3501)
+  #
+  # [[LANGUAGE-TAGS]]
+  #    Alvestrand, H., "Tags for the Identification of
+  #    Languages", RFC 1766, March 1995.
+  #
+  # [[MD5]]
+  #    Myers, J., and M. Rose, "The Content-MD5 Header Field", RFC
+  #    1864, October 1995.
+  #
+  # [[MIME-IMB]]
+  #    Freed, N., and N. Borenstein, "MIME (Multipurpose Internet
+  #    Mail Extensions) Part One: Format of Internet Message Bodies", RFC
+  #    2045, November 1996.
+  #
+  # [[RFC-822]]
+  #    Crocker, D., "Standard for the Format of ARPA Internet Text
+  #    Messages", STD 11, RFC 822, University of Delaware, August 1982.
+  #
+  # [[RFC-2087]]
+  #    Myers, J., "IMAP4 QUOTA extension", RFC 2087, January 1997.
+  #
+  # [[RFC-2086]]
+  #    Myers, J., "IMAP4 ACL extension", RFC 2086, January 1997.
+  #
+  # [[RFC-2195]]
+  #    Klensin, J., Catoe, R., and Krumviede, P., "IMAP/POP AUTHorize Extension
+  #    for Simple Challenge/Response", RFC 2195, September 1997.
+  #
+  # [[SORT-THREAD-EXT]]
+  #    Crispin, M., "INTERNET MESSAGE ACCESS PROTOCOL - SORT and THREAD
+  #    Extensions", draft-ietf-imapext-sort, May 2003.
+  #
+  # [[OSSL]]
+  #    http://www.openssl.org
+  #
+  # [[RSSL]]
+  #    http://savannah.gnu.org/projects/rubypki
+  #
+  # [[UTF7]]
+  #    Goldsmith, D. and Davis, M., "UTF-7: A Mail-Safe Transformation Format of
+  #    Unicode", RFC 2152, May 1997.
   #
   class IMAP
     include MonitorMixin
@@ -256,7 +269,15 @@ module Net
       return @@debug = val
     end
 
-    # Adds an authenticator for Net::IMAP#authenticate.
+    # Adds an authenticator for Net::IMAP#authenticate.  +auth_type+
+    # is the type of authentication this authenticator supports
+    # (for instance, "LOGIN").  The +authenticator+ is an object
+    # which defines a process() method to handle authentication with
+    # the server.  See Net::IMAP::LoginAuthenticator and 
+    # Net::IMAP::CramMD5Authenticator for examples.
+    #
+    # If +auth_type+ refers to an existing authenticator, it will be
+    # replaced by the new one.
     def self.add_authenticator(auth_type, authenticator)
       @@authenticators[auth_type] = authenticator
     end
@@ -268,12 +289,25 @@ module Net
       @sock.close
     end
 
-    # Sends a CAPABILITY command, and returns a listing of
-    # capabilities that the server supports.
+    # Returns true if disconnected from the server.
+    def disconnected?
+      return @sock.closed?
+    end
+
+    # Sends a CAPABILITY command, and returns an array of
+    # capabilities that the server supports.  Each capability
+    # is a string.  See [IMAP] for a list of possible
+    # capabilities.
+    #
+    # Note that the Net::IMAP class does not modify its
+    # behaviour according to the capabilities of the server;
+    # it is up to the user of the class to ensure that 
+    # a certain capability is supported by a server before
+    # using it.
     def capability
       synchronize do
-	send_command("CAPABILITY")
-	return @responses.delete("CAPABILITY")[-1]
+        send_command("CAPABILITY")
+        return @responses.delete("CAPABILITY")[-1]
       end
     end
 
@@ -291,7 +325,24 @@ module Net
     # Sends an AUTHENTICATE command to authenticate the client.
     # The +auth_type+ parameter is a string that represents
     # the authentication mechanism to be used. Currently Net::IMAP
-    # supports "LOGIN" and "CRAM-MD5" for the +auth_type+. For example:
+    # supports authentication mechanisms:
+    #
+    #   LOGIN:: login using cleartext user and password. 
+    #   CRAM-MD5:: login with cleartext user and encrypted password
+    #              (see [RFC-2195] for a full description).  This
+    #              mechanism requires that the server have the user's
+    #              password stored in clear-text password.
+    #
+    # For both these mechanisms, there should be two +args+: username
+    # and (cleartext) password.  A server may not support one or other
+    # of these mechanisms; check #capability() for a capability of
+    # the form "AUTH=LOGIN" or "AUTH=CRAM-MD5".
+    #
+    # Authentication is done using the appropriate authenticator object:
+    # see @@authenticators for more information on plugging in your own
+    # authenticator.
+    #
+    # For example:
     #
     #    imap.authenticate('LOGIN', user, password)
     #
@@ -299,20 +350,24 @@ module Net
     def authenticate(auth_type, *args)
       auth_type = auth_type.upcase
       unless @@authenticators.has_key?(auth_type)
-	raise ArgumentError,
-	  format('unknown auth type - "%s"', auth_type)
+        raise ArgumentError,
+          format('unknown auth type - "%s"', auth_type)
       end
       authenticator = @@authenticators[auth_type].new(*args)
       send_command("AUTHENTICATE", auth_type) do |resp|
-	if resp.instance_of?(ContinuationRequest)
-	  data = authenticator.process(resp.data.text.unpack("m")[0])
-	  send_data([data].pack("m").chomp)
-	end
+        if resp.instance_of?(ContinuationRequest)
+          data = authenticator.process(resp.data.text.unpack("m")[0])
+          s = [data].pack("m").gsub(/\n/, "")
+          send_string_data(s)
+          put_string(CRLF)
+        end
       end
     end
 
     # Sends a LOGIN command to identify the client and carries
-    # the plaintext +password+ authenticating this +user+.
+    # the plaintext +password+ authenticating this +user+.  Note
+    # that, unlike calling #authenticate() with an +auth_type+
+    # of "LOGIN", #login() does *not* use the login authenticator.
     #
     # A Net::IMAP::NoResponseError is raised if authentication fails.
     def login(user, password)
@@ -333,8 +388,8 @@ module Net
     # exist or is for some reason non-selectable.
     def select(mailbox)
       synchronize do
-	@responses.clear
-	send_command("SELECT", mailbox)
+        @responses.clear
+        send_command("SELECT", mailbox)
       end
     end
 
@@ -346,8 +401,8 @@ module Net
     # exist or is for some reason non-examinable.
     def examine(mailbox)
       synchronize do
-	@responses.clear
-	send_command("EXAMINE", mailbox)
+        @responses.clear
+        send_command("EXAMINE", mailbox)
       end
     end
 
@@ -403,7 +458,7 @@ module Net
     # the complete set of all names available to the client.
     # +refname+ provides a context (for instance, a base directory
     # in a directory-based mailbox hierarchy).  +mailbox+ specifies
-    # a mailbox or (via wilcards) mailboxes under that context.
+    # a mailbox or (via wildcards) mailboxes under that context.
     # Two wildcards may be used in +mailbox+: '*', which matches
     # all characters *including* the hierarchy delimiter (for instance,
     # '/' on a UNIX-hosted directory-based mailbox hierarchy); and '%',
@@ -423,8 +478,8 @@ module Net
     #        #<Net::IMAP::MailboxList attr=[:Noinferiors], delim="/", name="foo/baz">]
     def list(refname, mailbox)
       synchronize do
-	send_command("LIST", refname, mailbox)
-	return @responses.delete("LIST")
+        send_command("LIST", refname, mailbox)
+        return @responses.delete("LIST")
       end
     end
 
@@ -448,8 +503,8 @@ module Net
     # command generally is only available to server admin.
     def getquota(mailbox)
       synchronize do
-	send_command("GETQUOTA", mailbox)
-	return @responses.delete("QUOTA")
+        send_command("GETQUOTA", mailbox)
+        return @responses.delete("QUOTA")
       end
     end
 
@@ -484,8 +539,8 @@ module Net
     # Net::IMAP::MailboxACLItem will be returned.
     def getacl(mailbox)
       synchronize do
-	send_command("GETACL", mailbox)
-	return @responses.delete("ACL")[-1]
+        send_command("GETACL", mailbox)
+        return @responses.delete("ACL")[-1]
       end
     end
 
@@ -496,8 +551,8 @@ module Net
     # The return value is an array of +Net::IMAP::MailboxList+.
     def lsub(refname, mailbox)
       synchronize do
-	send_command("LSUB", refname, mailbox)
-	return @responses.delete("LSUB")
+        send_command("LSUB", refname, mailbox)
+        return @responses.delete("LSUB")
       end
     end
 
@@ -519,14 +574,14 @@ module Net
     # does not exist.
     def status(mailbox, attr)
       synchronize do
-	send_command("STATUS", mailbox, attr)
-	return @responses.delete("STATUS")[-1].attr
+        send_command("STATUS", mailbox, attr)
+        return @responses.delete("STATUS")[-1].attr
       end
     end
 
     # Sends a APPEND command to append the +message+ to the end of
     # the +mailbox+. The optional +flags+ argument is an array of 
-    # flags to initially assing to the new message.  The optional
+    # flags to initially passing to the new message.  The optional
     # +date_time+ argument specifies the creation time to assign to the 
     # new message; it defaults to the current time.
     # For example:
@@ -545,7 +600,7 @@ module Net
     def append(mailbox, message, flags = nil, date_time = nil)
       args = []
       if flags
-	args.push(flags)
+        args.push(flags)
       end
       args.push(date_time) if date_time
       args.push(Literal.new(message))
@@ -571,8 +626,8 @@ module Net
     # selected mailbox all messages that have the \Deleted flag set.
     def expunge
       synchronize do
-	send_command("EXPUNGE")
-	return @responses.delete("EXPUNGE")
+        send_command("EXPUNGE")
+        return @responses.delete("EXPUNGE")
       end
     end
 
@@ -755,36 +810,45 @@ module Net
       return thread_internal("UID THREAD", algorithm, search_keys, charset)
     end
 
+    # Decode a string from modified UTF-7 format to UTF-8.
+    #
+    # UTF-7 is a 7-bit encoding of Unicode [UTF7].  IMAP uses a
+    # slightly modified version of this to encode mailbox names
+    # containing non-ASCII characters; see [IMAP] section 5.1.3.
+    #
+    # Net::IMAP does _not_ automatically encode and decode
+    # mailbox names to and from utf7.
     def self.decode_utf7(s)
       return s.gsub(/&(.*?)-/n) {
-	if $1.empty?
-	  "&"
-	else
-	  base64 = $1.tr(",", "/")
-	  x = base64.length % 4
-	  if x > 0
-	    base64.concat("=" * (4 - x))
-	  end
-	  u16tou8(base64.unpack("m")[0])
-	end
+        if $1.empty?
+          "&"
+        else
+          base64 = $1.tr(",", "/")
+          x = base64.length % 4
+          if x > 0
+            base64.concat("=" * (4 - x))
+          end
+          u16tou8(base64.unpack("m")[0])
+        end
       }
     end
 
+    # Encode a string from UTF-8 format to modified UTF-7.
     def self.encode_utf7(s)
       return s.gsub(/(&)|([^\x20-\x25\x27-\x7e]+)/n) { |x|
-	if $1
-	  "&-"
-	else
-	  base64 = [u8tou16(x)].pack("m")
-	  "&" + base64.delete("=\n").tr("/", ",") + "-"
-	end
+        if $1
+          "&-"
+        else
+          base64 = [u8tou16(x)].pack("m")
+          "&" + base64.delete("=\n").tr("/", ",") + "-"
+        end
       }
     end
 
     private
 
-    CRLF = "\r\n"
-    PORT = 143
+    CRLF = "\r\n"      # :nodoc:
+    PORT = 143         # :nodoc:
 
     @@debug = false
     @@authenticators = {}
@@ -804,7 +868,7 @@ module Net
     #                       firewall.
     # Errno::ETIMEDOUT:: connection timed out (possibly due to packets
     #                    being dropped by an intervening firewall).
-    # Errno::NETUNREACH:: there is no route to that network.
+    # Errno::ENETUNREACH:: there is no route to that network.
     # SocketError:: hostname not known or other socket error.
     # Net::IMAP::ByeResponseError:: we connected to the host, but they 
     #                               immediately said goodbye to us.
@@ -827,8 +891,9 @@ module Net
         @sock.ca_file = certs if certs && FileTest::file?(certs)
         @sock.ca_path = certs if certs && FileTest::directory?(certs)
         @sock.verify_mode = VERIFY_PEER if verify
-        @sock.verify_callback = VerifyCallbackProc if defined?(VerifyCallbackProc)
-
+        if defined?(VerifyCallbackProc)
+          @sock.verify_callback = VerifyCallbackProc 
+        end
         @sock.connect   # start ssl session.
       else
         @usessl = false
@@ -836,17 +901,20 @@ module Net
       @responses = Hash.new([].freeze)
       @tagged_responses = {}
       @response_handlers = []
-      @tag_arrival = new_cond
+      @tagged_response_arrival = new_cond
+      @continuation_request_arrival = new_cond
+      @logout_command_tag = nil
+      @debug_output_bol = true
 
       @greeting = get_response
-      if /\ABYE\z/ni =~ @greeting.name
-	@sock.close
-	raise ByeResponseError, resp[0]
+      if @greeting.name == "BYE"
+        @sock.close
+        raise ByeResponseError, @greeting.raw_data
       end
 
       @client_thread = Thread.current
       @receiver_thread = Thread.start {
-	receive_responses
+        receive_responses
       }
     end
 
@@ -865,13 +933,22 @@ module Net
             case resp
             when TaggedResponse
               @tagged_responses[resp.tag] = resp
-              @tag_arrival.broadcast
+              @tagged_response_arrival.broadcast
+              if resp.tag == @logout_command_tag
+                return
+              end
             when UntaggedResponse
               record_response(resp.name, resp.data)
               if resp.data.instance_of?(ResponseText) &&
                   (code = resp.data.code)
                 record_response(code.name, code.data)
               end
+              if resp.name == "BYE" && @logout_command_tag.nil?
+                @sock.close
+                raise ByeResponseError, resp.raw_data
+              end
+            when ContinuationRequest
+              @continuation_request_arrival.signal
             end
             @response_handlers.each do |handler|
               handler.call(resp)
@@ -885,31 +962,31 @@ module Net
 
     def get_tagged_response(tag, cmd)
       until @tagged_responses.key?(tag)
-	@tag_arrival.wait
+        @tagged_response_arrival.wait
       end
       resp = @tagged_responses.delete(tag)
       case resp.name
       when /\A(?:NO)\z/ni
-	raise NoResponseError, resp.data.text
+        raise NoResponseError, resp.data.text
       when /\A(?:BAD)\z/ni
-	raise BadResponseError, resp.data.text
+        raise BadResponseError, resp.data.text
       else
-	return resp
+        return resp
       end
     end
 
     def get_response
       buff = ""
       while true
-	s = @sock.gets(CRLF)
-	break unless s
-	buff.concat(s)
-	if /\{(\d+)\}\r\n/n =~ s
-	  s = @sock.read($1.to_i)
-	  buff.concat(s)
-	else
-	  break
-	end
+        s = @sock.gets(CRLF)
+        break unless s
+        buff.concat(s)
+        if /\{(\d+)\}\r\n/n =~ s
+          s = @sock.read($1.to_i)
+          buff.concat(s)
+        else
+          break
+        end
       end
       return nil if buff.length == 0
       if @@debug
@@ -920,30 +997,33 @@ module Net
 
     def record_response(name, data)
       unless @responses.has_key?(name)
-	@responses[name] = []
+        @responses[name] = []
       end
       @responses[name].push(data)
     end
 
     def send_command(cmd, *args, &block)
       synchronize do
-	tag = generate_tag
-	data = args.collect {|i| format_data(i)}.join(" ")
-	if data.length > 0
-	  put_line(tag + " " + cmd + " " + data)
-	else
-	  put_line(tag + " " + cmd)
-	end
-	if block
-	  add_response_handler(block)
-	end
-	begin
-	  return get_tagged_response(tag, cmd)
-	ensure
-	  if block
-	    remove_response_handler(block)
-	  end
-	end
+        tag = generate_tag
+        put_string(tag + " " + cmd)
+        args.each do |i|
+          put_string(" ")
+          send_data(i)
+        end
+        put_string(CRLF)
+        if cmd == "LOGOUT"
+          @logout_command_tag = tag
+        end
+        if block
+          add_response_handler(block)
+        end
+        begin
+          return get_tagged_response(tag, cmd)
+        ensure
+          if block
+            remove_response_handler(block)
+          end
+        end
       end
     end
 
@@ -951,115 +1031,136 @@ module Net
       @tagno += 1
       return format("%s%04d", @tag_prefix, @tagno)
     end
-
-    def send_data(*args)
-      data = args.collect {|i| format_data(i)}.join(" ")
-      put_line(data)
-    end
-
-    def put_line(line)
-      line = line + CRLF
-      @sock.print(line)
+    
+    def put_string(str)
+      @sock.print(str)
       if @@debug
-        $stderr.print(line.gsub(/^/n, "C: "))
+        if @debug_output_bol
+          $stderr.print("C: ")
+        end
+        $stderr.print(str.gsub(/\n(?!\z)/n, "\nC: "))
+        if /\r\n\z/n.match(str)
+          @debug_output_bol = true
+        else
+          @debug_output_bol = false
+        end
       end
     end
 
-    def format_data(data)
+    def send_data(data)
       case data
       when nil
-	return "NIL"
+        put_string("NIL")
       when String
-	return format_string(data)
+        send_string_data(data)
       when Integer
-	return format_number(data)
+        send_number_data(data)
       when Array
-	return format_list(data)
+        send_list_data(data)
       when Time
-	return format_time(data)
+        send_time_data(data)
       when Symbol
-	return format_symbol(data)
+        send_symbol_data(data)
       else
-	return data.format_data
+        data.send_data(self)
       end
     end
 
-    def format_string(str)
+    def send_string_data(str)
       case str
       when ""
-	return '""'
+        put_string('""')
       when /[\x80-\xff\r\n]/n
-	# literal
-	return "{" + str.length.to_s + "}" + CRLF + str
+        # literal
+        send_literal(str)
       when /[(){ \x00-\x1f\x7f%*"\\]/n
-	# quoted string
-	return '"' + str.gsub(/["\\]/n, "\\\\\\&") + '"'
+        # quoted string
+        send_quoted_string(str)
       else
-	# atom
-	return str
+        put_string(str)
       end
     end
+    
+    def send_quoted_string(str)
+      put_string('"' + str.gsub(/["\\]/n, "\\\\\\&") + '"')
+    end
 
-    def format_number(num)
+    def send_literal(str)
+      put_string("{" + str.length.to_s + "}" + CRLF)
+      @continuation_request_arrival.wait
+      put_string(str)
+    end
+
+    def send_number_data(num)
       if num < 0 || num >= 4294967296
-	raise DataFormatError, num.to_s
+        raise DataFormatError, num.to_s
       end
-      return num.to_s
+      put_string(num.to_s)
     end
 
-    def format_list(list)
-      contents = list.collect {|i| format_data(i)}.join(" ")
-      return "(" + contents + ")"
+    def send_list_data(list)
+      put_string("(")
+      first = true
+      list.each do |i|
+        if first
+          first = false
+        else
+          put_string(" ")
+        end
+        send_data(i)
+      end
+      put_string(")")
     end
 
     DATE_MONTH = %w(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)
 
-    def format_time(time)
+    def send_time_data(time)
       t = time.dup.gmtime
-      return format('"%2d-%3s-%4d %02d:%02d:%02d +0000"',
-		    t.day, DATE_MONTH[t.month - 1], t.year,
-		    t.hour, t.min, t.sec)
+      s = format('"%2d-%3s-%4d %02d:%02d:%02d +0000"',
+                 t.day, DATE_MONTH[t.month - 1], t.year,
+                 t.hour, t.min, t.sec)
+      put_string(s)
     end
 
-    def format_symbol(symbol)
-      return "\\" + symbol.to_s
+    def send_symbol_data(symbol)
+      put_string("\\" + symbol.to_s)
     end
 
     def search_internal(cmd, keys, charset)
       if keys.instance_of?(String)
-	keys = [RawData.new(keys)]
+        keys = [RawData.new(keys)]
       else
-	normalize_searching_criteria(keys)
+        normalize_searching_criteria(keys)
       end
       synchronize do
-	if charset
-	  send_command(cmd, "CHARSET", charset, *keys)
-	else
-	  send_command(cmd, *keys)
-	end
-	return @responses.delete("SEARCH")[-1]
+        if charset
+          send_command(cmd, "CHARSET", charset, *keys)
+        else
+          send_command(cmd, *keys)
+        end
+        return @responses.delete("SEARCH")[-1]
       end
     end
 
     def fetch_internal(cmd, set, attr)
       if attr.instance_of?(String)
-	attr = RawData.new(attr)
+        attr = RawData.new(attr)
       end
       synchronize do
-	@responses.delete("FETCH")
-	send_command(cmd, MessageSet.new(set), attr)
-	return @responses.delete("FETCH")
+        @responses.delete("FETCH")
+        send_command(cmd, MessageSet.new(set), attr)
+        return @responses.delete("FETCH")
       end
     end
 
     def store_internal(cmd, set, attr, flags)
       if attr.instance_of?(String)
-	attr = RawData.new(attr)
+        attr = RawData.new(attr)
       end
       synchronize do
-	@responses.delete("FETCH")
-	send_command(cmd, MessageSet.new(set), attr, flags)
-	return @responses.delete("FETCH")
+        @responses.delete("FETCH")
+        send_command(cmd, MessageSet.new(set), attr, flags)
+        return @responses.delete("FETCH")
       end
     end
 
@@ -1069,22 +1170,22 @@ module Net
 
     def sort_internal(cmd, sort_keys, search_keys, charset)
       if search_keys.instance_of?(String)
-	search_keys = [RawData.new(search_keys)]
+        search_keys = [RawData.new(search_keys)]
       else
-	normalize_searching_criteria(search_keys)
+        normalize_searching_criteria(search_keys)
       end
       normalize_searching_criteria(search_keys)
       synchronize do
-	send_command(cmd, sort_keys, charset, *search_keys)
-	return @responses.delete("SORT")[-1]
+        send_command(cmd, sort_keys, charset, *search_keys)
+        return @responses.delete("SORT")[-1]
       end
     end
 
     def thread_internal(cmd, algorithm, search_keys, charset)
       if search_keys.instance_of?(String)
-	search_keys = [RawData.new(search_keys)]
+        search_keys = [RawData.new(search_keys)]
       else
-	normalize_searching_criteria(search_keys)
+        normalize_searching_criteria(search_keys)
       end
       normalize_searching_criteria(search_keys)
       send_command(cmd, algorithm, charset, *search_keys)
@@ -1093,62 +1194,62 @@ module Net
 
     def normalize_searching_criteria(keys)
       keys.collect! do |i|
-	case i
-	when -1, Range, Array
-	  MessageSet.new(i)
-	else
-	  i
-	end
+        case i
+        when -1, Range, Array
+          MessageSet.new(i)
+        else
+          i
+        end
       end
     end
 
     def self.u16tou8(s)
       len = s.length
       if len < 2
-	return ""
+        return ""
       end
       buf = ""
       i = 0
       while i < len
-	c = s[i] << 8 | s[i + 1]
-	i += 2
-	if c == 0xfeff
-	  next
-	elsif c < 0x0080
-	  buf.concat(c)
-	elsif c < 0x0800
-	  b2 = c & 0x003f
-	  b1 = c >> 6
-	  buf.concat(b1 | 0xc0)
-	  buf.concat(b2 | 0x80)
-	elsif c >= 0xdc00 && c < 0xe000
-	  raise DataFormatError, "invalid surrogate detected"
-	elsif c >= 0xd800 && c < 0xdc00
-	  if i + 2 > len
-	    raise DataFormatError, "invalid surrogate detected"
-	  end
-	  low = s[i] << 8 | s[i + 1]
-	  i += 2
-	  if low < 0xdc00 || low > 0xdfff
-	    raise DataFormatError, "invalid surrogate detected"
-	  end
-	  c = (((c & 0x03ff)) << 10 | (low & 0x03ff)) + 0x10000
-	  b4 = c & 0x003f
-	  b3 = (c >> 6) & 0x003f
-	  b2 = (c >> 12) & 0x003f
-	  b1 = c >> 18;
-	  buf.concat(b1 | 0xf0)
-	  buf.concat(b2 | 0x80)
-	  buf.concat(b3 | 0x80)
-	  buf.concat(b4 | 0x80)
-	else # 0x0800-0xffff
-	  b3 = c & 0x003f
-	  b2 = (c >> 6) & 0x003f
-	  b1 = c >> 12
-	  buf.concat(b1 | 0xe0)
-	  buf.concat(b2 | 0x80)
-	  buf.concat(b3 | 0x80)
-	end
+        c = s[i] << 8 | s[i + 1]
+        i += 2
+        if c == 0xfeff
+          next
+        elsif c < 0x0080
+          buf.concat(c)
+        elsif c < 0x0800
+          b2 = c & 0x003f
+          b1 = c >> 6
+          buf.concat(b1 | 0xc0)
+          buf.concat(b2 | 0x80)
+        elsif c >= 0xdc00 && c < 0xe000
+          raise DataFormatError, "invalid surrogate detected"
+        elsif c >= 0xd800 && c < 0xdc00
+          if i + 2 > len
+            raise DataFormatError, "invalid surrogate detected"
+          end
+          low = s[i] << 8 | s[i + 1]
+          i += 2
+          if low < 0xdc00 || low > 0xdfff
+            raise DataFormatError, "invalid surrogate detected"
+          end
+          c = (((c & 0x03ff)) << 10 | (low & 0x03ff)) + 0x10000
+          b4 = c & 0x003f
+          b3 = (c >> 6) & 0x003f
+          b2 = (c >> 12) & 0x003f
+          b1 = c >> 18;
+          buf.concat(b1 | 0xf0)
+          buf.concat(b2 | 0x80)
+          buf.concat(b3 | 0x80)
+          buf.concat(b4 | 0x80)
+        else # 0x0800-0xffff
+          b3 = c & 0x003f
+          b2 = (c >> 6) & 0x003f
+          b1 = c >> 12
+          buf.concat(b1 | 0xe0)
+          buf.concat(b2 | 0x80)
+          buf.concat(b3 | 0x80)
+        end
       end
       return buf
     end
@@ -1159,155 +1260,157 @@ module Net
       buf = ""
       i = 0
       while i < len
-	c = s[i]
-	if (c & 0x80) == 0
-	  buf.concat(0x00)
-	  buf.concat(c)
-	  i += 1
-	elsif (c & 0xe0) == 0xc0 &&
-	    inlen >= 2 &&
-	    (s[i + 1] & 0xc0) == 0x80
-	  if c == 0xc0 || c == 0xc1
-	    raise DataFormatError, format("non-shortest UTF-8 sequence (%02x)", c)
-	  end
-	  u = ((c & 0x1f) << 6) | (s[i + 1] & 0x3f)
-	  buf.concat(u >> 8)
-	  buf.concat(u & 0x00ff)
-	  i += 2
-	elsif (c & 0xf0) == 0xe0 &&
-	    i + 2 < len &&
-	    (s[i + 1] & 0xc0) == 0x80 &&
-	    (s[i + 2] & 0xc0) == 0x80
-	  if c == 0xe0 && s[i + 1] < 0xa0
-	    raise DataFormatError, format("non-shortest UTF-8 sequence (%02x)", c)
-	  end
-	  u = ((c & 0x0f) << 12) | ((s[i + 1] & 0x3f) << 6) | (s[i + 2] & 0x3f)
-	  # surrogate chars
-	  if u >= 0xd800 && u <= 0xdfff
-	    raise DataFormatError, format("none-UTF-16 char detected (%04x)", u)
-	  end
-	  buf.concat(u >> 8)
-	  buf.concat(u & 0x00ff)
-	  i += 3
-	elsif (c & 0xf8) == 0xf0 &&
-	    i + 3 < len &&
-	    (s[i + 1] & 0xc0) == 0x80 &&
-	    (s[i + 2] & 0xc0) == 0x80 &&
-	    (s[i + 3] & 0xc0) == 0x80
-	  if c == 0xf0 && s[i + 1] < 0x90
-	    raise DataFormatError, format("non-shortest UTF-8 sequence (%02x)", c)
-	  end
-	  u = ((c & 0x07) << 18) | ((s[i + 1] & 0x3f) << 12) |
-	    ((s[i + 2] & 0x3f) << 6) | (s[i + 3] & 0x3f)
-	  if u < 0x10000
-	    buf.concat(u >> 8)
-	    buf.concat(u & 0x00ff)
-	  elsif u < 0x110000
-	    high = ((u - 0x10000) >> 10) | 0xd800
-	    low = (u & 0x03ff) | 0xdc00
-	    buf.concat(high >> 8)
-	    buf.concat(high & 0x00ff)
-	    buf.concat(low >> 8)
-	    buf.concat(low & 0x00ff)
-	  else
-	    raise DataFormatError, format("none-UTF-16 char detected (%04x)", u)
-	  end
-	  i += 4
-	else
-	  raise DataFormatError, format("illegal UTF-8 sequence (%02x)", c)
-	end
+        c = s[i]
+        if (c & 0x80) == 0
+          buf.concat(0x00)
+          buf.concat(c)
+          i += 1
+        elsif (c & 0xe0) == 0xc0 &&
+            inlen >= 2 &&
+            (s[i + 1] & 0xc0) == 0x80
+          if c == 0xc0 || c == 0xc1
+            raise DataFormatError, format("non-shortest UTF-8 sequence (%02x)", c)
+          end
+          u = ((c & 0x1f) << 6) | (s[i + 1] & 0x3f)
+          buf.concat(u >> 8)
+          buf.concat(u & 0x00ff)
+          i += 2
+        elsif (c & 0xf0) == 0xe0 &&
+            i + 2 < len &&
+            (s[i + 1] & 0xc0) == 0x80 &&
+            (s[i + 2] & 0xc0) == 0x80
+          if c == 0xe0 && s[i + 1] < 0xa0
+            raise DataFormatError, format("non-shortest UTF-8 sequence (%02x)", c)
+          end
+          u = ((c & 0x0f) << 12) | ((s[i + 1] & 0x3f) << 6) | (s[i + 2] & 0x3f)
+          # surrogate chars
+          if u >= 0xd800 && u <= 0xdfff
+            raise DataFormatError, format("none-UTF-16 char detected (%04x)", u)
+          end
+          buf.concat(u >> 8)
+          buf.concat(u & 0x00ff)
+          i += 3
+        elsif (c & 0xf8) == 0xf0 &&
+            i + 3 < len &&
+            (s[i + 1] & 0xc0) == 0x80 &&
+            (s[i + 2] & 0xc0) == 0x80 &&
+            (s[i + 3] & 0xc0) == 0x80
+          if c == 0xf0 && s[i + 1] < 0x90
+            raise DataFormatError, format("non-shortest UTF-8 sequence (%02x)", c)
+          end
+          u = ((c & 0x07) << 18) | ((s[i + 1] & 0x3f) << 12) |
+            ((s[i + 2] & 0x3f) << 6) | (s[i + 3] & 0x3f)
+          if u < 0x10000
+            buf.concat(u >> 8)
+            buf.concat(u & 0x00ff)
+          elsif u < 0x110000
+            high = ((u - 0x10000) >> 10) | 0xd800
+            low = (u & 0x03ff) | 0xdc00
+            buf.concat(high >> 8)
+            buf.concat(high & 0x00ff)
+            buf.concat(low >> 8)
+            buf.concat(low & 0x00ff)
+          else
+            raise DataFormatError, format("none-UTF-16 char detected (%04x)", u)
+          end
+          i += 4
+        else
+          raise DataFormatError, format("illegal UTF-8 sequence (%02x)", c)
+        end
       end
       return buf
     end
     private_class_method :u8tou16
 
-    class RawData
-      def format_data
-	return @data
+    class RawData # :nodoc:
+      def send_data(imap)
+        imap.send(:put_string, @data)
       end
 
       private
 
       def initialize(data)
-	@data = data
+        @data = data
       end
     end
 
-    class Atom
-      def format_data
-	return @data
+    class Atom # :nodoc:
+      def send_data(imap)
+        imap.send(:put_string, @data)
       end
 
       private
 
       def initialize(data)
-	@data = data
+        @data = data
       end
     end
 
-    class QuotedString
-      def format_data
-	return '"' + @data.gsub(/["\\]/n, "\\\\\\&") + '"'
+    class QuotedString # :nodoc:
+      def send_data(imap)
+        imap.send(:send_quoted_string, @data)
       end
 
       private
 
       def initialize(data)
-	@data = data
+        @data = data
       end
     end
 
-    class Literal
-      def format_data
-	return "{" + @data.length.to_s + "}" + CRLF + @data
+    class Literal # :nodoc:
+      def send_data(imap)
+        imap.send(:send_literal, @data)
       end
 
       private
 
       def initialize(data)
-	@data = data
+        @data = data
       end
     end
 
-    class MessageSet
-      def format_data
-	return format_internal(@data)
+    class MessageSet # :nodoc:
+      def send_data(imap)
+        imap.send(:put_string, format_internal(@data))
       end
 
       private
 
       def initialize(data)
-	@data = data
+        @data = data
       end
 
       def format_internal(data)
-	case data
-	when "*"
-	  return data
-	when Integer
-	  ensure_nz_number(data)
-	  if data == -1
-	    return "*"
-	  else
-	    return data.to_s
-	  end
-	when Range
-	  return format_internal(data.first) +
-	    ":" + format_internal(data.last)
-	when Array
-	  return data.collect {|i| format_internal(i)}.join(",")
-	when ThreadMember
-	  return data.seqno.to_s +
-	    ":" + data.children.collect {|i| format_internal(i).join(",")}
-	else
-	  raise DataFormatError, data.inspect
-	end
+        case data
+        when "*"
+          return data
+        when Integer
+          ensure_nz_number(data)
+          if data == -1
+            return "*"
+          else
+            return data.to_s
+          end
+        when Range
+          return format_internal(data.first) +
+            ":" + format_internal(data.last)
+        when Array
+          return data.collect {|i| format_internal(i)}.join(",")
+        when ThreadMember
+          return data.seqno.to_s +
+            ":" + data.children.collect {|i| format_internal(i).join(",")}
+        else
+          raise DataFormatError, data.inspect
+        end
       end
 
       def ensure_nz_number(num)
-	if num < -1 || num == 0 || num >= 4294967296
-	  raise DataFormatError, num.inspect
-	end
+        if num < -1 || num == 0 || num >= 4294967296
+          msg = "nz_number must be non-zero unsigned 32-bit integer: " +
+                num.inspect
+          raise DataFormatError, msg
+        end
       end
     end
 
@@ -1549,7 +1652,7 @@ module Net
     # message_id:: Returns a string that represents the message-id.
     # 
     Envelope = Struct.new(:date, :subject, :from, :sender, :reply_to,
-			  :to, :cc, :bcc, :in_reply_to, :message_id)
+                          :to, :cc, :bcc, :in_reply_to, :message_id)
 
     # 
     # Net::IMAP::Address represents electronic mail addresses.
@@ -1626,21 +1729,21 @@ module Net
     # multipart?:: Returns false.
     # 
     class BodyTypeBasic < Struct.new(:media_type, :subtype,
-				     :param, :content_id,
-				     :description, :encoding, :size,
-				     :md5, :disposition, :language,
-				     :extension)
+                                     :param, :content_id,
+                                     :description, :encoding, :size,
+                                     :md5, :disposition, :language,
+                                     :extension)
       def multipart?
-	return false
+        return false
       end
 
       # Obsolete: use +subtype+ instead.  Calling this will
       # generate a warning message to +stderr+, then return 
       # the value of +subtype+.
       def media_subtype
-	$stderr.printf("warning: media_subtype is obsolete.\n")
-	$stderr.printf("         use subtype instead.\n")
-	return subtype
+        $stderr.printf("warning: media_subtype is obsolete.\n")
+        $stderr.printf("         use subtype instead.\n")
+        return subtype
       end
     end
 
@@ -1653,22 +1756,22 @@ module Net
     # And Net::IMAP::BodyTypeText has all fields of Net::IMAP::BodyTypeBasic.
     # 
     class BodyTypeText < Struct.new(:media_type, :subtype,
-				    :param, :content_id,
-				    :description, :encoding, :size,
-				    :lines,
-				    :md5, :disposition, :language,
-				    :extension)
+                                    :param, :content_id,
+                                    :description, :encoding, :size,
+                                    :lines,
+                                    :md5, :disposition, :language,
+                                    :extension)
       def multipart?
-	return false
+        return false
       end
 
       # Obsolete: use +subtype+ instead.  Calling this will
       # generate a warning message to +stderr+, then return 
       # the value of +subtype+.
       def media_subtype
-	$stderr.printf("warning: media_subtype is obsolete.\n")
-	$stderr.printf("         use subtype instead.\n")
-	return subtype
+        $stderr.printf("warning: media_subtype is obsolete.\n")
+        $stderr.printf("         use subtype instead.\n")
+        return subtype
       end
     end
 
@@ -1683,22 +1786,22 @@ module Net
     # And Net::IMAP::BodyTypeMessage has all methods of Net::IMAP::BodyTypeText.
     #
     class BodyTypeMessage < Struct.new(:media_type, :subtype,
-				       :param, :content_id,
-				       :description, :encoding, :size,
-				       :envelope, :body, :lines,
-				       :md5, :disposition, :language,
-				       :extension)
+                                       :param, :content_id,
+                                       :description, :encoding, :size,
+                                       :envelope, :body, :lines,
+                                       :md5, :disposition, :language,
+                                       :extension)
       def multipart?
-	return false
+        return false
       end
 
       # Obsolete: use +subtype+ instead.  Calling this will
       # generate a warning message to +stderr+, then return 
       # the value of +subtype+.
       def media_subtype
-	$stderr.printf("warning: media_subtype is obsolete.\n")
-	$stderr.printf("         use subtype instead.\n")
-	return subtype
+        $stderr.printf("warning: media_subtype is obsolete.\n")
+        $stderr.printf("         use subtype instead.\n")
+        return subtype
       end
     end
 
@@ -1726,666 +1829,683 @@ module Net
     # multipart?:: Returns true.
     # 
     class BodyTypeMultipart < Struct.new(:media_type, :subtype,
-					 :parts,
-					 :param, :disposition, :language,
-					 :extension)
+                                         :parts,
+                                         :param, :disposition, :language,
+                                         :extension)
       def multipart?
-	return true
+        return true
       end
 
       # Obsolete: use +subtype+ instead.  Calling this will
       # generate a warning message to +stderr+, then return 
       # the value of +subtype+.
       def media_subtype
-	$stderr.printf("warning: media_subtype is obsolete.\n")
-	$stderr.printf("         use subtype instead.\n")
-	return subtype
+        $stderr.printf("warning: media_subtype is obsolete.\n")
+        $stderr.printf("         use subtype instead.\n")
+        return subtype
       end
     end
 
-    class ResponseParser
+    class ResponseParser # :nodoc:
       def parse(str)
-	@str = str
-	@pos = 0
-	@lex_state = EXPR_BEG
-	@token = nil
-	return response
+        @str = str
+        @pos = 0
+        @lex_state = EXPR_BEG
+        @token = nil
+        return response
       end
 
       private
 
-      EXPR_BEG		= :EXPR_BEG
-      EXPR_DATA		= :EXPR_DATA
-      EXPR_TEXT		= :EXPR_TEXT
-      EXPR_RTEXT	= :EXPR_RTEXT
-      EXPR_CTEXT	= :EXPR_CTEXT
+      EXPR_BEG          = :EXPR_BEG
+      EXPR_DATA         = :EXPR_DATA
+      EXPR_TEXT         = :EXPR_TEXT
+      EXPR_RTEXT        = :EXPR_RTEXT
+      EXPR_CTEXT        = :EXPR_CTEXT
 
-      T_SPACE	= :SPACE
-      T_NIL	= :NIL
-      T_NUMBER	= :NUMBER
-      T_ATOM	= :ATOM
-      T_QUOTED	= :QUOTED
-      T_LPAR	= :LPAR
-      T_RPAR	= :RPAR
-      T_BSLASH	= :BSLASH
-      T_STAR	= :STAR
-      T_LBRA	= :LBRA
-      T_RBRA	= :RBRA
-      T_LITERAL	= :LITERAL
-      T_PLUS	= :PLUS
-      T_PERCENT	= :PERCENT
-      T_CRLF	= :CRLF
-      T_EOF	= :EOF
-      T_TEXT	= :TEXT
+      T_SPACE   = :SPACE
+      T_NIL     = :NIL
+      T_NUMBER  = :NUMBER
+      T_ATOM    = :ATOM
+      T_QUOTED  = :QUOTED
+      T_LPAR    = :LPAR
+      T_RPAR    = :RPAR
+      T_BSLASH  = :BSLASH
+      T_STAR    = :STAR
+      T_LBRA    = :LBRA
+      T_RBRA    = :RBRA
+      T_LITERAL = :LITERAL
+      T_PLUS    = :PLUS
+      T_PERCENT = :PERCENT
+      T_CRLF    = :CRLF
+      T_EOF     = :EOF
+      T_TEXT    = :TEXT
 
       BEG_REGEXP = /\G(?:\
-(?# 1:	SPACE	)( )|\
-(?# 2:	NIL	)(NIL)(?=[\x80-\xff(){ \x00-\x1f\x7f%*"\\\[\]+])|\
-(?# 3:	NUMBER	)(\d+)(?=[\x80-\xff(){ \x00-\x1f\x7f%*"\\\[\]+])|\
-(?# 4:	ATOM	)([^\x80-\xff(){ \x00-\x1f\x7f%*"\\\[\]+]+)|\
-(?# 5:	QUOTED	)"((?:[^\x80-\xff\x00\r\n"\\]|\\["\\])*)"|\
-(?# 6:	LPAR	)(\()|\
-(?# 7:	RPAR	)(\))|\
-(?# 8:	BSLASH	)(\\)|\
-(?# 9:	STAR	)(\*)|\
-(?# 10:	LBRA	)(\[)|\
-(?# 11:	RBRA	)(\])|\
-(?# 12:	LITERAL	)\{(\d+)\}\r\n|\
-(?# 13:	PLUS	)(\+)|\
-(?# 14:	PERCENT	)(%)|\
-(?# 15:	CRLF	)(\r\n)|\
-(?# 16:	EOF	)(\z))/ni
+(?# 1:  SPACE   )( )|\
+(?# 2:  NIL     )(NIL)(?=[\x80-\xff(){ \x00-\x1f\x7f%*"\\\[\]+])|\
+(?# 3:  NUMBER  )(\d+)(?=[\x80-\xff(){ \x00-\x1f\x7f%*"\\\[\]+])|\
+(?# 4:  ATOM    )([^\x80-\xff(){ \x00-\x1f\x7f%*"\\\[\]+]+)|\
+(?# 5:  QUOTED  )"((?:[^\x00\r\n"\\]|\\["\\])*)"|\
+(?# 6:  LPAR    )(\()|\
+(?# 7:  RPAR    )(\))|\
+(?# 8:  BSLASH  )(\\)|\
+(?# 9:  STAR    )(\*)|\
+(?# 10: LBRA    )(\[)|\
+(?# 11: RBRA    )(\])|\
+(?# 12: LITERAL )\{(\d+)\}\r\n|\
+(?# 13: PLUS    )(\+)|\
+(?# 14: PERCENT )(%)|\
+(?# 15: CRLF    )(\r\n)|\
+(?# 16: EOF     )(\z))/ni
 
       DATA_REGEXP = /\G(?:\
-(?# 1:	SPACE	)( )|\
-(?# 2:	NIL	)(NIL)|\
-(?# 3:	NUMBER	)(\d+)|\
-(?# 4:	QUOTED	)"((?:[^\x80-\xff\x00\r\n"\\]|\\["\\])*)"|\
-(?# 5:	LITERAL	)\{(\d+)\}\r\n|\
-(?# 6:	LPAR	)(\()|\
-(?# 7:	RPAR	)(\)))/ni
+(?# 1:  SPACE   )( )|\
+(?# 2:  NIL     )(NIL)|\
+(?# 3:  NUMBER  )(\d+)|\
+(?# 4:  QUOTED  )"((?:[^\x00\r\n"\\]|\\["\\])*)"|\
+(?# 5:  LITERAL )\{(\d+)\}\r\n|\
+(?# 6:  LPAR    )(\()|\
+(?# 7:  RPAR    )(\)))/ni
 
       TEXT_REGEXP = /\G(?:\
-(?# 1:	TEXT	)([^\x00\x80-\xff\r\n]*))/ni
+(?# 1:  TEXT    )([^\x00\r\n]*))/ni
 
       RTEXT_REGEXP = /\G(?:\
-(?# 1:	LBRA	)(\[)|\
-(?# 2:	TEXT	)([^\x00\x80-\xff\r\n]*))/ni
+(?# 1:  LBRA    )(\[)|\
+(?# 2:  TEXT    )([^\x00\r\n]*))/ni
 
       CTEXT_REGEXP = /\G(?:\
-(?# 1:	TEXT	)([^\x00\x80-\xff\r\n\]]*))/ni
+(?# 1:  TEXT    )([^\x00\r\n\]]*))/ni
 
       Token = Struct.new(:symbol, :value)
 
       def response
-	token = lookahead
-	case token.symbol
-	when T_PLUS
-	  result = continue_req
-	when T_STAR
-	  result = response_untagged
-	else
-	  result = response_tagged
-	end
-	match(T_CRLF)
-	match(T_EOF)
-	return result
+        token = lookahead
+        case token.symbol
+        when T_PLUS
+          result = continue_req
+        when T_STAR
+          result = response_untagged
+        else
+          result = response_tagged
+        end
+        match(T_CRLF)
+        match(T_EOF)
+        return result
       end
 
       def continue_req
-	match(T_PLUS)
-	match(T_SPACE)
-	return ContinuationRequest.new(resp_text, @str)
+        match(T_PLUS)
+        match(T_SPACE)
+        return ContinuationRequest.new(resp_text, @str)
       end
 
       def response_untagged
-	match(T_STAR)
-	match(T_SPACE)
-	token = lookahead
-	if token.symbol == T_NUMBER
-	  return numeric_response
-	elsif token.symbol == T_ATOM
-	  case token.value
-	  when /\A(?:OK|NO|BAD|BYE|PREAUTH)\z/ni
-	    return response_cond
-	  when /\A(?:FLAGS)\z/ni
-	    return flags_response
-	  when /\A(?:LIST|LSUB)\z/ni
-	    return list_response
-	  when /\A(?:QUOTA)\z/ni
-	    return getquota_response
-	  when /\A(?:QUOTAROOT)\z/ni
-	    return getquotaroot_response
-	  when /\A(?:ACL)\z/ni
-	    return getacl_response
-	  when /\A(?:SEARCH|SORT)\z/ni
-	    return search_response
-	  when /\A(?:THREAD)\z/ni
-	    return thread_response
-	  when /\A(?:STATUS)\z/ni
-	    return status_response
-	  when /\A(?:CAPABILITY)\z/ni
-	    return capability_response
-	  else
-	    return text_response
-	  end
-	else
-	  parse_error("unexpected token %s", token.symbol)
-	end
+        match(T_STAR)
+        match(T_SPACE)
+        token = lookahead
+        if token.symbol == T_NUMBER
+          return numeric_response
+        elsif token.symbol == T_ATOM
+          case token.value
+          when /\A(?:OK|NO|BAD|BYE|PREAUTH)\z/ni
+            return response_cond
+          when /\A(?:FLAGS)\z/ni
+            return flags_response
+          when /\A(?:LIST|LSUB)\z/ni
+            return list_response
+          when /\A(?:QUOTA)\z/ni
+            return getquota_response
+          when /\A(?:QUOTAROOT)\z/ni
+            return getquotaroot_response
+          when /\A(?:ACL)\z/ni
+            return getacl_response
+          when /\A(?:SEARCH|SORT)\z/ni
+            return search_response
+          when /\A(?:THREAD)\z/ni
+            return thread_response
+          when /\A(?:STATUS)\z/ni
+            return status_response
+          when /\A(?:CAPABILITY)\z/ni
+            return capability_response
+          else
+            return text_response
+          end
+        else
+          parse_error("unexpected token %s", token.symbol)
+        end
       end
 
       def response_tagged
-	tag = atom
-	match(T_SPACE)
-	token = match(T_ATOM)
-	name = token.value.upcase
-	match(T_SPACE)
-	return TaggedResponse.new(tag, name, resp_text, @str)
+        tag = atom
+        match(T_SPACE)
+        token = match(T_ATOM)
+        name = token.value.upcase
+        match(T_SPACE)
+        return TaggedResponse.new(tag, name, resp_text, @str)
       end
 
       def response_cond
-	token = match(T_ATOM)
-	name = token.value.upcase
-	match(T_SPACE)
-	return UntaggedResponse.new(name, resp_text, @str)
+        token = match(T_ATOM)
+        name = token.value.upcase
+        match(T_SPACE)
+        return UntaggedResponse.new(name, resp_text, @str)
       end
 
       def numeric_response
-	n = number
-	match(T_SPACE)
-	token = match(T_ATOM)
-	name = token.value.upcase
-	case name
-	when "EXISTS", "RECENT", "EXPUNGE"
-	  return UntaggedResponse.new(name, n, @str)
-	when "FETCH"
-	  shift_token
-	  match(T_SPACE)
-	  data = FetchData.new(n, msg_att)
-	  return UntaggedResponse.new(name, data, @str)
-	end
+        n = number
+        match(T_SPACE)
+        token = match(T_ATOM)
+        name = token.value.upcase
+        case name
+        when "EXISTS", "RECENT", "EXPUNGE"
+          return UntaggedResponse.new(name, n, @str)
+        when "FETCH"
+          shift_token
+          match(T_SPACE)
+          data = FetchData.new(n, msg_att)
+          return UntaggedResponse.new(name, data, @str)
+        end
       end
 
       def msg_att
-	match(T_LPAR)
-	attr = {}
-	while true
-	  token = lookahead
-	  case token.symbol
-	  when T_RPAR
-	    shift_token
-	    break
-	  when T_SPACE
-	    shift_token
-	    token = lookahead
-	  end
-	  case token.value
-	  when /\A(?:ENVELOPE)\z/ni
-	    name, val = envelope_data
-	  when /\A(?:FLAGS)\z/ni
-	    name, val = flags_data
-	  when /\A(?:INTERNALDATE)\z/ni
-	    name, val = internaldate_data
-	  when /\A(?:RFC822(?:\.HEADER|\.TEXT)?)\z/ni
-	    name, val = rfc822_text
-	  when /\A(?:RFC822\.SIZE)\z/ni
-	    name, val = rfc822_size
-	  when /\A(?:BODY(?:STRUCTURE)?)\z/ni
-	    name, val = body_data
-	  when /\A(?:UID)\z/ni
-	    name, val = uid_data
-	  else
-	    parse_error("unknown attribute `%s'", token.value)
-	  end
-	  attr[name] = val
-	end
-	return attr
+        match(T_LPAR)
+        attr = {}
+        while true
+          token = lookahead
+          case token.symbol
+          when T_RPAR
+            shift_token
+            break
+          when T_SPACE
+            shift_token
+            token = lookahead
+          end
+          case token.value
+          when /\A(?:ENVELOPE)\z/ni
+            name, val = envelope_data
+          when /\A(?:FLAGS)\z/ni
+            name, val = flags_data
+          when /\A(?:INTERNALDATE)\z/ni
+            name, val = internaldate_data
+          when /\A(?:RFC822(?:\.HEADER|\.TEXT)?)\z/ni
+            name, val = rfc822_text
+          when /\A(?:RFC822\.SIZE)\z/ni
+            name, val = rfc822_size
+          when /\A(?:BODY(?:STRUCTURE)?)\z/ni
+            name, val = body_data
+          when /\A(?:UID)\z/ni
+            name, val = uid_data
+          else
+            parse_error("unknown attribute `%s'", token.value)
+          end
+          attr[name] = val
+        end
+        return attr
       end
 
       def envelope_data
-	token = match(T_ATOM)
-	name = token.value.upcase
-	match(T_SPACE)
-	return name, envelope
+        token = match(T_ATOM)
+        name = token.value.upcase
+        match(T_SPACE)
+        return name, envelope
       end
 
       def envelope
-	@lex_state = EXPR_DATA
-	match(T_LPAR)
-	date = nstring
-	match(T_SPACE)
-	subject = nstring
-	match(T_SPACE)
-	from = address_list
-	match(T_SPACE)
-	sender = address_list
-	match(T_SPACE)
-	reply_to = address_list
-	match(T_SPACE)
-	to = address_list
-	match(T_SPACE)
-	cc = address_list
-	match(T_SPACE)
-	bcc = address_list
-	match(T_SPACE)
-	in_reply_to = nstring
-	match(T_SPACE)
-	message_id = nstring
-	match(T_RPAR)
-	@lex_state = EXPR_BEG
-	return Envelope.new(date, subject, from, sender, reply_to,
-			    to, cc, bcc, in_reply_to, message_id)
+        @lex_state = EXPR_DATA
+        token = lookahead
+        if token.symbol == T_NIL
+          shift_token
+          result = nil
+        else
+          match(T_LPAR)
+          date = nstring
+          match(T_SPACE)
+          subject = nstring
+          match(T_SPACE)
+          from = address_list
+          match(T_SPACE)
+          sender = address_list
+          match(T_SPACE)
+          reply_to = address_list
+          match(T_SPACE)
+          to = address_list
+          match(T_SPACE)
+          cc = address_list
+          match(T_SPACE)
+          bcc = address_list
+          match(T_SPACE)
+          in_reply_to = nstring
+          match(T_SPACE)
+          message_id = nstring
+          match(T_RPAR)
+          result = Envelope.new(date, subject, from, sender, reply_to,
+                                to, cc, bcc, in_reply_to, message_id)
+        end
+        @lex_state = EXPR_BEG
+        return result
       end
 
       def flags_data
-	token = match(T_ATOM)
-	name = token.value.upcase
-	match(T_SPACE)
-	return name, flag_list
+        token = match(T_ATOM)
+        name = token.value.upcase
+        match(T_SPACE)
+        return name, flag_list
       end
 
       def internaldate_data
-	token = match(T_ATOM)
-	name = token.value.upcase
-	match(T_SPACE)
-	token = match(T_QUOTED)
-	return name, token.value
+        token = match(T_ATOM)
+        name = token.value.upcase
+        match(T_SPACE)
+        token = match(T_QUOTED)
+        return name, token.value
       end
 
       def rfc822_text
-	token = match(T_ATOM)
-	name = token.value.upcase
-	match(T_SPACE)
-	return name, nstring
+        token = match(T_ATOM)
+        name = token.value.upcase
+        match(T_SPACE)
+        return name, nstring
       end
 
       def rfc822_size
-	token = match(T_ATOM)
-	name = token.value.upcase
-	match(T_SPACE)
-	return name, number
+        token = match(T_ATOM)
+        name = token.value.upcase
+        match(T_SPACE)
+        return name, number
       end
 
       def body_data
-	token = match(T_ATOM)
-	name = token.value.upcase
-	token = lookahead
-	if token.symbol == T_SPACE
-	  shift_token
-	  return name, body
-	end
-	name.concat(section)
-	token = lookahead
-	if token.symbol == T_ATOM
-	  name.concat(token.value)
-	  shift_token
-	end
-	match(T_SPACE)
-	data = nstring
-	return name, data
+        token = match(T_ATOM)
+        name = token.value.upcase
+        token = lookahead
+        if token.symbol == T_SPACE
+          shift_token
+          return name, body
+        end
+        name.concat(section)
+        token = lookahead
+        if token.symbol == T_ATOM
+          name.concat(token.value)
+          shift_token
+        end
+        match(T_SPACE)
+        data = nstring
+        return name, data
       end
 
       def body
-	@lex_state = EXPR_DATA
-	match(T_LPAR)
-	token = lookahead
-	if token.symbol == T_LPAR
-	  result = body_type_mpart
-	else
-	  result = body_type_1part
-	end
-	match(T_RPAR)
-	@lex_state = EXPR_BEG
-	return result
+        @lex_state = EXPR_DATA
+        token = lookahead
+        if token.symbol == T_NIL
+          shift_token
+          result = nil
+        else
+          match(T_LPAR)
+          token = lookahead
+          if token.symbol == T_LPAR
+            result = body_type_mpart
+          else
+            result = body_type_1part
+          end
+          match(T_RPAR)
+        end
+        @lex_state = EXPR_BEG
+        return result
       end
 
       def body_type_1part
-	token = lookahead
-	case token.value
-	when /\A(?:TEXT)\z/ni
-	  return body_type_text
-	when /\A(?:MESSAGE)\z/ni
-	  return body_type_msg
-	else
-	  return body_type_basic
-	end
+        token = lookahead
+        case token.value
+        when /\A(?:TEXT)\z/ni
+          return body_type_text
+        when /\A(?:MESSAGE)\z/ni
+          return body_type_msg
+        else
+          return body_type_basic
+        end
       end
 
       def body_type_basic
-	mtype, msubtype = media_type
-	match(T_SPACE)
-	param, content_id, desc, enc, size = body_fields
-	md5, disposition, language, extension = body_ext_1part
-	return BodyTypeBasic.new(mtype, msubtype,
-				 param, content_id,
-				 desc, enc, size,
-				 md5, disposition, language, extension)
+        mtype, msubtype = media_type
+        token = lookahead
+        if token.symbol == T_RPAR
+          return BodyTypeBasic.new(mtype, msubtype)
+        end
+        match(T_SPACE)
+        param, content_id, desc, enc, size = body_fields
+        md5, disposition, language, extension = body_ext_1part
+        return BodyTypeBasic.new(mtype, msubtype,
+                                 param, content_id,
+                                 desc, enc, size,
+                                 md5, disposition, language, extension)
       end
 
       def body_type_text
-	mtype, msubtype = media_type
-	match(T_SPACE)
-	param, content_id, desc, enc, size = body_fields
-	match(T_SPACE)
-	lines = number
-	md5, disposition, language, extension = body_ext_1part
-	return BodyTypeText.new(mtype, msubtype,
-				param, content_id,
-				desc, enc, size,
-				lines,
-				md5, disposition, language, extension)
+        mtype, msubtype = media_type
+        match(T_SPACE)
+        param, content_id, desc, enc, size = body_fields
+        match(T_SPACE)
+        lines = number
+        md5, disposition, language, extension = body_ext_1part
+        return BodyTypeText.new(mtype, msubtype,
+                                param, content_id,
+                                desc, enc, size,
+                                lines,
+                                md5, disposition, language, extension)
       end
 
       def body_type_msg
-	mtype, msubtype = media_type
-	match(T_SPACE)
-	param, content_id, desc, enc, size = body_fields
-	match(T_SPACE)
-	env = envelope
-	match(T_SPACE)
-	b = body
-	match(T_SPACE)
-	lines = number
-	md5, disposition, language, extension = body_ext_1part
-	return BodyTypeMessage.new(mtype, msubtype,
-				   param, content_id,
-				   desc, enc, size,
-				   env, b, lines,
-				   md5, disposition, language, extension)
+        mtype, msubtype = media_type
+        match(T_SPACE)
+        param, content_id, desc, enc, size = body_fields
+        match(T_SPACE)
+        env = envelope
+        match(T_SPACE)
+        b = body
+        match(T_SPACE)
+        lines = number
+        md5, disposition, language, extension = body_ext_1part
+        return BodyTypeMessage.new(mtype, msubtype,
+                                   param, content_id,
+                                   desc, enc, size,
+                                   env, b, lines,
+                                   md5, disposition, language, extension)
       end
 
       def body_type_mpart
-	parts = []
-	while true
-	  token = lookahead
-	  if token.symbol == T_SPACE
-	    shift_token
-	    break
-	  end
-	  parts.push(body)
-	end
-	mtype = "MULTIPART"
-	msubtype = string.upcase
-	param, disposition, language, extension = body_ext_mpart
-	return BodyTypeMultipart.new(mtype, msubtype, parts,
-				     param, disposition, language,
-				     extension)
+        parts = []
+        while true
+          token = lookahead
+          if token.symbol == T_SPACE
+            shift_token
+            break
+          end
+          parts.push(body)
+        end
+        mtype = "MULTIPART"
+        msubtype = case_insensitive_string
+        param, disposition, language, extension = body_ext_mpart
+        return BodyTypeMultipart.new(mtype, msubtype, parts,
+                                     param, disposition, language,
+                                     extension)
       end
 
       def media_type
-	mtype = string.upcase
-	match(T_SPACE)
-	msubtype = string.upcase
-	return mtype, msubtype
+        mtype = case_insensitive_string
+        match(T_SPACE)
+        msubtype = case_insensitive_string
+        return mtype, msubtype
       end
 
       def body_fields
-	param = body_fld_param
-	match(T_SPACE)
-	content_id = nstring
-	match(T_SPACE)
-	desc = nstring
-	match(T_SPACE)
-	enc = string.upcase
-	match(T_SPACE)
-	size = number
-	return param, content_id, desc, enc, size
+        param = body_fld_param
+        match(T_SPACE)
+        content_id = nstring
+        match(T_SPACE)
+        desc = nstring
+        match(T_SPACE)
+        enc = case_insensitive_string
+        match(T_SPACE)
+        size = number
+        return param, content_id, desc, enc, size
       end
 
       def body_fld_param
-	token = lookahead
-	if token.symbol == T_NIL
-	  shift_token
-	  return nil
-	end
-	match(T_LPAR)
-	param = {}
-	while true
-	  token = lookahead
-	  case token.symbol
-	  when T_RPAR
-	    shift_token
-	    break
-	  when T_SPACE
-	    shift_token
-	  end
-	  name = string.upcase
-	  match(T_SPACE)
-	  val = string
-	  param[name] = val
-	end
-	return param
+        token = lookahead
+        if token.symbol == T_NIL
+          shift_token
+          return nil
+        end
+        match(T_LPAR)
+        param = {}
+        while true
+          token = lookahead
+          case token.symbol
+          when T_RPAR
+            shift_token
+            break
+          when T_SPACE
+            shift_token
+          end
+          name = case_insensitive_string
+          match(T_SPACE)
+          val = string
+          param[name] = val
+        end
+        return param
       end
 
       def body_ext_1part
-	token = lookahead
-	if token.symbol == T_SPACE
-	  shift_token
-	else
-	  return nil
-	end
-	md5 = nstring
+        token = lookahead
+        if token.symbol == T_SPACE
+          shift_token
+        else
+          return nil
+        end
+        md5 = nstring
 
-	token = lookahead
-	if token.symbol == T_SPACE
-	  shift_token
-	else
-	  return md5
-	end
-	disposition = body_fld_dsp
+        token = lookahead
+        if token.symbol == T_SPACE
+          shift_token
+        else
+          return md5
+        end
+        disposition = body_fld_dsp
 
-	token = lookahead
-	if token.symbol == T_SPACE
-	  shift_token
-	else
-	  return md5, disposition
-	end
-	language = body_fld_lang
+        token = lookahead
+        if token.symbol == T_SPACE
+          shift_token
+        else
+          return md5, disposition
+        end
+        language = body_fld_lang
 
-	token = lookahead
-	if token.symbol == T_SPACE
-	  shift_token
-	else
-	  return md5, disposition, language
-	end
+        token = lookahead
+        if token.symbol == T_SPACE
+          shift_token
+        else
+          return md5, disposition, language
+        end
 
-	extension = body_extensions
-	return md5, disposition, language, extension
+        extension = body_extensions
+        return md5, disposition, language, extension
       end
 
       def body_ext_mpart
-	token = lookahead
-	if token.symbol == T_SPACE
-	  shift_token
-	else
-	  return nil
-	end
-	param = body_fld_param
+        token = lookahead
+        if token.symbol == T_SPACE
+          shift_token
+        else
+          return nil
+        end
+        param = body_fld_param
 
-	token = lookahead
-	if token.symbol == T_SPACE
-	  shift_token
-	else
-	  return param
-	end
-	disposition = body_fld_dsp
-	match(T_SPACE)
-	language = body_fld_lang
+        token = lookahead
+        if token.symbol == T_SPACE
+          shift_token
+        else
+          return param
+        end
+        disposition = body_fld_dsp
+        match(T_SPACE)
+        language = body_fld_lang
 
-	token = lookahead
-	if token.symbol == T_SPACE
-	  shift_token
-	else
-	  return param, disposition, language
-	end
+        token = lookahead
+        if token.symbol == T_SPACE
+          shift_token
+        else
+          return param, disposition, language
+        end
 
-	extension = body_extensions
-	return param, disposition, language, extension
+        extension = body_extensions
+        return param, disposition, language, extension
       end
 
       def body_fld_dsp
-	token = lookahead
-	if token.symbol == T_NIL
-	  shift_token
-	  return nil
-	end
-	match(T_LPAR)
-	dsp_type = string.upcase
-	match(T_SPACE)
-	param = body_fld_param
-	match(T_RPAR)
-	return ContentDisposition.new(dsp_type, param)
+        token = lookahead
+        if token.symbol == T_NIL
+          shift_token
+          return nil
+        end
+        match(T_LPAR)
+        dsp_type = case_insensitive_string
+        match(T_SPACE)
+        param = body_fld_param
+        match(T_RPAR)
+        return ContentDisposition.new(dsp_type, param)
       end
 
       def body_fld_lang
-	token = lookahead
-	if token.symbol == T_LPAR
-	  shift_token
-	  result = []
-	  while true
-	    token = lookahead
-	    case token.symbol
-	    when T_RPAR
-	      shift_token
-	      return result
-	    when T_SPACE
-	      shift_token
-	    end
-	    result.push(string.upcase)
-	  end
-	else
-	  lang = nstring
-	  if lang
-	    return lang.upcase
-	  else
-	    return lang
-	  end
-	end
+        token = lookahead
+        if token.symbol == T_LPAR
+          shift_token
+          result = []
+          while true
+            token = lookahead
+            case token.symbol
+            when T_RPAR
+              shift_token
+              return result
+            when T_SPACE
+              shift_token
+            end
+            result.push(case_insensitive_string)
+          end
+        else
+          lang = nstring
+          if lang
+            return lang.upcase
+          else
+            return lang
+          end
+        end
       end
 
       def body_extensions
-	result = []
-	while true
-	  token = lookahead
-	  case token.symbol
-	  when T_RPAR
-	    return result
-	  when T_SPACE
-	    shift_token
-	  end
-	  result.push(body_extension)
-	end
+        result = []
+        while true
+          token = lookahead
+          case token.symbol
+          when T_RPAR
+            return result
+          when T_SPACE
+            shift_token
+          end
+          result.push(body_extension)
+        end
       end
 
       def body_extension
-	token = lookahead
-	case token.symbol
-	when T_LPAR
-	  shift_token
-	  result = body_extensions
-	  match(T_RPAR)
-	  return result
-	when T_NUMBER
-	  return number
-	else
-	  return nstring
-	end
+        token = lookahead
+        case token.symbol
+        when T_LPAR
+          shift_token
+          result = body_extensions
+          match(T_RPAR)
+          return result
+        when T_NUMBER
+          return number
+        else
+          return nstring
+        end
       end
 
       def section
-	str = ""
-	token = match(T_LBRA)
-	str.concat(token.value)
-	token = match(T_ATOM, T_NUMBER, T_RBRA)
-	if token.symbol == T_RBRA
-	  str.concat(token.value)
-	  return str
-	end
-	str.concat(token.value)
-	token = lookahead
-	if token.symbol == T_SPACE
-	  shift_token
-	  str.concat(token.value)
-	  token = match(T_LPAR)
-	  str.concat(token.value)
-	  while true
-	    token = lookahead
-	    case token.symbol
-	    when T_RPAR
-	      str.concat(token.value)
-	      shift_token
-	      break
-	    when T_SPACE
-	      shift_token
-	      str.concat(token.value)
-	    end
-	    str.concat(format_string(astring))
-	  end
-	end
-	token = match(T_RBRA)
-	str.concat(token.value)
-	return str
+        str = ""
+        token = match(T_LBRA)
+        str.concat(token.value)
+        token = match(T_ATOM, T_NUMBER, T_RBRA)
+        if token.symbol == T_RBRA
+          str.concat(token.value)
+          return str
+        end
+        str.concat(token.value)
+        token = lookahead
+        if token.symbol == T_SPACE
+          shift_token
+          str.concat(token.value)
+          token = match(T_LPAR)
+          str.concat(token.value)
+          while true
+            token = lookahead
+            case token.symbol
+            when T_RPAR
+              str.concat(token.value)
+              shift_token
+              break
+            when T_SPACE
+              shift_token
+              str.concat(token.value)
+            end
+            str.concat(format_string(astring))
+          end
+        end
+        token = match(T_RBRA)
+        str.concat(token.value)
+        return str
       end
 
       def format_string(str)
-	case str
-	when ""
-	  return '""'
-	when /[\x80-\xff\r\n]/n
-	  # literal
-	  return "{" + str.length.to_s + "}" + CRLF + str
-	when /[(){ \x00-\x1f\x7f%*"\\]/n
-	  # quoted string
-	  return '"' + str.gsub(/["\\]/n, "\\\\\\&") + '"'
-	else
-	  # atom
-	  return str
-	end
+        case str
+        when ""
+          return '""'
+        when /[\x80-\xff\r\n]/n
+          # literal
+          return "{" + str.length.to_s + "}" + CRLF + str
+        when /[(){ \x00-\x1f\x7f%*"\\]/n
+          # quoted string
+          return '"' + str.gsub(/["\\]/n, "\\\\\\&") + '"'
+        else
+          # atom
+          return str
+        end
       end
 
       def uid_data
-	token = match(T_ATOM)
-	name = token.value.upcase
-	match(T_SPACE)
-	return name, number
+        token = match(T_ATOM)
+        name = token.value.upcase
+        match(T_SPACE)
+        return name, number
       end
 
       def text_response
-	token = match(T_ATOM)
-	name = token.value.upcase
-	match(T_SPACE)
-	@lex_state = EXPR_TEXT
-	token = match(T_TEXT)
-	@lex_state = EXPR_BEG
-	return UntaggedResponse.new(name, token.value)
+        token = match(T_ATOM)
+        name = token.value.upcase
+        match(T_SPACE)
+        @lex_state = EXPR_TEXT
+        token = match(T_TEXT)
+        @lex_state = EXPR_BEG
+        return UntaggedResponse.new(name, token.value)
       end
 
       def flags_response
-	token = match(T_ATOM)
-	name = token.value.upcase
-	match(T_SPACE)
-	return UntaggedResponse.new(name, flag_list, @str)
+        token = match(T_ATOM)
+        name = token.value.upcase
+        match(T_SPACE)
+        return UntaggedResponse.new(name, flag_list, @str)
       end
 
       def list_response
-	token = match(T_ATOM)
-	name = token.value.upcase
-	match(T_SPACE)
-	return UntaggedResponse.new(name, mailbox_list, @str)
+        token = match(T_ATOM)
+        name = token.value.upcase
+        match(T_SPACE)
+        return UntaggedResponse.new(name, mailbox_list, @str)
       end
 
       def mailbox_list
-	attr = flag_list
-	match(T_SPACE)
-	token = match(T_QUOTED, T_NIL)
-	if token.symbol == T_NIL
-	  delim = nil
-	else
-	  delim = token.value
-	end
-	match(T_SPACE)
-	name = astring
-	return MailboxList.new(attr, delim, name)
+        attr = flag_list
+        match(T_SPACE)
+        token = match(T_QUOTED, T_NIL)
+        if token.symbol == T_NIL
+          delim = nil
+        else
+          delim = token.value
+        end
+        match(T_SPACE)
+        name = astring
+        return MailboxList.new(attr, delim, name)
       end
 
       def getquota_response
@@ -2462,517 +2582,539 @@ module Net
             data.push(MailboxACLItem.new(user, rights))
           end
         end
-	return UntaggedResponse.new(name, data, @str)
+        return UntaggedResponse.new(name, data, @str)
       end
 
       def search_response
-	token = match(T_ATOM)
-	name = token.value.upcase
-	token = lookahead
-	if token.symbol == T_SPACE
-	  shift_token
-	  data = []
-	  while true
-	    token = lookahead
-	    case token.symbol
-	    when T_CRLF
-	      break
-	    when T_SPACE
-	      shift_token
-	    end
-	    data.push(number)
-	  end
-	else
-	  data = []
-	end
-	return UntaggedResponse.new(name, data, @str)
+        token = match(T_ATOM)
+        name = token.value.upcase
+        token = lookahead
+        if token.symbol == T_SPACE
+          shift_token
+          data = []
+          while true
+            token = lookahead
+            case token.symbol
+            when T_CRLF
+              break
+            when T_SPACE
+              shift_token
+            end
+            data.push(number)
+          end
+        else
+          data = []
+        end
+        return UntaggedResponse.new(name, data, @str)
       end
 
       def thread_response
-	token = match(T_ATOM)
-	name = token.value.upcase
-	token = lookahead
+        token = match(T_ATOM)
+        name = token.value.upcase
+        token = lookahead
 
-	if token.symbol == T_SPACE
-	  threads = []
+        if token.symbol == T_SPACE
+          threads = []
 
-	  while true
-	    shift_token
-	    token = lookahead
+          while true
+            shift_token
+            token = lookahead
 
-	    case token.symbol
-	    when T_LPAR
-	      threads << thread_branch(token)
-	    when T_CRLF
-	      break
-	    end
-	  end
-	else
-	  # no member
-	  threads = []
-	end
+            case token.symbol
+            when T_LPAR
+              threads << thread_branch(token)
+            when T_CRLF
+              break
+            end
+          end
+        else
+          # no member
+          threads = []
+        end
 
-	return UntaggedResponse.new(name, threads, @str)
+        return UntaggedResponse.new(name, threads, @str)
       end
 
       def thread_branch(token)
-	rootmember = nil
-	lastmember = nil
-	
-	while true
-	  shift_token    # ignore first T_LPAR
-	  token = lookahead
-	  
-	  case token.symbol
-	  when T_NUMBER
-	    # new member
-	    newmember = ThreadMember.new(number, [])
-	    if rootmember.nil?
-	      rootmember = newmember
-	    else    
-	      lastmember.children << newmember
-	    end     
-	    lastmember = newmember
-	  when T_SPACE 
-	    # do nothing 
-	  when T_LPAR
-	    if rootmember.nil?
-	      # dummy member
-	      lastmember = rootmember = ThreadMember.new(nil, [])
-	    end     
-	    
-	    lastmember.children << thread_branch(token)
-	  when T_RPAR
-	    break   
-	  end     
-	end
-	
-	return rootmember
+        rootmember = nil
+        lastmember = nil
+        
+        while true
+          shift_token    # ignore first T_LPAR
+          token = lookahead
+          
+          case token.symbol
+          when T_NUMBER
+            # new member
+            newmember = ThreadMember.new(number, [])
+            if rootmember.nil?
+              rootmember = newmember
+            else    
+              lastmember.children << newmember
+            end     
+            lastmember = newmember
+          when T_SPACE 
+            # do nothing 
+          when T_LPAR
+            if rootmember.nil?
+              # dummy member
+              lastmember = rootmember = ThreadMember.new(nil, [])
+            end     
+            
+            lastmember.children << thread_branch(token)
+          when T_RPAR
+            break   
+          end     
+        end
+        
+        return rootmember
       end
 
       def status_response
-	token = match(T_ATOM)
-	name = token.value.upcase
-	match(T_SPACE)
-	mailbox = astring
-	match(T_SPACE)
-	match(T_LPAR)
-	attr = {}
-	while true
-	  token = lookahead
-	  case token.symbol
-	  when T_RPAR
-	    shift_token
-	    break
-	  when T_SPACE
-	    shift_token
-	  end
-	  token = match(T_ATOM)
-	  key = token.value.upcase
-	  match(T_SPACE)
-	  val = number
-	  attr[key] = val
-	end
-	data = StatusData.new(mailbox, attr)
-	return UntaggedResponse.new(name, data, @str)
+        token = match(T_ATOM)
+        name = token.value.upcase
+        match(T_SPACE)
+        mailbox = astring
+        match(T_SPACE)
+        match(T_LPAR)
+        attr = {}
+        while true
+          token = lookahead
+          case token.symbol
+          when T_RPAR
+            shift_token
+            break
+          when T_SPACE
+            shift_token
+          end
+          token = match(T_ATOM)
+          key = token.value.upcase
+          match(T_SPACE)
+          val = number
+          attr[key] = val
+        end
+        data = StatusData.new(mailbox, attr)
+        return UntaggedResponse.new(name, data, @str)
       end
 
       def capability_response
-	token = match(T_ATOM)
-	name = token.value.upcase
-	match(T_SPACE)
-	data = []
-	while true
-	  token = lookahead
-	  case token.symbol
-	  when T_CRLF
-	    break
-	  when T_SPACE
-	    shift_token
-	  end
-	  data.push(atom.upcase)
-	end
-	return UntaggedResponse.new(name, data, @str)
+        token = match(T_ATOM)
+        name = token.value.upcase
+        match(T_SPACE)
+        data = []
+        while true
+          token = lookahead
+          case token.symbol
+          when T_CRLF
+            break
+          when T_SPACE
+            shift_token
+          end
+          data.push(atom.upcase)
+        end
+        return UntaggedResponse.new(name, data, @str)
       end
 
       def resp_text
-	@lex_state = EXPR_RTEXT
-	token = lookahead
-	if token.symbol == T_LBRA
-	  code = resp_text_code
-	else
-	  code = nil
-	end
-	token = match(T_TEXT)
-	@lex_state = EXPR_BEG
-	return ResponseText.new(code, token.value)
+        @lex_state = EXPR_RTEXT
+        token = lookahead
+        if token.symbol == T_LBRA
+          code = resp_text_code
+        else
+          code = nil
+        end
+        token = match(T_TEXT)
+        @lex_state = EXPR_BEG
+        return ResponseText.new(code, token.value)
       end
 
       def resp_text_code
-	@lex_state = EXPR_BEG
-	match(T_LBRA)
-	token = match(T_ATOM)
-	name = token.value.upcase
-	case name
-	when /\A(?:ALERT|PARSE|READ-ONLY|READ-WRITE|TRYCREATE)\z/n
-	  result = ResponseCode.new(name, nil)
-	when /\A(?:PERMANENTFLAGS)\z/n
-	  match(T_SPACE)
-	  result = ResponseCode.new(name, flag_list)
-	when /\A(?:UIDVALIDITY|UIDNEXT|UNSEEN)\z/n
-	  match(T_SPACE)
-	  result = ResponseCode.new(name, number)
-	else
-	  match(T_SPACE)
-	  @lex_state = EXPR_CTEXT
-	  token = match(T_TEXT)
-	  @lex_state = EXPR_BEG
-	  result = ResponseCode.new(name, token.value)
-	end
-	match(T_RBRA)
-	@lex_state = EXPR_RTEXT
-	return result
+        @lex_state = EXPR_BEG
+        match(T_LBRA)
+        token = match(T_ATOM)
+        name = token.value.upcase
+        case name
+        when /\A(?:ALERT|PARSE|READ-ONLY|READ-WRITE|TRYCREATE)\z/n
+          result = ResponseCode.new(name, nil)
+        when /\A(?:PERMANENTFLAGS)\z/n
+          match(T_SPACE)
+          result = ResponseCode.new(name, flag_list)
+        when /\A(?:UIDVALIDITY|UIDNEXT|UNSEEN)\z/n
+          match(T_SPACE)
+          result = ResponseCode.new(name, number)
+        else
+          match(T_SPACE)
+          @lex_state = EXPR_CTEXT
+          token = match(T_TEXT)
+          @lex_state = EXPR_BEG
+          result = ResponseCode.new(name, token.value)
+        end
+        match(T_RBRA)
+        @lex_state = EXPR_RTEXT
+        return result
       end
 
       def address_list
-	token = lookahead
-	if token.symbol == T_NIL
-	  shift_token
-	  return nil
-	else
-	  result = []
-	  match(T_LPAR)
-	  while true
-	    token = lookahead
-	    case token.symbol
-	    when T_RPAR
-	      shift_token
-	      break
-	    when T_SPACE
-	      shift_token
-	    end
-	    result.push(address)
-	  end
-	  return result
-	end
+        token = lookahead
+        if token.symbol == T_NIL
+          shift_token
+          return nil
+        else
+          result = []
+          match(T_LPAR)
+          while true
+            token = lookahead
+            case token.symbol
+            when T_RPAR
+              shift_token
+              break
+            when T_SPACE
+              shift_token
+            end
+            result.push(address)
+          end
+          return result
+        end
       end
 
       ADDRESS_REGEXP = /\G\
-(?# 1: NAME	)(?:NIL|"((?:[^\x80-\xff\x00\r\n"\\]|\\["\\])*)") \
-(?# 2: ROUTE	)(?:NIL|"((?:[^\x80-\xff\x00\r\n"\\]|\\["\\])*)") \
-(?# 3: MAILBOX	)(?:NIL|"((?:[^\x80-\xff\x00\r\n"\\]|\\["\\])*)") \
-(?# 4: HOST	)(?:NIL|"((?:[^\x80-\xff\x00\r\n"\\]|\\["\\])*)")\
+(?# 1: NAME     )(?:NIL|"((?:[^\x80-\xff\x00\r\n"\\]|\\["\\])*)") \
+(?# 2: ROUTE    )(?:NIL|"((?:[^\x80-\xff\x00\r\n"\\]|\\["\\])*)") \
+(?# 3: MAILBOX  )(?:NIL|"((?:[^\x80-\xff\x00\r\n"\\]|\\["\\])*)") \
+(?# 4: HOST     )(?:NIL|"((?:[^\x80-\xff\x00\r\n"\\]|\\["\\])*)")\
 \)/ni
 
       def address
-	match(T_LPAR)
-	if @str.index(ADDRESS_REGEXP, @pos)
-	  # address does not include literal.
-	  @pos = $~.end(0)
-	  name = $1
-	  route = $2
-	  mailbox = $3
-	  host = $4
-	  for s in [name, route, mailbox, host]
-	    if s
-	      s.gsub!(/\\(["\\])/n, "\\1")
-	    end
-	  end
-	else
-	  name = nstring
-	  match(T_SPACE)
-	  route = nstring
-	  match(T_SPACE)
-	  mailbox = nstring
-	  match(T_SPACE)
-	  host = nstring
-	  match(T_RPAR)
-	end
-	return Address.new(name, route, mailbox, host)
+        match(T_LPAR)
+        if @str.index(ADDRESS_REGEXP, @pos)
+          # address does not include literal.
+          @pos = $~.end(0)
+          name = $1
+          route = $2
+          mailbox = $3
+          host = $4
+          for s in [name, route, mailbox, host]
+            if s
+              s.gsub!(/\\(["\\])/n, "\\1")
+            end
+          end
+        else
+          name = nstring
+          match(T_SPACE)
+          route = nstring
+          match(T_SPACE)
+          mailbox = nstring
+          match(T_SPACE)
+          host = nstring
+          match(T_RPAR)
+        end
+        return Address.new(name, route, mailbox, host)
       end
 
 #        def flag_list
-#  	result = []
-#  	match(T_LPAR)
-#  	while true
-#  	  token = lookahead
-#  	  case token.symbol
-#  	  when T_RPAR
-#  	    shift_token
-#  	    break
-#  	  when T_SPACE
-#  	    shift_token
-#  	  end
-#  	  result.push(flag)
-#  	end
-#  	return result
+#       result = []
+#       match(T_LPAR)
+#       while true
+#         token = lookahead
+#         case token.symbol
+#         when T_RPAR
+#           shift_token
+#           break
+#         when T_SPACE
+#           shift_token
+#         end
+#         result.push(flag)
+#       end
+#       return result
 #        end
 
 #        def flag
-#  	token = lookahead
-#  	if token.symbol == T_BSLASH
-#  	  shift_token
-#  	  token = lookahead
-#  	  if token.symbol == T_STAR
-#  	    shift_token
-#  	    return token.value.intern
-#  	  else
-#  	    return atom.intern
-#  	  end
-#  	else
-#  	  return atom
-#  	end
+#       token = lookahead
+#       if token.symbol == T_BSLASH
+#         shift_token
+#         token = lookahead
+#         if token.symbol == T_STAR
+#           shift_token
+#           return token.value.intern
+#         else
+#           return atom.intern
+#         end
+#       else
+#         return atom
+#       end
 #        end
 
       FLAG_REGEXP = /\
-(?# FLAG	)\\([^\x80-\xff(){ \x00-\x1f\x7f%"\\]+)|\
-(?# ATOM	)([^\x80-\xff(){ \x00-\x1f\x7f%*"\\]+)/n
+(?# FLAG        )\\([^\x80-\xff(){ \x00-\x1f\x7f%"\\]+)|\
+(?# ATOM        )([^\x80-\xff(){ \x00-\x1f\x7f%*"\\]+)/n
 
       def flag_list
-	if @str.index(/\(([^)]*)\)/ni, @pos)
-	  @pos = $~.end(0)
-	  return $1.scan(FLAG_REGEXP).collect { |flag, atom|
-	    atom || flag.capitalize.intern
-	  }
-	else
-	  parse_error("invalid flag list")
-	end
+        if @str.index(/\(([^)]*)\)/ni, @pos)
+          @pos = $~.end(0)
+          return $1.scan(FLAG_REGEXP).collect { |flag, atom|
+            atom || flag.capitalize.intern
+          }
+        else
+          parse_error("invalid flag list")
+        end
       end
 
       def nstring
-	token = lookahead
-	if token.symbol == T_NIL
-	  shift_token
-	  return nil
-	else
-	  return string
-	end
+        token = lookahead
+        if token.symbol == T_NIL
+          shift_token
+          return nil
+        else
+          return string
+        end
       end
 
       def astring
-	token = lookahead
-	if string_token?(token)
-	  return string
-	else
-	  return atom
-	end
+        token = lookahead
+        if string_token?(token)
+          return string
+        else
+          return atom
+        end
       end
 
       def string
-	token = match(T_QUOTED, T_LITERAL)
-	return token.value
+        token = lookahead
+        if token.symbol == T_NIL
+          shift_token
+          return nil
+        end
+        token = match(T_QUOTED, T_LITERAL)
+        return token.value
       end
 
-      STRING_TOKENS = [T_QUOTED, T_LITERAL]
+      STRING_TOKENS = [T_QUOTED, T_LITERAL, T_NIL]
 
       def string_token?(token)
-	return STRING_TOKENS.include?(token.symbol)
+        return STRING_TOKENS.include?(token.symbol)
+      end
+
+      def case_insensitive_string
+        token = lookahead
+        if token.symbol == T_NIL
+          shift_token
+          return nil
+        end
+        token = match(T_QUOTED, T_LITERAL)
+        return token.value.upcase
       end
 
       def atom
-  	result = ""
-  	while true
-  	  token = lookahead
-  	  if atom_token?(token)
-  	    result.concat(token.value)
-  	    shift_token
-  	  else
-  	    if result.empty?
-  	      parse_error("unexpected token %s", token.symbol)
-  	    else
-  	      return result
-  	    end
-  	  end
-  	end
+        result = ""
+        while true
+          token = lookahead
+          if atom_token?(token)
+            result.concat(token.value)
+            shift_token
+          else
+            if result.empty?
+              parse_error("unexpected token %s", token.symbol)
+            else
+              return result
+            end
+          end
+        end
       end
 
       ATOM_TOKENS = [
-	T_ATOM,
-	T_NUMBER,
-	T_NIL,
-	T_LBRA,
-	T_RBRA,
-	T_PLUS
+        T_ATOM,
+        T_NUMBER,
+        T_NIL,
+        T_LBRA,
+        T_RBRA,
+        T_PLUS
       ]
 
       def atom_token?(token)
-	return ATOM_TOKENS.include?(token.symbol)
+        return ATOM_TOKENS.include?(token.symbol)
       end
 
       def number
-	token = match(T_NUMBER)
-	return token.value.to_i
+        token = lookahead
+        if token.symbol == T_NIL
+          shift_token
+          return nil
+        end
+        token = match(T_NUMBER)
+        return token.value.to_i
       end
 
       def nil_atom
-	match(T_NIL)
-	return nil
+        match(T_NIL)
+        return nil
       end
 
       def match(*args)
-	token = lookahead
-	unless args.include?(token.symbol)
-	  parse_error('unexpected token %s (expected %s)',
-		      token.symbol.id2name,
-		      args.collect {|i| i.id2name}.join(" or "))
-	end
-	shift_token
-	return token
+        token = lookahead
+        unless args.include?(token.symbol)
+          parse_error('unexpected token %s (expected %s)',
+                      token.symbol.id2name,
+                      args.collect {|i| i.id2name}.join(" or "))
+        end
+        shift_token
+        return token
       end
 
       def lookahead
-	unless @token
-	  @token = next_token
-	end
-	return @token
+        unless @token
+          @token = next_token
+        end
+        return @token
       end
 
       def shift_token
-	@token = nil
+        @token = nil
       end
 
       def next_token
-	case @lex_state
-	when EXPR_BEG
-	  if @str.index(BEG_REGEXP, @pos)
-	    @pos = $~.end(0)
-	    if $1
-	      return Token.new(T_SPACE, $+)
-	    elsif $2
-	      return Token.new(T_NIL, $+)
-	    elsif $3
-	      return Token.new(T_NUMBER, $+)
-	    elsif $4
-	      return Token.new(T_ATOM, $+)
-	    elsif $5
-	      return Token.new(T_QUOTED,
-			       $+.gsub(/\\(["\\])/n, "\\1"))
-	    elsif $6
-	      return Token.new(T_LPAR, $+)
-	    elsif $7
-	      return Token.new(T_RPAR, $+)
-	    elsif $8
-	      return Token.new(T_BSLASH, $+)
-	    elsif $9
-	      return Token.new(T_STAR, $+)
-	    elsif $10
-	      return Token.new(T_LBRA, $+)
-	    elsif $11
-	      return Token.new(T_RBRA, $+)
-	    elsif $12
-	      len = $+.to_i
-	      val = @str[@pos, len]
-	      @pos += len
-	      return Token.new(T_LITERAL, val)
-	    elsif $13
-	      return Token.new(T_PLUS, $+)
-	    elsif $14
-	      return Token.new(T_PERCENT, $+)
-	    elsif $15
-	      return Token.new(T_CRLF, $+)
-	    elsif $16
-	      return Token.new(T_EOF, $+)
-	    else
-	      parse_error("[Net::IMAP BUG] BEG_REGEXP is invalid")
-	    end
-	  else
-	    @str.index(/\S*/n, @pos)
-	    parse_error("unknown token - %s", $&.dump)
-	  end
-	when EXPR_DATA
-	  if @str.index(DATA_REGEXP, @pos)
-	    @pos = $~.end(0)
-	    if $1
-	      return Token.new(T_SPACE, $+)
-	    elsif $2
-	      return Token.new(T_NIL, $+)
-	    elsif $3
-	      return Token.new(T_NUMBER, $+)
-	    elsif $4
-	      return Token.new(T_QUOTED,
-			       $+.gsub(/\\(["\\])/n, "\\1"))
-	    elsif $5
-	      len = $+.to_i
-	      val = @str[@pos, len]
-	      @pos += len
-	      return Token.new(T_LITERAL, val)
-	    elsif $6
-	      return Token.new(T_LPAR, $+)
-	    elsif $7
-	      return Token.new(T_RPAR, $+)
-	    else
-	      parse_error("[Net::IMAP BUG] BEG_REGEXP is invalid")
-	    end
-	  else
-	    @str.index(/\S*/n, @pos)
-	    parse_error("unknown token - %s", $&.dump)
-	  end
-	when EXPR_TEXT
-	  if @str.index(TEXT_REGEXP, @pos)
-	    @pos = $~.end(0)
-	    if $1
-	      return Token.new(T_TEXT, $+)
-	    else
-	      parse_error("[Net::IMAP BUG] TEXT_REGEXP is invalid")
-	    end
-	  else
-	    @str.index(/\S*/n, @pos)
-	    parse_error("unknown token - %s", $&.dump)
-	  end
-	when EXPR_RTEXT
-	  if @str.index(RTEXT_REGEXP, @pos)
-	    @pos = $~.end(0)
-	    if $1
-	      return Token.new(T_LBRA, $+)
-	    elsif $2
-	      return Token.new(T_TEXT, $+)
-	    else
-	      parse_error("[Net::IMAP BUG] RTEXT_REGEXP is invalid")
-	    end
-	  else
-	    @str.index(/\S*/n, @pos)
-	    parse_error("unknown token - %s", $&.dump)
-	  end
-	when EXPR_CTEXT
-	  if @str.index(CTEXT_REGEXP, @pos)
-	    @pos = $~.end(0)
-	    if $1
-	      return Token.new(T_TEXT, $+)
-	    else
-	      parse_error("[Net::IMAP BUG] CTEXT_REGEXP is invalid")
-	    end
-	  else
-	    @str.index(/\S*/n, @pos) #/
-	    parse_error("unknown token - %s", $&.dump)
-	  end
-	else
-	  parse_error("illegal @lex_state - %s", @lex_state.inspect)
-	end
+        case @lex_state
+        when EXPR_BEG
+          if @str.index(BEG_REGEXP, @pos)
+            @pos = $~.end(0)
+            if $1
+              return Token.new(T_SPACE, $+)
+            elsif $2
+              return Token.new(T_NIL, $+)
+            elsif $3
+              return Token.new(T_NUMBER, $+)
+            elsif $4
+              return Token.new(T_ATOM, $+)
+            elsif $5
+              return Token.new(T_QUOTED,
+                               $+.gsub(/\\(["\\])/n, "\\1"))
+            elsif $6
+              return Token.new(T_LPAR, $+)
+            elsif $7
+              return Token.new(T_RPAR, $+)
+            elsif $8
+              return Token.new(T_BSLASH, $+)
+            elsif $9
+              return Token.new(T_STAR, $+)
+            elsif $10
+              return Token.new(T_LBRA, $+)
+            elsif $11
+              return Token.new(T_RBRA, $+)
+            elsif $12
+              len = $+.to_i
+              val = @str[@pos, len]
+              @pos += len
+              return Token.new(T_LITERAL, val)
+            elsif $13
+              return Token.new(T_PLUS, $+)
+            elsif $14
+              return Token.new(T_PERCENT, $+)
+            elsif $15
+              return Token.new(T_CRLF, $+)
+            elsif $16
+              return Token.new(T_EOF, $+)
+            else
+              parse_error("[Net::IMAP BUG] BEG_REGEXP is invalid")
+            end
+          else
+            @str.index(/\S*/n, @pos)
+            parse_error("unknown token - %s", $&.dump)
+          end
+        when EXPR_DATA
+          if @str.index(DATA_REGEXP, @pos)
+            @pos = $~.end(0)
+            if $1
+              return Token.new(T_SPACE, $+)
+            elsif $2
+              return Token.new(T_NIL, $+)
+            elsif $3
+              return Token.new(T_NUMBER, $+)
+            elsif $4
+              return Token.new(T_QUOTED,
+                               $+.gsub(/\\(["\\])/n, "\\1"))
+            elsif $5
+              len = $+.to_i
+              val = @str[@pos, len]
+              @pos += len
+              return Token.new(T_LITERAL, val)
+            elsif $6
+              return Token.new(T_LPAR, $+)
+            elsif $7
+              return Token.new(T_RPAR, $+)
+            else
+              parse_error("[Net::IMAP BUG] BEG_REGEXP is invalid")
+            end
+          else
+            @str.index(/\S*/n, @pos)
+            parse_error("unknown token - %s", $&.dump)
+          end
+        when EXPR_TEXT
+          if @str.index(TEXT_REGEXP, @pos)
+            @pos = $~.end(0)
+            if $1
+              return Token.new(T_TEXT, $+)
+            else
+              parse_error("[Net::IMAP BUG] TEXT_REGEXP is invalid")
+            end
+          else
+            @str.index(/\S*/n, @pos)
+            parse_error("unknown token - %s", $&.dump)
+          end
+        when EXPR_RTEXT
+          if @str.index(RTEXT_REGEXP, @pos)
+            @pos = $~.end(0)
+            if $1
+              return Token.new(T_LBRA, $+)
+            elsif $2
+              return Token.new(T_TEXT, $+)
+            else
+              parse_error("[Net::IMAP BUG] RTEXT_REGEXP is invalid")
+            end
+          else
+            @str.index(/\S*/n, @pos)
+            parse_error("unknown token - %s", $&.dump)
+          end
+        when EXPR_CTEXT
+          if @str.index(CTEXT_REGEXP, @pos)
+            @pos = $~.end(0)
+            if $1
+              return Token.new(T_TEXT, $+)
+            else
+              parse_error("[Net::IMAP BUG] CTEXT_REGEXP is invalid")
+            end
+          else
+            @str.index(/\S*/n, @pos) #/
+            parse_error("unknown token - %s", $&.dump)
+          end
+        else
+          parse_error("illegal @lex_state - %s", @lex_state.inspect)
+        end
       end
 
       def parse_error(fmt, *args)
-	if IMAP.debug
-	  $stderr.printf("@str: %s\n", @str.dump)
-	  $stderr.printf("@pos: %d\n", @pos)
-	  $stderr.printf("@lex_state: %s\n", @lex_state)
-	  if @token.symbol
-	    $stderr.printf("@token.symbol: %s\n", @token.symbol)
-	    $stderr.printf("@token.value: %s\n", @token.value.inspect)
-	  end
-	end
-	raise ResponseParseError, format(fmt, *args)
+        if IMAP.debug
+          $stderr.printf("@str: %s\n", @str.dump)
+          $stderr.printf("@pos: %d\n", @pos)
+          $stderr.printf("@lex_state: %s\n", @lex_state)
+          if @token.symbol
+            $stderr.printf("@token.symbol: %s\n", @token.symbol)
+            $stderr.printf("@token.value: %s\n", @token.value.inspect)
+          end
+        end
+        raise ResponseParseError, format(fmt, *args)
       end
     end
 
+    # Authenticator for the "LOGIN" authentication type.  See
+    # #authenticate().
     class LoginAuthenticator
       def process(data)
-	case @state
-	when STATE_USER
-	  @state = STATE_PASSWORD
-	  return @user
-	when STATE_PASSWORD
-	  return @password
-	end
+        case @state
+        when STATE_USER
+          @state = STATE_PASSWORD
+          return @user
+        when STATE_PASSWORD
+          return @password
+        end
       end
 
       private
@@ -2981,63 +3123,78 @@ module Net
       STATE_PASSWORD = :PASSWORD
 
       def initialize(user, password)
-	@user = user
-	@password = password
-	@state = STATE_USER
+        @user = user
+        @password = password
+        @state = STATE_USER
       end
     end
     add_authenticator "LOGIN", LoginAuthenticator
 
+    # Authenticator for the "CRAM-MD5" authentication type.  See
+    # #authenticate().
     class CramMD5Authenticator
       def process(challenge)
-	digest = hmac_md5(challenge, @password)
-	return @user + " " + digest
+        digest = hmac_md5(challenge, @password)
+        return @user + " " + digest
       end
 
       private
 
       def initialize(user, password)
-	@user = user
-	@password = password
+        @user = user
+        @password = password
       end
 
       def hmac_md5(text, key)
-	if key.length > 64
-	  key = Digest::MD5.digest(key)
-	end
+        if key.length > 64
+          key = Digest::MD5.digest(key)
+        end
 
-	k_ipad = key + "\0" * (64 - key.length)
-	k_opad = key + "\0" * (64 - key.length)
-	for i in 0..63
-	  k_ipad[i] ^= 0x36
-	  k_opad[i] ^= 0x5c
-	end
+        k_ipad = key + "\0" * (64 - key.length)
+        k_opad = key + "\0" * (64 - key.length)
+        for i in 0..63
+          k_ipad[i] ^= 0x36
+          k_opad[i] ^= 0x5c
+        end
 
-	digest = Digest::MD5.digest(k_ipad + text)
+        digest = Digest::MD5.digest(k_ipad + text)
 
-	return Digest::MD5.hexdigest(k_opad + digest)
+        return Digest::MD5.hexdigest(k_opad + digest)
       end
     end
     add_authenticator "CRAM-MD5", CramMD5Authenticator
 
+    # Superclass of IMAP errors.
     class Error < StandardError
     end
 
+    # Error raised when data is in the incorrect format.
     class DataFormatError < Error
     end
 
+    # Error raised when a response from the server is non-parseable.
     class ResponseParseError < Error
     end
 
+    # Superclass of all errors used to encapsulate "fail" responses
+    # from the server.
     class ResponseError < Error
     end
 
+    # Error raised upon a "NO" response from the server, indicating
+    # that the client command could not be completed successfully.
     class NoResponseError < ResponseError
     end
 
+    # Error raised upon a "BAD" response from the server, indicating
+    # that the client command violated the IMAP protocol, or an internal
+    # server failure has occurred.
     class BadResponseError < ResponseError
     end
 
+    # Error raised upon a "BYE" response from the server, indicating 
+    # that the client is not being allowed to login, or has been timed
+    # out due to inactivity.
     class ByeResponseError < ResponseError
     end
   end
@@ -3048,9 +3205,10 @@ if __FILE__ == $0
   require "getoptlong"
 
   $stdout.sync = true
-  $port = "imap2"
+  $port = nil
   $user = ENV["USER"] || ENV["LOGNAME"]
-  $auth = "cram-md5"
+  $auth = "login"
+  $ssl = false
 
   def usage
     $stderr.print <<EOF
@@ -3060,6 +3218,7 @@ usage: #{$0} [options] <host>
   --port=PORT                   specifies port
   --user=USER                   specifies user
   --auth=AUTH                   specifies auth type
+  --ssl                         use ssl
 EOF
   end
 
@@ -3084,22 +3243,28 @@ EOF
   end
 
   parser = GetoptLong.new
-  parser.set_options(['--help', GetoptLong::NO_ARGUMENT],
-		     ['--port', GetoptLong::REQUIRED_ARGUMENT],
-		     ['--user', GetoptLong::REQUIRED_ARGUMENT],
-		     ['--auth', GetoptLong::REQUIRED_ARGUMENT])
+  parser.set_options(['--debug', GetoptLong::NO_ARGUMENT],
+                     ['--help', GetoptLong::NO_ARGUMENT],
+                     ['--port', GetoptLong::REQUIRED_ARGUMENT],
+                     ['--user', GetoptLong::REQUIRED_ARGUMENT],
+                     ['--auth', GetoptLong::REQUIRED_ARGUMENT],
+                     ['--ssl', GetoptLong::NO_ARGUMENT])
   begin
     parser.each_option do |name, arg|
       case name
       when "--port"
-	$port = arg
+        $port = arg
       when "--user"
-	$user = arg
+        $user = arg
       when "--auth"
-	$auth = arg
+        $auth = arg
+      when "--ssl"
+        $ssl = true
+      when "--debug"
+        Net::IMAP.debug = true
       when "--help"
-	usage
-	exit(1)
+        usage
+        exit(1)
       end
     end
   rescue
@@ -3112,8 +3277,9 @@ EOF
     usage
     exit(1)
   end
+  $port ||= $ssl ? 993 : 143
     
-  imap = Net::IMAP.new($host, $port)
+  imap = Net::IMAP.new($host, $port, $ssl)
   begin
     password = get_password
     imap.authenticate($auth, $user, password)
@@ -3121,61 +3287,61 @@ EOF
       cmd, *args = get_command
       break unless cmd
       begin
-	case cmd
-	when "list"
-	  for mbox in imap.list("", args[0] || "*")
-	    if mbox.attr.include?(Net::IMAP::NOSELECT)
-	      prefix = "!"
-	    elsif mbox.attr.include?(Net::IMAP::MARKED)
-	      prefix = "*"
-	    else
-	      prefix = " "
-	    end
-	    print prefix, mbox.name, "\n"
-	  end
-	when "select"
-	  imap.select(args[0] || "inbox")
-	  print "ok\n"
-	when "close"
-	  imap.close
-	  print "ok\n"
-	when "summary"
-	  unless messages = imap.responses["EXISTS"][-1]
-	    puts "not selected"
-	    next
-	  end
-	  if messages > 0
-	    for data in imap.fetch(1..-1, ["ENVELOPE"])
-	      print data.seqno, ": ", data.attr["ENVELOPE"].subject, "\n"
-	    end
-	  else
-	    puts "no message"
-	  end
-	when "fetch"
-	  if args[0]
-	    data = imap.fetch(args[0].to_i, ["RFC822.HEADER", "RFC822.TEXT"])[0]
-	    puts data.attr["RFC822.HEADER"]
-	    puts data.attr["RFC822.TEXT"]
-	  else
-	    puts "missing argument"
-	  end
-	when "logout", "exit", "quit"
-	  break
-	when "help", "?"
-	  print <<EOF
-list [pattern]			list mailboxes
-select [mailbox]		select mailbox
-close				close mailbox
-summary				display summary
-fetch [msgno]			display message
-logout				logout
-help, ?				display help message
+        case cmd
+        when "list"
+          for mbox in imap.list("", args[0] || "*")
+            if mbox.attr.include?(Net::IMAP::NOSELECT)
+              prefix = "!"
+            elsif mbox.attr.include?(Net::IMAP::MARKED)
+              prefix = "*"
+            else
+              prefix = " "
+            end
+            print prefix, mbox.name, "\n"
+          end
+        when "select"
+          imap.select(args[0] || "inbox")
+          print "ok\n"
+        when "close"
+          imap.close
+          print "ok\n"
+        when "summary"
+          unless messages = imap.responses["EXISTS"][-1]
+            puts "not selected"
+            next
+          end
+          if messages > 0
+            for data in imap.fetch(1..-1, ["ENVELOPE"])
+              print data.seqno, ": ", data.attr["ENVELOPE"].subject, "\n"
+            end
+          else
+            puts "no message"
+          end
+        when "fetch"
+          if args[0]
+            data = imap.fetch(args[0].to_i, ["RFC822.HEADER", "RFC822.TEXT"])[0]
+            puts data.attr["RFC822.HEADER"]
+            puts data.attr["RFC822.TEXT"]
+          else
+            puts "missing argument"
+          end
+        when "logout", "exit", "quit"
+          break
+        when "help", "?"
+          print <<EOF
+list [pattern]                  list mailboxes
+select [mailbox]                select mailbox
+close                           close mailbox
+summary                         display summary
+fetch [msgno]                   display message
+logout                          logout
+help, ?                         display help message
 EOF
-	else
-	  print "unknown command: ", cmd, "\n"
-	end
+        else
+          print "unknown command: ", cmd, "\n"
+        end
       rescue Net::IMAP::Error
-	puts $!
+        puts $!
       end
     end
   ensure
@@ -3183,3 +3349,4 @@ EOF
     imap.disconnect
   end
 end
+

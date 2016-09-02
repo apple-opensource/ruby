@@ -1,5 +1,5 @@
 /*
- * $Id: ossl_x509.h,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+ * $Id: ossl_x509.h,v 1.2 2003/11/01 09:24:55 gotoyuzo Exp $
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2001-2002  Michal Rokos <m.rokos@sh.cvut.cz>
  * All rights reserved.
@@ -80,6 +80,7 @@ extern VALUE cX509Req;
 extern VALUE eX509ReqError;
 
 VALUE ossl_x509req_new(X509_REQ *);
+X509_REQ *GetX509ReqPtr(VALUE);
 X509_REQ *DupX509ReqPtr(VALUE);
 void Init_ossl_x509req(void);
 

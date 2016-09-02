@@ -1,15 +1,14 @@
-# :nodoc:
-#
 # Author:: Nathaniel Talbott.
 # Copyright:: Copyright (c) 2000-2002 Nathaniel Talbott. All rights reserved.
 # License:: Ruby license.
 
+require 'test/unit'
 require 'test/unit/util/observable'
 require 'test/unit/testresult'
 
 module Test
   module Unit
-    module UI # :nodoc:
+    module UI
 
       # Provides an interface to write any given UI against,
       # hopefully making it easy to write new UIs.
@@ -20,14 +19,6 @@ module Test
         
         include Util::Observable
         
-        @@run = false
-
-        # Returns true if any TestRunnerMediator instances
-        # have been run.
-        def self.run?
-          return @@run
-        end
-
         # Creates a new TestRunnerMediator initialized to run
         # the passed suite.
         def initialize(suite)
@@ -37,7 +28,7 @@ module Test
         # Runs the suite the TestRunnerMediator was created
         # with.
         def run_suite
-          @@run = true
+          Unit.run = true
           begin_time = Time.now
           notify_listeners(RESET, @suite.size)
           result = create_result

@@ -1,5 +1,5 @@
 # $RoughId: extconf.rb,v 1.3 2001/11/24 17:49:26 knu Exp $
-# $Id: extconf.rb,v 1.1.1.2 2003/10/15 10:11:48 melville Exp $
+# $Id: extconf.rb,v 1.1 2001/11/26 12:00:40 knu Exp $
 
 require 'mkmf'
 

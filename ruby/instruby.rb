@@ -71,19 +71,25 @@ def makedirs(dirs)
   super(dirs, :mode => 0755, :verbose => true) unless dirs.empty?
 end
 
+def with_destdir(dir)
+  return dir if $destdir.empty?
+  dir = dir.sub(/\A\w:/, '') if File::PATH_SEPARATOR == ';'
+  $destdir + dir
+end
+
 exeext = CONFIG["EXEEXT"]
 
 ruby_install_name = CONFIG["ruby_install_name"]
 rubyw_install_name = CONFIG["rubyw_install_name"]
 
 version = CONFIG["ruby_version"]
-bindir = $destdir+CONFIG["bindir"]
-libdir = $destdir+CONFIG["libdir"]
-rubylibdir = $destdir+CONFIG["rubylibdir"]
-archlibdir = $destdir+CONFIG["archdir"]
-sitelibdir = $destdir+CONFIG["sitelibdir"]
-sitearchlibdir = $destdir+CONFIG["sitearchdir"]
-mandir = File.join($destdir+CONFIG["mandir"], "man")
+bindir = with_destdir(CONFIG["bindir"])
+libdir = with_destdir(CONFIG["libdir"])
+rubylibdir = with_destdir(CONFIG["rubylibdir"])
+archlibdir = with_destdir(CONFIG["archdir"])
+sitelibdir = with_destdir(CONFIG["sitelibdir"])
+sitearchlibdir = with_destdir(CONFIG["sitearchdir"])
+mandir = with_destdir(File.join(CONFIG["mandir"], "man"))
 configure_args = Shellwords.shellwords(CONFIG["configure_args"])
 enable_shared = CONFIG["ENABLE_SHARED"] == 'yes'
 dll = CONFIG["LIBRUBY_SO"]
@@ -118,6 +124,9 @@ end
 Dir.chdir CONFIG["srcdir"]
 
 ruby_shebang = File.join(CONFIG["bindir"], ruby_install_name)
+if File::ALT_SEPARATOR
+  ruby_bin_dosish = ruby_shebang.tr(File::SEPARATOR, File::ALT_SEPARATOR)
+end
 for src in Dir["bin/*"]
   next unless File.file?(src)
   next if /\/[.#]|(\.(old|bak|orig|rej|diff|patch|core)|~|\/core)$/i =~ src
@@ -142,17 +151,16 @@ for src in Dir["bin/*"]
     end
   }
 
-  if RUBY_PLATFORM =~ /mswin32|mingw|bccwin32/
-    ruby_bin_dosish = ruby_bin.gsub(Regexp.compile(File::SEPARATOR), File::ALT_SEPARATOR)
-    batfile = dest + ".bat"
-    open(batfile, "w") { |b|
+  if ruby_bin_dosish
+    batfile = File.join(CONFIG["bindir"], name + ".bat")
+    open(with_destdir(batfile), "w") { |b|
       b.print <<EOH, shebang, body, <<EOF
 @echo off
-if "%OS%" == "Windows_NT" goto WinNT
+if not "%~d0" == "~d0" goto WinNT
 #{ruby_bin_dosish} -x "#{batfile}" %1 %2 %3 %4 %5 %6 %7 %8 %9
 goto endofruby
 :WinNT
-#{ruby_bin_dosish} -x "#{batfile}" %*
+"%~dp0#{ruby_install_name}" -x "%~f0" %*
 goto endofruby
 EOH
 __END__
@@ -162,13 +170,13 @@ EOF
   end
 end
 
-Dir.glob("lib/**/*{.rb,help-message}") do |f|
+for f in Dir["lib/**/*{.rb,help-message}"]
   dir = File.dirname(f).sub!(/\Alib/, rubylibdir) || rubylibdir
   makedirs dir
   install f, dir, :mode => 0644
 end
 
-Dir.glob("*.h") do |f|
+for f in Dir["*.h"]
   install f, archlibdir, :mode => 0644
 end
 
@@ -177,7 +185,7 @@ if RUBY_PLATFORM =~ /mswin32|mingw|bccwin32/
   install "win32/win32.h", File.join(archlibdir, "win32"), :mode => 0644
 end
 
-Dir.glob("*.[1-9]") do |mdoc|
+for mdoc in Dir["*.[1-9]"]
   next unless File.file?(mdoc) and open(mdoc){|fh| fh.read(1) == '.'}
 
   section = mdoc[-1,1]

@@ -1,14 +1,14 @@
 /*
- * handler.h
+ * handler.c
  *
- * $Author: melville $
- * $Date: 2003/10/15 10:11:48 $
+ * $Author: why $
+ * $Date: 2004/05/16 16:09:40 $
  *
  * Copyright (C) 2003 why the lucky stiff
  */
 
-#include "syck.h"
 #include "ruby.h"
+#include "syck.h"
 
 SYMID 
 syck_hdlr_add_node( SyckParser *p, SyckNode *n )
@@ -73,6 +73,7 @@ syck_hdlr_get_anchor( SyckParser *p, char *a )
         {
             if ( n != (void *)1 )
             {    
+                S_FREE( a );
                 return n;
             }
             else
@@ -94,7 +95,16 @@ syck_hdlr_get_anchor( SyckParser *p, char *a )
     {
         n = (p->bad_anchor_handler)( p, a );
     }
-    n->anchor = a;
+
+    if ( n->anchor )
+    {
+        S_FREE( a );
+    } 
+    else
+    {
+        n->anchor = a;
+    }
+
     return n;
 }
 
@@ -131,7 +141,7 @@ syck_taguri( char *domain, char *type_id, int type_len )
 {
     char *uri = S_ALLOC_N( char, strlen( domain ) + type_len + 14 );
     uri[0] = '\0';
-    strcat( uri, "taguri:" );
+    strcat( uri, "tag:" );
     strcat( uri, domain );
     strcat( uri, ":" );
     strncat( uri, type_id, type_len );

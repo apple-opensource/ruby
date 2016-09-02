@@ -509,22 +509,16 @@ Use it in the same way as CGIServer!
 =end 
 
 class ModRubyServer < BasicServer
-  @@obj = nil
-
-  def ModRubyServer.new(*a)
-    @@obj = super(*a) if @@obj.nil?
-    @@obj
-  end
 
   def initialize(*a)
     @ap = Apache::request
     super(*a)
   end
-  
+
   def serve
     catch(:exit_serve) {
       header = {}
-      @ap.each_header {|key, value| header[key.capitalize] = value}
+      @ap.headers_in.each {|key, value| header[key.capitalize] = value}
 
       length = header['Content-length'].to_i
 
@@ -569,7 +563,7 @@ class ModRubyServer < BasicServer
     h['Status']         ||= "200 OK"
     h['Content-length'] ||= body.size.to_s 
 
-    h.each {|key, value| @ap[key] = value }
+    h.each {|key, value| @ap.headers_out[key] = value }
     @ap.content_type = h["Content-type"] 
     @ap.status = status.to_i 
     @ap.send_http_header 
@@ -768,7 +762,7 @@ end
     end
 
     httpserver = WEBrick::HTTPServer.new(:Port => 8080)    
-    httpserver.mount("RPC2", s)
+    httpserver.mount("/RPC2", s)
     trap("HUP") { httpserver.shutdown }   # use 1 instead of "HUP" on Windows
     httpserver.start
 == Description
@@ -834,6 +828,6 @@ end # module XMLRPC
 
 =begin
 = History
-    $Id: server.rb,v 1.1.1.1 2003/10/15 10:11:49 melville Exp $    
+    $Id: server.rb,v 1.2.2.1 2004/08/13 04:24:16 gotoyuzo Exp $    
 =end
 

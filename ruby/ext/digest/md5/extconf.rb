@@ -1,5 +1,5 @@
 # $RoughId: extconf.rb,v 1.3 2001/08/14 19:54:51 knu Exp $
-# $Id: extconf.rb,v 1.3 2003/10/15 12:07:44 melville Exp $
+# $Id: extconf.rb,v 1.4.2.1 2004/01/21 09:05:28 nobu Exp $
 
 require "mkmf"
 
@@ -14,7 +14,6 @@ if !with_config("bundled-md5") &&
     have_library("crypto") && have_header("openssl/md5.h")
   $objs << "md5ossl.#{$OBJEXT}"
 
-  $libs << " -lcrypto"
 else
   $objs << "md5.#{$OBJEXT}"
 end

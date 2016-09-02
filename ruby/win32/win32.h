@@ -105,18 +105,28 @@ extern "C++" {
 #define eof()			_eof()
 #define filelength(h)		_filelength(h)
 #define mktemp(t)		_mktemp(t)
-#define perror(s)		_perror(s)
 #define read(h, b, l)		_read(h, b, l)
 #define tell(h)			_tell(h)
-#define umask(m)		_umask(m)
 #define unlink(p)		_unlink(p)
 #define write(h, b, l)		_write(h, b, l)
 #define _open			_sopen
 #define sopen			_sopen
+#undef fopen
+#define fopen(p, m)		rb_w32_fopen(p, m)
+#undef fdopen
+#define fdopen(h, m)		rb_w32_fdopen(h, m)
+#undef fsopen
+#define fsopen(p, m, sh)	rb_w32_fsopen(p, m, sh)
 #endif
 #define fsync(h)		_commit(h)
 #undef stat
 #define stat(path,st)		rb_w32_stat(path,st)
+#undef execv
+#define execv(path,argv)	do_aspawn(P_OVERLAY,path,argv)
+#if !defined(__BORLANDC__) && !defined(_WIN32_WCE)
+#undef isatty
+#define isatty(h)		rb_w32_isatty(h)
+#endif
 
 #ifdef __MINGW32__
 struct timezone {
@@ -124,10 +134,8 @@ struct timezone {
   int tz_dsttime;
 };
 #endif
-extern int    NtMakeCmdVector(char *, char ***, int);
 extern void   NtInitialize(int *, char ***);
-extern char * NtGetLib(void);
-extern char * NtGetBin(void);
+extern int    rb_w32_cmdvector(const char *, char ***);
 extern pid_t  pipe_exec(char *, int, FILE **, FILE **);
 extern int    flock(int fd, int oper);
 extern int    rb_w32_accept(int, struct sockaddr *, int *);
@@ -176,13 +184,20 @@ extern int do_aspawn(int, char *, char **);
 extern int kill(int, int);
 extern pid_t rb_w32_getpid(void);
 
+#if !defined(__BORLANDC__) && !defined(_WIN32_WCE)
+extern int rb_w32_isatty(int);
+#endif
+
+#ifdef __BORLANDC__
+extern FILE *rb_w32_fopen(const char *, const char *);
+extern FILE *rb_w32_fdopen(int, char *);
+extern FILE *rb_w32_fsopen(const char *, const char *, int);
+#endif
+
 #include <float.h>
 #if !defined __MINGW32__ || defined __NO_ISOCEXT
 #ifndef isnan
 #define isnan(x) _isnan(x)
-#endif
-#ifndef isinf
-#define isinf(x) (!_finite(x) && !_isnan(x))
 #endif
 #ifndef finite
 #define finite(x) _finite(x)
@@ -261,9 +276,6 @@ extern char *rb_w32_strerror(int);
 #define LOCK_EX 2
 #define LOCK_NB 4
 #define LOCK_UN 8
-#ifndef EWOULDBLOCK
-#define EWOULDBLOCK 10035 /* EBASEERR + 35 (winsock.h) */
-#endif
 
 
 #ifndef SIGINT
@@ -276,6 +288,45 @@ extern char *rb_w32_strerror(int);
 
 /* #undef va_start */
 /* #undef va_end */
+
+/* winsock error map */
+#define EWOULDBLOCK	WSAEWOULDBLOCK
+#define EINPROGRESS	WSAEINPROGRESS
+#define EALREADY	WSAEALREADY
+#define ENOTSOCK	WSAENOTSOCK
+#define EDESTADDRREQ	WSAEDESTADDRREQ
+#define EMSGSIZE	WSAEMSGSIZE
+#define EPROTOTYPE	WSAEPROTOTYPE
+#define ENOPROTOOPT	WSAENOPROTOOPT
+#define EPROTONOSUPPORT	WSAEPROTONOSUPPORT
+#define ESOCKTNOSUPPORT	WSAESOCKTNOSUPPORT
+#define EOPNOTSUPP	WSAEOPNOTSUPP
+#define EPFNOSUPPORT	WSAEPFNOSUPPORT
+#define EAFNOSUPPORT	WSAEAFNOSUPPORT
+#define EADDRINUSE	WSAEADDRINUSE
+#define EADDRNOTAVAIL	WSAEADDRNOTAVAIL
+#define ENETDOWN	WSAENETDOWN
+#define ENETUNREACH	WSAENETUNREACH
+#define ENETRESET	WSAENETRESET
+#define ECONNABORTED	WSAECONNABORTED
+#define ECONNRESET	WSAECONNRESET
+#define ENOBUFS		WSAENOBUFS
+#define EISCONN		WSAEISCONN
+#define ENOTCONN	WSAENOTCONN
+#define ESHUTDOWN	WSAESHUTDOWN
+#define ETOOMANYREFS	WSAETOOMANYREFS
+#define ETIMEDOUT	WSAETIMEDOUT
+#define ECONNREFUSED	WSAECONNREFUSED
+#define ELOOP		WSAELOOP
+/*#define ENAMETOOLONG	WSAENAMETOOLONG*/
+#define EHOSTDOWN	WSAEHOSTDOWN
+#define EHOSTUNREACH	WSAEHOSTUNREACH
+/*#define ENOTEMPTY	WSAENOTEMPTY*/
+#define EPROCLIM	WSAEPROCLIM
+#define EUSERS		WSAEUSERS
+#define EDQUOT		WSAEDQUOT
+#define ESTALE		WSAESTALE
+#define EREMOTE		WSAEREMOTE
 
 #ifdef accept
 #undef accept

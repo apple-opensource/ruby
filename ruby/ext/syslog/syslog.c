@@ -4,10 +4,11 @@
  * <amos+ruby@utdallas.edu>
  *
  * $RoughId: syslog.c,v 1.21 2002/02/25 12:21:17 knu Exp $
- * $Id: syslog.c,v 1.1.1.3 2003/10/15 10:11:48 melville Exp $
+ * $Id: syslog.c,v 1.8.2.1 2004/04/05 07:45:24 matz Exp $
  */
 
 #include "ruby.h"
+#include "util.h"
 #include <syslog.h>
 
 /* Syslog class */
@@ -145,7 +146,7 @@ static VALUE mSyslog_log(int argc, VALUE *argv, VALUE self)
     VALUE pri;
 
     if (argc < 2) {
-        rb_raise(rb_eArgError, "wrong # of arguments(%d for 2+)", argc);
+        rb_raise(rb_eArgError, "wrong number of arguments (%d for 2+)", argc);
     }
 
     argc--;

@@ -51,6 +51,9 @@
 #endif
 #include <netdb.h>
 #if defined(HAVE_RESOLV_H)
+#ifdef _SX
+#include <stdio.h>
+#endif
 #include <resolv.h>
 #endif
 #endif
@@ -208,7 +211,11 @@ getnameinfo(sa, salen, host, hostlen, serv, servlen, flags)
 		break;
 #ifdef INET6
 	case AF_INET6:
+#ifdef HAVE_ADDR8
 		pfx = ((struct sockaddr_in6 *)sa)->sin6_addr.s6_addr8[0];
+#else
+		pfx = ((struct sockaddr_in6 *)sa)->sin6_addr.s6_addr[0];
+#endif
 		if (pfx == 0 || pfx == 0xfe || pfx == 0xff)
 			flags |= NI_NUMERICHOST;
 		break;

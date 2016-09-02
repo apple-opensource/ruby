@@ -19,7 +19,8 @@ module WEBrick
     class CGIHandler < AbstractServlet
       Ruby = File::join(::Config::CONFIG['bindir'],
                         ::Config::CONFIG['ruby_install_name'])
-      CGIRunner = "#{Ruby} #{Config::LIBDIR}/httpservlet/cgi_runner.rb"
+      Ruby << ::Config::CONFIG['EXEEXT']
+      CGIRunner = "\"#{Ruby}\" \"#{Config::LIBDIR}/httpservlet/cgi_runner.rb\""
 
       def initialize(server, name)
         super
@@ -32,7 +33,7 @@ module WEBrick
         data = nil
         status = -1
 
-        cgi_in = IO::popen(@cgicmd, "w")
+        cgi_in = IO::popen(@cgicmd, "wb")
         cgi_out = Tempfile.new("webrick.cgiout.", @tempdir)
         cgi_err = Tempfile.new("webrick.cgierr.", @tempdir)
         begin
@@ -40,6 +41,9 @@ module WEBrick
           meta = req.meta_vars
           meta["SCRIPT_FILENAME"] = @script_filename
           meta["PATH"] = @config[:CGIPathEnv]
+          if /mswin|bccwin|mingw/ =~ RUBY_PLATFORM
+            meta["SystemRoot"] = ENV["SystemRoot"]
+          end
           dump = Marshal.dump(meta)
 
           cgi_in.write("%8d" % cgi_out.path.size)
@@ -54,7 +58,8 @@ module WEBrick
           end
         ensure
           cgi_in.close
-          status = $? >> 8
+          status = $?.exitstatus
+          sleep 0.1 if /mswin|bccwin|mingw/ =~ RUBY_PLATFORM
           data = cgi_out.read
           cgi_out.close(true)
           if errmsg = cgi_err.read
@@ -72,7 +77,7 @@ module WEBrick
         data = "" unless data
         raw_header, body = data.split(/^[\xd\xa]+/on, 2) 
         raise HTTPStatus::InternalServerError,
-          "The server encontered a script error." if body.nil?
+          "Premature end of script headers: #{@script_filename}" if body.nil?
 
         begin
           header = HTTPUtils::parse_header(raw_header)

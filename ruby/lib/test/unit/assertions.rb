@@ -1,13 +1,12 @@
-# :nodoc:
-#
 # Author:: Nathaniel Talbott.
-# Copyright:: Copyright (c) 2000-2002 Nathaniel Talbott. All rights reserved.
+# Copyright:: Copyright (c) 2000-2003 Nathaniel Talbott. All rights reserved.
 # License:: Ruby license.
 
 require 'test/unit/assertionfailederror'
+require 'test/unit/util/backtracefilter'
 
-module Test # :nodoc:
-  module Unit # :nodoc:
+module Test
+  module Unit
 
     # Contains all of the standard Test::Unit assertions. Mixed in
     # to Test::Unit::TestCase. To mix it in and use its
@@ -25,7 +24,7 @@ module Test # :nodoc:
       # The assertion upon which all other assertions are
       # based. Passes if the block yields true.
       public
-      def assert_block(message="") # :yields: 
+      def assert_block(message="assert_block failed.") # :yields: 
         _wrap_assertion do
           if (! yield)
             raise AssertionFailedError.new(message.to_s)
@@ -35,10 +34,10 @@ module Test # :nodoc:
 
       # Passes if boolean is true.
       public
-      def assert(boolean, message="")
+      def assert(boolean, message=nil)
         _wrap_assertion do
           assert_block("assert should not be called with a block.") { !block_given? }
-          assert_block(message) { boolean }
+          assert_block(build_message(message, "<?> is not true.", boolean)) { boolean }
         end
       end
 
@@ -48,39 +47,59 @@ module Test # :nodoc:
       # of expected and actual.
       public
       def assert_equal(expected, actual, message=nil)
-        full_message = build_message(message, expected, actual) do |arg1, arg2|
-          "<#{arg1}> expected but was\n" +
-          "<#{arg2}>"
-        end
+        full_message = build_message(message, <<EOT, expected, actual)
+<?> expected but was
+<?>.
+EOT
         assert_block(full_message) { expected == actual }
       end
 
-      # Passes if block raises exception.
+      private
+      def _check_exception_class(args)
+        args.partition do |klass|
+          next if klass.instance_of?(Module)
+          assert(Exception >= klass, "Should expect a class of exception, #{klass}")
+          true
+        end
+      end
+
+      private
+      def _expected_exception?(actual_exception, exceptions, modules)
+        exceptions.include?(actual_exception.class) or
+          modules.any? {|mod| actual_exception.is_a?(mod)}
+      end
+
+      # Passes if block raises one of the given exceptions.
       public
-      def assert_raises(expected_exception_klass, message="")
+      def assert_raise(*args)
         _wrap_assertion do
-          assert_instance_of(Class, expected_exception_klass, "Should expect a class of exception")
-          actual_exception = nil
-          full_message = build_message(message, expected_exception_klass) do |arg|
-            "<#{arg}> exception expected but none was thrown"
+          if Module === args.last
+            message = ""
+          else
+            message = args.pop
           end
+          exceptions, modules = _check_exception_class(args)
+          expected = args.size == 1 ? args.first : args
+          actual_exception = nil
+          full_message = build_message(message, "<?> exception expected but none was thrown.", expected)
           assert_block(full_message) do
-            thrown = false
             begin
               yield
-            rescue Exception => thrown_exception
-              actual_exception = thrown_exception
-              thrown = true
+            rescue Exception => actual_exception
+              break
             end
-            thrown
+            false
           end
-          full_message = build_message(message, expected_exception_klass, actual_exception) do |arg1, arg2|
-            "<#{arg1}> exception expected but was\n" +
-            arg2
-          end
-          assert_block(full_message) { expected_exception_klass == actual_exception.class }
+          full_message = build_message(message, "<?> exception expected but was\n?", expected, actual_exception)
+          assert_block(full_message) {_expected_exception?(actual_exception, exceptions, modules)}
           actual_exception
         end
+      end
+
+      # Alias of assert_raise. Will be deprecated in 1.9, and removed in 2.0.
+      public
+      def assert_raises(*args, &block)
+        assert_raise(*args, &block)
       end
 
       # Passes if object.class == klass.
@@ -88,12 +107,12 @@ module Test # :nodoc:
       def assert_instance_of(klass, object, message="")
         _wrap_assertion do
           assert_equal(Class, klass.class, "assert_instance_of takes a Class as its first argument")
-          full_message = build_message(message, object, klass, object.class) do |arg1, arg2, arg3|
-            "<#{arg1}> expected to be an instance of\n" + 
-            "<#{arg2}> but was\n" +
-            "<#{arg3}>"
-          end
-          assert_block(full_message) { klass == object.class }
+          full_message = build_message(message, <<EOT, object, klass, object.class)
+<?> expected to be an instance of
+<?> but was
+<?>.
+EOT
+          assert_block(full_message){object.instance_of?(klass)}
         end
       end
 
@@ -108,11 +127,8 @@ module Test # :nodoc:
       def assert_kind_of(klass, object, message="")
         _wrap_assertion do
           assert(klass.kind_of?(Module), "The first parameter to assert_kind_of should be a kind_of Module.")
-          full_message = build_message(message, object, klass) do |arg1, arg2|
-            "<#{arg1}>\n" +
-            "expected to be kind_of?<#{arg2}>"
-          end
-          assert_block(full_message) { object.kind_of?(klass) }
+          full_message = build_message(message, "<?>\nexpected to be kind_of\\?\n<?> but was\n<?>.", object, klass, object.class)
+          assert_block(full_message){object.kind_of?(klass)}
         end
       end
 
@@ -120,12 +136,16 @@ module Test # :nodoc:
       public
       def assert_respond_to(object, method, message="")
         _wrap_assertion do
-          assert(method.kind_of?(Symbol) || method.kind_of?(String), "The method argument to #assert_respond_to should be specified as a Symbol or a String.")
-          full_message = build_message(message, object, object.class, method) do |arg1, arg2, arg3|
-            "<#{arg1}>\n" +
-            "of type <#{arg2}>\n" +
-            "expected to respond_to?<#{arg3}>"
+          full_message = build_message(nil, "<?>\ngiven as the method name argument to #assert_respond_to must be a Symbol or #respond_to\\?(:to_str).", method)
+
+          assert_block(full_message) do
+            method.kind_of?(Symbol) || method.respond_to?(:to_str)
           end
+          full_message = build_message(message, <<EOT, object, object.class, method)
+<?>
+of type <?>
+expected to respond_to\\?<?>.
+EOT
           assert_block(full_message) { object.respond_to?(method) }
         end
       end
@@ -134,10 +154,13 @@ module Test # :nodoc:
       public
       def assert_match(pattern, string, message="")
         _wrap_assertion do
-          full_message = build_message(message, string, pattern) do |arg1, arg2|
-            "<#{arg1}> expected to be =~\n" +
-            "<#{arg2}>"
+          pattern = case(pattern)
+            when String
+              Regexp.new(Regexp.escape(pattern))
+            else
+              pattern
           end
+          full_message = build_message(message, "<?> expected to be =~\n<?>.", string, pattern)
           assert_block(full_message) { string =~ pattern }
         end
       end
@@ -146,45 +169,50 @@ module Test # :nodoc:
       # same instance).
       public
       def assert_same(expected, actual, message="")
-        full_message = build_message(message, expected, expected.__id__, actual, actual.__id__) do |arg1, arg2, arg3, arg4|
-          "<#{arg1}:#{arg2}> expected to be equal? to\n" +
-          "<#{arg3}:#{arg4}>"
-        end
+        full_message = build_message(message, <<EOT, expected, expected.__id__, actual, actual.__id__)
+<?>
+with id <?> expected to be equal\\? to
+<?>
+with id <?>.
+EOT
         assert_block(full_message) { actual.equal?(expected) }
       end
 
       # Compares the two objects based on the passed
-      # operator. Passes if object1.send(operator, object2) is
-      # true.
+      # operator. Passes if object1.__send__(operator, object2)
+      # is true.
       public
       def assert_operator(object1, operator, object2, message="")
-        full_message = build_message(message, object1, operator, object2) do |arg1, arg2, arg3|
-          "<#{arg1}> expected to be\n" +
-          "#{arg2}\n" +
-          "<#{arg3}>"
+        _wrap_assertion do
+          full_message = build_message(nil, "<?>\ngiven as the operator for #assert_operator must be a Symbol or #respond_to\\?(:to_str).", operator)
+          assert_block(full_message){operator.kind_of?(Symbol) || operator.respond_to?(:to_str)}
+          full_message = build_message(message, <<EOT, object1, AssertionMessage.literal(operator), object2)
+<?> expected to be
+?
+<?>.
+EOT
+          assert_block(full_message) { object1.__send__(operator, object2) }
         end
-        assert_block(full_message) { object1.send(operator, object2) }
       end
 
       # Passes if block does not raise an exception.
       public
       def assert_nothing_raised(*args)
         _wrap_assertion do
-          message = ""
-          if (!args[-1].instance_of?(Class))
+          if Module === args.last
+            message = ""
+          else
             message = args.pop
           end
+          exceptions, modules = _check_exception_class(args)
           begin
             yield
-          rescue Exception => thrown_exception
-            if (args.empty? || args.include?(thrown_exception.class))
-              full_message = build_message(message, thrown_exception) do |arg1|
-                "Exception raised:\n" +
-                arg1
-              end
-              flunk(full_message)
+          rescue Exception => e
+            if ((args.empty? && !e.instance_of?(AssertionFailedError)) ||
+                _expected_exception?(e, exceptions, modules))
+              assert_block(build_message(message, "Exception raised:\n?", e)){false}
             else
-              raise thrown_exception.class, thrown_exception.message, thrown_exception.backtrace
+              raise
             end
           end
           nil
@@ -193,78 +221,70 @@ module Test # :nodoc:
 
       # Always fails.
       public
-      def flunk(message="")
-        assert(false, message)
+      def flunk(message="Flunked")
+        assert_block(build_message(message)){false}
       end
 
       # Passes if !actual.equal?(expected).
       public
       def assert_not_same(expected, actual, message="")
-        full_message = build_message(message, expected, expected.__id__, actual, actual.__id__) do |arg1, arg2, arg3, arg4|
-          "<#{arg1}:#{arg2}> expected to not be equal? to\n" +
-          "<#{arg3}:#{arg4}>"
-        end
+        full_message = build_message(message, <<EOT, expected, expected.__id__, actual, actual.__id__)
+<?>
+with id <?> expected to not be equal\\? to
+<?>
+with id <?>.
+EOT
         assert_block(full_message) { !actual.equal?(expected) }
       end
 
       # Passes if expected != actual.
       public
       def assert_not_equal(expected, actual, message="")
-        full_message = build_message(message, expected, actual) do |arg1, arg2|
-          "<#{arg1}> expected to be != to\n" +
-          "<#{arg2}>"
-        end
+        full_message = build_message(message, "<?> expected to be != to\n<?>.", expected, actual)
         assert_block(full_message) { expected != actual }
       end
 
       # Passes if !object.nil?.
       public
       def assert_not_nil(object, message="")
-        full_message = build_message(message, object) do |arg|
-          "<#{arg}> expected to not be nil"
-        end
-        assert_block(full_message) { !object.nil? }
+        full_message = build_message(message, "<?> expected to not be nil.", object)
+        assert_block(full_message){!object.nil?}
       end
 
       # Passes if string !~ regularExpression.
       public
       def assert_no_match(regexp, string, message="")
         _wrap_assertion do
-          assert_instance_of(Regexp, regexp, "The first argument to assert_does_not_match should be a Regexp.")
-          full_message = build_message(message, regexp.source, string) do |arg1, arg2|
-            "</#{arg1}/> expected to not match\n" +
-            " <#{arg2}>"
-          end
+          assert_instance_of(Regexp, regexp, "The first argument to assert_no_match should be a Regexp.")
+          full_message = build_message(message, "<?> expected to not match\n<?>.", regexp, string)
           assert_block(full_message) { regexp !~ string }
         end
       end
+
+      UncaughtThrow = {NameError => /^uncaught throw \`(.+)\'$/,
+                       ThreadError => /^uncaught throw \`(.+)\' in thread /} #`
 
       # Passes if block throws symbol.
       public
       def assert_throws(expected_symbol, message="", &proc)
         _wrap_assertion do
           assert_instance_of(Symbol, expected_symbol, "assert_throws expects the symbol that should be thrown for its first argument")
-          assert(block_given?, "Should have passed a block to assert_throws")
+          assert_block("Should have passed a block to assert_throws."){block_given?}
           caught = true
           begin
             catch(expected_symbol) do
               proc.call
               caught = false
             end
-            full_message = build_message(message, expected_symbol) do |arg|
-              "<:#{arg}> should have been thrown"
+            full_message = build_message(message, "<?> should have been thrown.", expected_symbol)
+            assert_block(full_message){caught}
+          rescue NameError, ThreadError => error
+            if UncaughtThrow[error.class] !~ error.message
+              raise error
             end
-            assert(caught, full_message)
-          rescue NameError => name_error
-            if ( name_error.message !~ /^uncaught throw `(.+)'$/ )  #`
-              raise name_error
-            end
-            full_message = build_message(message, expected_symbol, $1) do |arg1, arg2|
-              "<:#{arg1}> expected to be thrown but\n" +
-              "<:#{arg2}> was thrown"
-            end
+            full_message = build_message(message, "<?> expected to be thrown but\n<?> was thrown.", expected_symbol, $1.intern)
             flunk(full_message)
-          end  
+          end
         end
       end
 
@@ -275,17 +295,14 @@ module Test # :nodoc:
           assert(block_given?, "Should have passed a block to assert_nothing_thrown")
           begin
             proc.call
-          rescue NameError => name_error
-            if (name_error.message !~ /^uncaught throw `(.+)'$/ )  #`
-              raise name_error
+          rescue NameError, ThreadError => error
+            if UncaughtThrow[error.class] !~ error.message
+              raise error
             end
-            full_message = build_message(message, $1) do |arg|
-              "<:#{arg}> was thrown when nothing was expected"
-            end
+            full_message = build_message(message, "<?> was thrown when nothing was expected", $1.intern)
             flunk(full_message)
           end
-          full_message = build_message(message) { || "Expected nothing to be thrown" }
-          assert(true, full_message)
+          assert(true, "Expected nothing to be thrown")
         end
       end
 
@@ -298,11 +315,11 @@ module Test # :nodoc:
             assert_respond_to(float, :to_f, "The arguments must respond to to_f; the #{name} did not")
           end
           assert_operator(delta, :>=, 0.0, "The delta should not be negative")
-          full_message = build_message(message, expected_float, actual_float, delta) do |arg1, arg2, arg3|
-            "<#{arg1}> and\n" +
-            "<#{arg2}> expected to be within\n" +
-            "<#{arg3}> of each other"
-          end
+          full_message = build_message(message, <<EOT, expected_float, actual_float, delta)
+<?> and
+<?> expected to be within
+<?> of each other.
+EOT
           assert_block(full_message) { (expected_float.to_f - actual_float.to_f).abs <= delta.to_f }
         end
       end
@@ -313,21 +330,22 @@ module Test # :nodoc:
         _wrap_assertion do
           assert_instance_of(Array, send_array, "assert_send requires an array of send information")
           assert(send_array.size >= 2, "assert_send requires at least a receiver and a message name")
-          full_message = build_message(message, send_array[0], send_array[1], send_array[2..-1]) do |arg1, arg2, arg3|
-            "<#{arg1}> expected to respond to\n" +
-            "<#{arg2}(#{arg3})> with true"
-          end
+          full_message = build_message(message, <<EOT, send_array[0], AssertionMessage.literal(send_array[1].to_s), send_array[2..-1])
+<?> expected to respond to
+<?(?)> with a true value.
+EOT
           assert_block(full_message) { send_array[0].__send__(send_array[1], *send_array[2..-1]) }
         end
       end
 
       public
-      def build_message(message, *arguments, &block) # :nodoc:
-        return AssertionMessage.new(message.to_s, arguments, block)
+      def build_message(head, template=nil, *arguments)
+        template &&= template.chomp
+        return AssertionMessage.new(head, template, arguments)
       end
 
       private
-      def _wrap_assertion # :nodoc:
+      def _wrap_assertion
         @_assertion_wrapped ||= false
         unless (@_assertion_wrapped)
           @_assertion_wrapped = true
@@ -346,47 +364,107 @@ module Test # :nodoc:
       private
       def add_assertion
       end
+
+      # Select whether or not to use the prettyprinter. If this
+      # option is set to false before any assertions are made, the
+      # prettyprinter will not be required at all.
+      public
+      def self.use_pp=(value)
+        AssertionMessage.use_pp = value
+      end
       
-      class AssertionMessage # :nodoc: all
-        def self.convert(object)
-          case object
-            when String
-              return object
-            when Symbol
-              return object.to_s
-            when Regexp
-              return "/#{object.source}/"
-            when Exception
-              return "Class: <#{object.class}>\n" +
-                  "Message: <#{object.message}>\n" +
-                  "---Backtrace---\n" +
-                  object.backtrace.join("\n") + "\n" +
-                  "---------------"
-            else
-              return object.inspect
+      class AssertionMessage
+        @use_pp = true
+        class << self
+          attr_accessor :use_pp
+        end
+
+        class Literal
+          def initialize(value)
+            @value = value
+          end
+          
+          def inspect
+            @value.to_s
           end
         end
-        
-        def initialize(message, parameters, block)
-          @message = message
-          @parameters = parameters
-          @block = block
+
+        class Template
+          def self.create(string)
+            parts = (string ? string.scan(/(?=[^\\])\?|(?:\\\?|[^\?])+/m) : [])
+            self.new(parts)
+          end
+
+          attr_reader :count
+
+          def initialize(parts)
+            @parts = parts
+            @count = parts.find_all{|e| e == '?'}.size
+          end
+
+          def result(parameters)
+            raise "The number of parameters does not match the number of substitutions." if(parameters.size != count)
+            params = parameters.dup
+            @parts.collect{|e| e == '?' ? params.shift : e.gsub(/\\\?/m, '?')}.join('')
+          end
         end
-        
+
+        def self.literal(value)
+          Literal.new(value)
+        end
+
+        include Util::BacktraceFilter
+
+        def initialize(head, template_string, parameters)
+          @head = head
+          @template_string = template_string
+          @parameters = parameters
+        end
+
+        def convert(object)
+          case object
+            when Exception
+              <<EOM.chop
+Class: <#{convert(object.class)}>
+Message: <#{convert(object.message)}>
+---Backtrace---
+#{filter_backtrace(object.backtrace).join("\n")}
+---------------
+EOM
+            else
+              if(self.class.use_pp)
+                begin
+                  require 'pp'
+                rescue LoadError
+                  self.class.use_pp = false
+                  return object.inspect
+                end unless(defined?(PP))
+                PP.pp(object, '').chomp
+              else
+                object.inspect
+              end
+          end
+        end
+
+        def template
+          @template ||= Template.create(@template_string)
+        end
+
+        def add_period(string)
+          (string =~ /\.\Z/ ? string : string + '.')
+        end
+
         def to_s
           message_parts = []
-          if (@message != nil && @message != "")
-            if (@message !~ /\.$/)
-              @message << "."
+          if (@head)
+            head = @head.to_s 
+            unless(head.empty?)
+              message_parts << add_period(head)
             end
-            message_parts << @message
           end
-          @parameters = @parameters.collect {
-            | parameter |
-            self.class.convert(parameter)
-          }
-          message_parts << @block.call(*@parameters)
-          return message_parts.join("\n")
+          tail = template.result(@parameters.collect{|e| convert(e)})
+          message_parts << tail unless(tail.empty?)
+          message_parts.join("\n")
         end
       end
     end

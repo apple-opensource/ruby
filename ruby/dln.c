@@ -2,8 +2,8 @@
 
   dln.c -
 
-  $Author: melville $
-  $Date: 2003/10/15 10:11:46 $
+  $Author: matz $
+  $Date: 2004/12/25 10:56:41 $
   created at: Tue Jan 18 17:05:06 JST 1994
 
   Copyright (C) 1993-2003 Yukihiro Matsumoto
@@ -91,7 +91,7 @@ char *getenv();
 
 int eaccess();
 
-#if defined(HAVE_DLOPEN) && !defined(USE_DLN_A_OUT) && !defined(_AIX) && !defined(__APPLE__)
+#if defined(HAVE_DLOPEN) && !defined(USE_DLN_A_OUT) && !defined(_AIX) && !defined(__APPLE__) && !defined(_UNICOSMP)
 /* dynamic load with dlopen() */
 # define USE_DLN_DLOPEN
 #endif
@@ -1115,7 +1115,7 @@ dln_sym(name)
 #endif /* USE_DLN_A_OUT */
 
 #ifdef USE_DLN_DLOPEN
-# ifdef __NetBSD__
+# if defined(__NetBSD__) && defined(__NetBSD_Version__) && __NetBSD_Version__ < 105000000
 #  include <nlist.h>
 #  include <link.h>
 # else
@@ -1139,12 +1139,15 @@ dln_sym(name)
 #include <mach-o/rld.h>
 #else
 #include <mach-o/dyld.h>
+#ifndef NSLINKMODULE_OPTION_BINDNOW
+#define NSLINKMODULE_OPTION_BINDNOW 1
 #endif
 #endif
+#else
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #endif
-
+#endif
 
 #if defined _WIN32 && !defined __CYGWIN__
 #include <windows.h>
@@ -1169,7 +1172,7 @@ dln_strerror()
       case DLN_ECONFL:
 	return "Symbol name conflict";
       case DLN_ENOINIT:
-	return "No inititalizer given";
+	return "No initializer given";
       case DLN_EUNDEF:
 	return "Unresolved symbols";
       case DLN_ENOTLIB:
@@ -1218,7 +1221,7 @@ aix_loaderror(const char *pathname)
     int i,j;
 
     struct errtab { 
-	int errno;
+	int errnum;
 	char *errstr;
     } load_errtab[] = {
 	{L_ERROR_TOOMANY,	"too many errors, rest skipped."},
@@ -1230,7 +1233,7 @@ aix_loaderror(const char *pathname)
 	{L_ERROR_MEMBER,
 	     "file not an archive or does not contain requested member:"},
 	{L_ERROR_TYPE,		"symbol table mismatch:"},
-	{L_ERROR_ALIGN,		"text allignment in file is wrong."},
+	{L_ERROR_ALIGN,		"text alignment in file is wrong."},
 	{L_ERROR_SYSTEM,	"System error:"},
 	{L_ERROR_ERRNO,		NULL}
     };
@@ -1245,7 +1248,7 @@ aix_loaderror(const char *pathname)
     for(i = 0; message[i] && *message[i]; i++) {
 	int nerr = atoi(message[i]);
 	for (j=0; j<LOAD_ERRTAB_LEN; j++) {
-	    if (nerr == load_errtab[i].errno && load_errtab[i].errstr)
+           if (nerr == load_errtab[i].errnum && load_errtab[i].errstr)
 		ERRBUF_APPEND(load_errtab[i].errstr);
 	}
 	while (isdigit(*message[i])) message[i]++; 
@@ -1256,6 +1259,19 @@ aix_loaderror(const char *pathname)
     rb_loaderror(errbuf);
     return;
 }
+#endif
+
+#if defined(__VMS)
+#include <starlet.h>
+#include <rms.h>
+#include <stsdef.h>
+#include <unixlib.h>
+#include <descrip.h>
+#include <lib$routines.h>
+
+static char *vms_filespec;
+static int vms_fileact(char *filespec, int type);
+static long vms_fisexh(long *sigarr, long *mecarr);
 #endif
 
 void*
@@ -1314,6 +1330,9 @@ dln_load(file)
 
 #ifndef RTLD_LAZY
 # define RTLD_LAZY 1
+#endif
+#ifdef __INTERIX
+# undef RTLD_GLOBAL
 #endif
 #ifndef RTLD_GLOBAL
 # define RTLD_GLOBAL 0
@@ -1389,30 +1408,41 @@ dln_load(file)
    Special Thanks...
     Yu tomoak-i@is.aist-nara.ac.jp,
     Mi hisho@tasihara.nest.or.jp,
+    sunshine@sunshineco.com,
     and... Miss ARAI Akino(^^;)
  ----------------------------------------------------*/
 #if defined(NeXT) && (NS_TARGET_MAJOR < 4)/* NeXTSTEP rld functions */
 
     {
+        NXStream* s;
 	unsigned long init_address;
 	char *object_files[2] = {NULL, NULL};
 
 	void (*init_fct)();
 	
-	object_files[0] = file;
+	object_files[0] = (char*)file;
 	
+	s = NXOpenFile(2,NX_WRITEONLY);
+
 	/* Load object file, if return value ==0 ,  load failed*/
-	if(rld_load(NULL, NULL, object_files, NULL) == 0) {
+	if(rld_load(s, NULL, object_files, NULL) == 0) {
+	    NXFlush(s);
+	    NXClose(s);
 	    rb_loaderror("Failed to load %.200s", file);
 	}
 
 	/* lookup the initial function */
-	if(rld_lookup(NULL, buf, &init_address) == 0) {
+	if(rld_lookup(s, buf, &init_address) == 0) {
+	    NXFlush(s);
+	    NXClose(s);
 	    rb_loaderror("Failed to lookup Init function %.200s", file);
 	}
 
-	 /* Cannot call *init_address directory, so copy this value to
-	    funtion pointer */
+	NXFlush(s);
+	NXClose(s);
+
+	/* Cannot call *init_address directory, so copy this value to
+	   funtion pointer */
 	init_fct = (void(*)())init_address;
 	(*init_fct)();
 	return (void*)init_address;
@@ -1544,8 +1574,15 @@ dln_load(file)
 #if defined(__VMS)
 #define DLN_DEFINED
     {
-	void *handle, (*init_fct)();
+	long status;
+	void (*init_fct)();
 	char *fname, *p1, *p2;
+
+	$DESCRIPTOR(fname_d, "");
+	$DESCRIPTOR(image_d, "");
+	$DESCRIPTOR(buf_d, "");
+
+	decc$to_vms(file, vms_fileact, 0, 0);
 
 	fname = (char *)__alloca(strlen(file)+1);
 	strcpy(fname,file);
@@ -1554,19 +1591,35 @@ dln_load(file)
 	if (p2 = strrchr(fname,'.'))
 	    *p2 = '\0';
 
-	if ((handle = (void*)dlopen(fname, 0)) == NULL) {
+	fname_d.dsc$w_length  = strlen(fname);
+	fname_d.dsc$a_pointer = fname;
+	image_d.dsc$w_length  = strlen(vms_filespec);
+	image_d.dsc$a_pointer = vms_filespec;
+	buf_d.dsc$w_length    = strlen(buf);
+	buf_d.dsc$a_pointer   = buf;
+
+	lib$establish(vms_fisexh);
+
+	status = lib$find_image_symbol (
+		     &fname_d,
+		     &buf_d, 
+		     &init_fct, 
+		     &image_d);
+
+	lib$establish(0);
+
+	if (status == RMS$_FNF) {
 	    error = dln_strerror();
+	    goto failed;
+	} else if (!$VMS_STATUS_SUCCESS(status)) {
+	    error = DLN_ERROR();
 	    goto failed;
 	}
 
-	if ((init_fct = (void (*)())dlsym(handle, buf)) == NULL) {
-	    error = DLN_ERROR();
-	    dlclose(handle);
-	    goto failed;
-	}
 	/* Call the init code */
 	(*init_fct)();
-	return handle;
+
+	return 1;
     }
 #endif /* __VMS */
 
@@ -1807,3 +1860,24 @@ dln_find_1(fname, path, exe_flag)
 	/* otherwise try the next component in the search path */
     }
 }
+
+#if defined(__VMS)
+
+/* action routine for decc$to_vms */
+static int vms_fileact(char *filespec, int type)
+{
+    if (vms_filespec)
+	free(vms_filespec);
+    vms_filespec = malloc(strlen(filespec)+1);
+    strcpy(vms_filespec, filespec);
+    return 1;
+}
+
+/* exception handler for LIB$FIND_IMAGE_SYMBOL */
+static long vms_fisexh(long *sigarr, long *mecarr)
+{
+    sys$unwind(1, 0);
+    return 1;
+}
+
+#endif /* __VMS */

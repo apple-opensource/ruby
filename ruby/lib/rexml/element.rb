@@ -52,8 +52,8 @@ module REXML
 		def initialize( arg = UNDEFINED, parent=nil, context=nil )
 			super(parent)
 
-			@elements = Elements.new self
-			@attributes = Attributes.new self
+			@elements = Elements.new(self)
+			@attributes = Attributes.new(self)
 			@context = context
 
 			if arg.kind_of? String
@@ -66,6 +66,22 @@ module REXML
 				@context = arg.context
 			end
 		end
+
+    def inspect
+      rv = "<#@expanded_name"
+
+      @attributes.each_attribute do |attr|
+        rv << " "
+        attr.write( rv, 0 )
+      end
+
+      if children.size > 0
+        rv << "> ... </>"
+      else
+        rv << "/>"
+      end
+    end
+
 
 		# Creates a shallow copy of self.
 		#   d = Document.new "<a><b/><b/><c><d/></c></a>"
@@ -91,15 +107,17 @@ module REXML
 		# Evaluates to the document to which this element belongs, or nil if this
 		# element doesn't belong to a document.
 		def document
-			root.parent if root
+      rt = root
+			rt.parent if rt
 		end
 
 		# Evaluates to +true+ if whitespace is respected for this element.  This
 		# is the case if:
 		# 1. Neither :+respect_whitespace+ nor :+compress_whitespace+ has any value
 		# 2. The context has :+respect_whitespace+ set to :+all+ or
-		#    an array containing the name of this element, and :+compress_whitespace+
-		#    isn't set to :+all+ or an array containing the name of this element.
+		#    an array containing the name of this element, and 
+    #    :+compress_whitespace+ isn't set to :+all+ or an array containing the 
+    #    name of this element.
 		# The evaluation is tested against +expanded_name+, and so is namespace
 		# sensitive.
 		def whitespace
@@ -253,7 +271,7 @@ module REXML
 		#  el = Element.new 'my-tag'
 		#  doc.add_element el
 		def add_element element=nil, attrs=nil
-			el = @elements.add element
+			el = @elements.add(element)
 			if attrs.kind_of? Hash
 				attrs.each do |key, value|
 					el.attributes[key]=value if key =~ /^xmlns:/
@@ -412,7 +430,7 @@ module REXML
 		#  # The element 'p' has two text elements, "some text " and " more text".
 		#  doc.root.text              #-> "some text "
 		def text( path = nil )
-			rv = get_text path
+			rv = get_text(path)
 			return rv.value unless rv.nil?
 			nil
 		end
@@ -428,7 +446,7 @@ module REXML
 				element = @elements[ path ]
 				rv = element.get_text unless element.nil?
 			else
-				rv = find { |node| node.kind_of? Text }
+				rv = @children.find { |node| node.kind_of? Text }
 			end
 			return rv
 		end
@@ -454,7 +472,12 @@ module REXML
 		#  doc.root.text = 'Russell'   #-> '<a><b/>Russell<c/></a>'
 		#  doc.root.text = nil         #-> '<a><b/><c/></a>'
 		def text=( text )
-			text = Text.new( text, whitespace(), nil, raw() ) if text.kind_of? String
+      if text.kind_of? String
+        text = Text.new( text, whitespace(), nil, raw() )
+      elsif text and !text.kind_of? Text
+        text = Text.new( text.to_s, whitespace(), nil, raw() )
+      end
+        
 			old_text = get_text
 			if text.nil?
 				old_text.remove unless old_text.nil?
@@ -493,6 +516,17 @@ module REXML
 
     def node_type
       :element
+    end
+
+    def xpath
+      path_elements = []
+      cur = self
+      path_elements << __to_xpath_helper( self )
+      while cur.parent
+        cur = cur.parent
+        path_elements << __to_xpath_helper( cur )
+      end
+      return path_elements.reverse.join( "/" )
     end
 
 		#################################################
@@ -606,7 +640,9 @@ module REXML
 		#   indentation will be this number of spaces, and children will be
 		#   indented an additional amount.  Defaults to -1
 		# transitive::
-		#   What the heck does this do? Defaults to false
+		#   If transitive is true and indent is >= 0, then the output will be
+		#   pretty-printed in such a way that the added whitespace does not affect
+		#   the parse tree of the document
 		# ie_hack::
 		#   Internet Explorer is the worst piece of crap to have ever been
 		#   written, with the possible exception of Windows itself.  Since IE is
@@ -627,20 +663,25 @@ module REXML
 			end unless @attributes.empty?
 
 			if @children.empty?
-				writer << " " if ie_hack
+        if transitive and indent>-1
+          writer << "\n"
+          indent( writer, indent )
+        elsif ie_hack
+          writer << " " 
+        end
 				writer << "/" 
 			else
 				if transitive and indent>-1 and !@children[0].kind_of? Text
 					writer << "\n"
-					indent writer, indent+2
+					indent writer, indent+1
 				end
 				writer << ">"
 				write_children( writer, indent, transitive, ie_hack )
 				writer << "</#{expanded_name}"
 			end
-			if transitive and indent>-1
+			if transitive and indent>-1 and !@children.empty?
 				writer << "\n"
-				indent -= 2 if next_sibling.nil?
+				indent -= 1 if next_sibling.nil?
 				indent(writer, indent)
 			end
 			writer << ">"
@@ -648,6 +689,20 @@ module REXML
 
 
 		private
+    def __to_xpath_helper node
+      rv = node.expanded_name
+      if node.parent
+        results = node.parent.find_all {|n| 
+          n.kind_of?(REXML::Element) and n.expanded_name == node.expanded_name 
+        }
+        if results.length > 1
+          idx = results.index( node )
+          rv << "[#{idx+1}]"
+        end
+      end
+      rv
+    end
+
 		# A private helper method
 		def each_with_something( test, max=0, name=nil )
 			num = 0
@@ -661,12 +716,10 @@ module REXML
 		# A private helper method
 		def write_children( writer, indent, transitive, ie_hack )
 			cr = (indent < 0) ? '' : "\n"
-			#if size == 1 and @children[0].kind_of?(Text)
-			#	self[0].write( writer, -1 )
 			if indent == -1
 				each { |child| child.write( writer, indent, transitive, ie_hack ) }
 			else
-				next_indent = indent+2
+				next_indent = indent+1
 				last_child=nil
 				each { |child|
 					unless child.kind_of? Text or last_child.kind_of? Text or transitive
@@ -724,7 +777,7 @@ module REXML
 		def []( index, name=nil)
 			if index.kind_of? Integer
 				raise "index (#{index}) must be >= 1" if index < 1
-				name = literalize name if name
+				name = literalize(name) if name
 				num = 0
 				child = nil
 				@element.find { |child|
@@ -923,6 +976,10 @@ module REXML
 			return nil
 		end
 
+		def to_a
+			values.flatten
+		end
+
 		# Returns the number of attributes the owning Element contains.
 		#  doc = Document "<a x='1' y='2' foo:x='3'/>"
 		#  doc.root.attributes.length        #-> 3
@@ -988,10 +1045,11 @@ module REXML
 						return attr
 					end
 				end
-				if @element.document and @element.document.doctype
+        element_document = @element.document
+				if element_document and element_document.doctype
 					expn = @element.expanded_name
-					expn = @element.document.doctype.name if expn.size == 0
-					attr_val = @element.document.doctype.attribute_of(expn, name)
+					expn = element_document.doctype.name if expn.size == 0
+					attr_val = element_document.doctype.attribute_of(expn, name)
 					return Attribute.new( name, attr_val ) if attr_val
 				end
 				return nil
@@ -1016,13 +1074,13 @@ module REXML
 		#  doc.root.attributes['x:foo'] = nil
 		def []=( name, value )
 			if value.nil?		# Delete the named attribute
-				attr = get_attribute name
+				attr = get_attribute(name)
 				delete attr
 				return
 			end
 			value = Attribute.new(name, value) unless value.kind_of? Attribute
 			value.element = @element
-			old_attr = fetch value.name, nil
+			old_attr = fetch(value.name, nil)
 			if old_attr.nil?
 				store(value.name, value)
 			elsif old_attr.kind_of? Hash
@@ -1104,7 +1162,7 @@ module REXML
 				prefix, name = $1, $2
 				prefix = '' unless prefix
 			end
-			old = fetch name, nil
+			old = fetch(name, nil)
 			attr = nil
 			if old.kind_of? Hash # the supplied attribute is one of many
 				attr = old.delete(prefix)

@@ -1,7 +1,7 @@
 #! /usr/bin/env ruby
 
 # goodfriday.rb: Written by Tadayoshi Funaba 1998, 2000, 2002
-# $Id: goodfriday.rb,v 1.1.1.2 2003/10/15 10:11:49 melville Exp $
+# $Id: goodfriday.rb,v 1.1 1998-03-08 18:44:44+09 tadf Exp $
 
 require 'date'
 

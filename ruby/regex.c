@@ -1011,8 +1011,8 @@ calculate_must_string(start, end)
 {
   int mcnt;
   int max = 0;
-  char *p = start;
-  char *pend = end;
+  unsigned char *p = start;
+  unsigned char *pend = end;
   char *must = 0;
 
   if (start == NULL) return 0;
@@ -1464,7 +1464,7 @@ re_compile_pattern(pattern, size, bufp)
 	if (range && had_char_class) {
 	  FREE_AND_RETURN(stackb, "invalid regular expression; can't use character class as an end value of range");
 	}
-	PATFETCH(c);
+	PATFETCH_RAW(c);
 
 	if (c == ']') {
 	  if (p == p0 + 1) {
@@ -1608,7 +1608,7 @@ re_compile_pattern(pattern, size, bufp)
 	    FREE_AND_RETURN(stackb, "invalid regular expression; re can't end '[[:'");
 
 	  for (;;) {
-	    PATFETCH (c);
+	    PATFETCH_RAW(c);
 	    if (c == ':' || c == ']' || p == pend
 		|| c1 == CHAR_CLASS_MAX_LENGTH)
 	      break;
@@ -1680,8 +1680,14 @@ re_compile_pattern(pattern, size, bufp)
 
 	  range = 0;
 	  if (had_mbchar == 0) {
-	    for (;last<=c;last++)
-	      SET_LIST_BIT(last);
+	    if (TRANSLATE_P()) {
+	      for (;last<=c;last++) 
+		SET_LIST_BIT(translate[last]);
+	    }
+	    else {
+	      for (;last<=c;last++) 
+		SET_LIST_BIT(last);
+	    }
 	  }
 	  else if (had_mbchar == 2) {
 	    set_list_bits(last, c, b);
@@ -1693,16 +1699,20 @@ re_compile_pattern(pattern, size, bufp)
 	}
 	else if (p[0] == '-' && p[1] != ']') {
 	  last = c;
-	  PATFETCH(c1);
+	  PATFETCH_RAW(c1);
 	  range = 1;
 	  goto range_retry;
 	}
-	else if (had_mbchar == 0 && (!current_mbctype || !had_num_literal)) {
-	  SET_LIST_BIT(c);
- 	  had_num_literal = 0;
+	else {
+	  if (TRANSLATE_P()) c = (unsigned char)translate[c];
+	  if (had_mbchar == 0 && (!current_mbctype || !had_num_literal)) {
+	    SET_LIST_BIT(c);
+	    had_num_literal = 0;
+	  }
+	  else {
+	    set_list_bits(c, c, b);
+	  }
 	}
-	else 
-	  set_list_bits(c, c, b);
 	had_mbchar = 0;
       }
 
@@ -2171,6 +2181,7 @@ re_compile_pattern(pattern, size, bufp)
 
     unfetch_interval:
       /* If an invalid interval, match the characters as literals.  */
+      re_warning("regexp has invalid interval");
       p = beg_interval;
       beg_interval = 0;
 
@@ -2353,6 +2364,8 @@ re_compile_pattern(pattern, size, bufp)
     default:
       if (c == ']')
         re_warning("regexp has `]' without escape");
+      else if (c == '}')
+        re_warning("regexp has `}' without escape");
     normal_char:		/* Expects the character in `c'.  */
       had_mbchar = 0;
       if (ismbchar(c)) {
@@ -2363,9 +2376,10 @@ re_compile_pattern(pattern, size, bufp)
       nextp = p + mbclen(c) - 1;
       if (!pending_exact || pending_exact + *pending_exact + 1 != b
 	  || *pending_exact >= (c1 ? 0176 : 0177)
-	  || *nextp == '+' || *nextp == '?'
-	  || *nextp == '*' || *nextp == '^'
-	  || *nextp == '{') {
+	  || (nextp < pend &&
+	      (   *nextp == '+' || *nextp == '?'
+	       || *nextp == '*' || *nextp == '^'
+	       || *nextp == '{'))) {
 	laststart = b;
 	BUFPUSH(exactn);
 	pending_exact = b;
@@ -2609,9 +2623,9 @@ insert_op_2(op, there, current_end, num_1, num_2)
 #define trans_eq(c1, c2, translate) (translate?(translate[c1]==translate[c2]):((c1)==(c2)))
 static int
 slow_match(little, lend, big, bend, translate)
-     unsigned char *little, *lend;
-     unsigned char *big, *bend;
-     unsigned char *translate;
+     const unsigned char *little, *lend;
+     const unsigned char *big, *bend;
+     const unsigned char *translate;
 {
   int c;
 
@@ -2627,14 +2641,14 @@ slow_match(little, lend, big, bend, translate)
 
 static int
 slow_search(little, llen, big, blen, translate)
-     unsigned char *little;
+     const unsigned char *little;
      int llen;
-     unsigned char *big;
+     const unsigned char *big;
      int blen;
-     char *translate;
+     const char *translate;
 {
-  unsigned char *bsave = big;
-  unsigned char *bend = big + blen;
+  const unsigned char *bsave = big;
+  const unsigned char *bend = big + blen;
   register int c;
   int fescape = 0;
 
@@ -2704,12 +2718,12 @@ bm_init_skip(skip, pat, m, translate)
 
 static int
 bm_search(little, llen, big, blen, skip, translate)
-     unsigned char *little;
+     const unsigned char *little;
      int llen;
-     unsigned char *big;
+     const unsigned char *big;
      int blen;
      int *skip;
-     unsigned char *translate;
+     const unsigned char *translate;
 {
   int i, j, k;
 
@@ -3186,7 +3200,7 @@ re_search(bufp, string, size, startpos, range, regs)
     }
   }
   if (bufp->options & RE_OPTIMIZE_ANCHOR) {
-    if (bufp->options&RE_OPTION_SINGLELINE) {
+    if (bufp->options&RE_OPTION_MULTILINE && range > 0) {
       goto begbuf_match;
     }
     anchor = 1;

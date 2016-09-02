@@ -1,4 +1,8 @@
 require 'rexml/entity'
+require 'rexml/doctype'
+require 'rexml/child'
+require 'rexml/doctype'
+require 'rexml/parseexception'
 
 module REXML
 	# Represents text nodes in an XML document
@@ -164,10 +168,63 @@ module REXML
 			end
 			@unnormalized = Text::unnormalize( @string, doctype )
 		end
+ 		
+ 		def wrap(string, width, addnewline=false)
+ 			# Recursivly wrap string at width.
+ 			return string if string.length <= width
+ 			place = string.rindex(' ', width) # Position in string with last ' ' before cutoff
+ 			if addnewline then
+ 				return "\n" + string[0,place] + "\n" + wrap(string[place+1..-1], width)
+ 			else
+ 				return string[0,place] + "\n" + wrap(string[place+1..-1], width)
+ 			end
+ 		end
 
+    # Sets the contents of this text node.  This expects the text to be 
+    # unnormalized.  It returns self.
+    #
+    #   e = Element.new( "a" )
+    #   e.add_text( "foo" )   # <a>foo</a>
+    #   e[0].value = "bar"    # <a>bar</a>
+    #   e[0].value = "<a>"    # <a>&lt;a&gt;</a>
+    def value=( val )
+			@string = val.gsub( /\r\n?/, "\n" )
+      @unnormalized = nil
+      @normalized = nil
+      @raw = false
+    end
+ 
+ 		def indent_text(string, level=1, style="\t", indentfirstline=true)
+      return string if level < 0
+ 			new_string = ''
+ 			string.each { |line|
+ 				indent_string = style * level
+ 				new_line = (indent_string + line).sub(/[\s]+$/,'')
+ 				new_string << new_line
+ 			}
+ 			new_string.strip! unless indentfirstline
+ 			return new_string
+ 		end
+ 
 		def write( writer, indent=-1, transitive=false, ie_hack=false ) 
-			writer << to_s()
+			s = to_s()
+      if not (@parent and @parent.whitespace) then
+        s = wrap(s, 60, false) if @parent and @parent.context[:wordwrap] == :all
+        if @parent and not @parent.context[:indentstyle].nil? and indent > 0 and s.count("\n") > 0
+          s = indent_text(s, indent, @parent.context[:indentstyle], false)
+        end
+        s.squeeze!(" \n\t") if @parent and !@parent.whitespace
+      end
+      writer << s
 		end
+
+    # FIXME
+    # This probably won't work properly
+    def xpath
+      path = @parent.xpath
+      path += "/text()"
+      return path
+    end
 
 		# Writes out text, substituting special characters beforehand.
 		# +out+ A String, IO, or any other object supporting <<( String )
@@ -226,16 +283,16 @@ module REXML
 			copy = input.clone
 			# Doing it like this rather than in a loop improves the speed
 			if doctype
-				copy.gsub!( EREFERENCE, '&amp;' )
+				copy = copy.gsub( EREFERENCE, '&amp;' )
 				doctype.entities.each_value do |entity|
-					copy.gsub!( entity.value, 
+					copy = copy.gsub( entity.value, 
 						"&#{entity.name};" ) if entity.value and 
 							not( entity_filter and entity_filter.include?(entity) )
 				end
 			else
-				copy.gsub!( EREFERENCE, '&amp;' )
+				copy = copy.gsub( EREFERENCE, '&amp;' )
 				DocType::DEFAULT_ENTITIES.each_value do |entity|
-					copy.gsub!(entity.value, "&#{entity.name};" )
+					copy = copy.gsub(entity.value, "&#{entity.name};" )
 				end
 			end
 			copy
@@ -245,7 +302,7 @@ module REXML
 		def Text::unnormalize( string, doctype=nil, filter=nil, illegal=nil )
 			rv = string.clone
 			rv.gsub!( /\r\n?/, "\n" )
-			matches = rv.scan REFERENCE
+			matches = rv.scan( REFERENCE )
 			return rv if matches.size == 0
 			rv.gsub!( NUMERICENTITY ) {|m|
 				m=$1

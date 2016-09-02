@@ -1,8 +1,9 @@
 /* -*- C -*-
- * $Id: sym.c,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+ * $Id: sym.c,v 1.24.2.2 2004/12/21 23:35:11 nobu Exp $
  */
 
 #include <ruby.h>
+#include <errno.h>
 #include "dl.h"
 
 VALUE rb_cDLSymbol;
@@ -153,8 +154,9 @@ rb_dlsym_initialize(int argc, VALUE argv[], VALUE self)
   rb_scan_args(argc, argv, "12", &addr, &name, &type);
 
   saddr = (void*)(DLNUM2LONG(rb_Integer(addr)));
-  sname = NIL_P(name) ? NULL : StringValuePtr(name);
+  if (!NIL_P(name)) StringValue(name);
   stype = NIL_P(type) ? NULL : StringValuePtr(type);
+  sname = NIL_P(name) ? NULL : RSTRING(name)->ptr;
 
   if( saddr ){
     Data_Get_Struct(self, struct sym_data, data);
@@ -316,6 +318,125 @@ stack_size(struct sym_data *sym)
   return size;
 }
 
+static ID rb_dl_id_DLErrno;
+
+static VALUE
+rb_dl_get_last_error(VALUE self)
+{
+  return rb_thread_local_aref(rb_thread_current(), rb_dl_id_DLErrno);
+}
+
+static VALUE
+rb_dl_set_last_error(VALUE self, VALUE val)
+{
+  errno = NUM2INT(val);
+  rb_thread_local_aset(rb_thread_current(), rb_dl_id_DLErrno, val);
+  return Qnil;
+}
+
+#ifdef HAVE_WINDOWS_H
+#include <windows.h>
+static ID rb_dl_id_DLW32Error;
+
+static VALUE
+rb_dl_win32_get_last_error(VALUE self)
+{
+  return rb_thread_local_aref(rb_thread_current(), rb_dl_id_DLW32Error);
+}
+
+static VALUE
+rb_dl_win32_set_last_error(VALUE self, VALUE val)
+{
+    SetLastError(NUM2INT(val));
+    rb_thread_local_aset(rb_thread_current(), rb_dl_id_DLW32Error, val);
+    return Qnil;
+}
+#endif
+
+#ifdef DLSTACK_GUARD
+# ifdef __MSVC_RUNTIME_CHECKS
+#  pragma runtime_checks("s", off)
+# endif
+# if _MSC_VER >= 1300
+__declspec(noinline)
+# endif
+static int
+rb_dlsym_guardcall(char type, ANY_TYPE *ret, long *stack, void *func)
+{
+  char *volatile guard = ALLOCA_N(char, 1); /* guard stack pointer */
+  switch(type){
+  case '0':
+    {
+      void (*f)(DLSTACK_PROTO) = func;
+      f(DLSTACK_ARGS);
+    }
+    break;
+  case 'P':
+  case 'p':
+    {
+      void * (*f)(DLSTACK_PROTO) = func;
+      ret->p = f(DLSTACK_ARGS);
+    }
+    break;
+  case 'C':
+  case 'c':
+    {
+      char (*f)(DLSTACK_PROTO) = func;
+      ret->c = f(DLSTACK_ARGS);
+    }
+    break;
+  case 'H':
+  case 'h':
+    {
+      short (*f)(DLSTACK_PROTO) = func;
+      ret->h = f(DLSTACK_ARGS);
+    }
+    break;
+  case 'I':
+  case 'i':
+    {
+      int (*f)(DLSTACK_PROTO) = func;
+      ret->i = f(DLSTACK_ARGS);
+    }
+    break;
+  case 'L':
+  case 'l':
+    {
+      long (*f)(DLSTACK_PROTO) = func;
+      ret->l = f(DLSTACK_ARGS);
+    }
+    break;
+  case 'F':
+  case 'f':
+    {
+      float (*f)(DLSTACK_PROTO) = func;
+      ret->f = f(DLSTACK_ARGS);
+    }
+    break;
+  case 'D':
+  case 'd':
+    {
+      double (*f)(DLSTACK_PROTO) = func;
+      ret->d = f(DLSTACK_ARGS);
+    }
+    break;
+  case 'S':
+  case 's':
+    {
+      char * (*f)(DLSTACK_PROTO) = func;
+      ret->s = f(DLSTACK_ARGS);
+    }
+    break;
+  default:
+    return 0;
+  }
+  return 1;
+}
+# ifdef __MSVC_RUNTIME_CHECKS
+#  pragma runtime_checks("s", restore)
+# endif
+#endif /* defined(DLSTACK_GUARD) */
+
 VALUE
 rb_dlsym_call(int argc, VALUE argv[], VALUE self)
 {
@@ -399,11 +520,11 @@ rb_dlsym_call(int argc, VALUE argv[], VALUE self)
       PUSH_P(ftype);
       break;
     case 'H':
-      ANY2H(args[i]) = DLSHORT(NUM2CHR(argv[i]));
+      ANY2H(args[i]) = DLSHORT(NUM2INT(argv[i]));
       PUSH_C(ftype);
       break;
     case 'h':
-      ANY2H(dargs[i]) = DLSHORT(NUM2CHR(argv[i]));
+      ANY2H(dargs[i]) = DLSHORT(NUM2INT(argv[i]));
       ANY2P(args[i]) = DLVOIDP(&(ANY2H(dargs[i])));
       dtypes[i] = 'h';
       PUSH_P(ftype);
@@ -606,6 +727,12 @@ rb_dlsym_call(int argc, VALUE argv[], VALUE self)
   }
   DLSTACK_END(sym->type);
 
+#ifdef DLSTACK_GUARD
+  if(!rb_dlsym_guardcall(sym->type[0], &ret, stack, func)) {
+    FREE_ARGS;
+    rb_raise(rb_eDLTypeError, "unknown type `%c'", sym->type[0]);
+  }
+#else /* defined(DLSTACK_GUARD) */
   {
     switch( sym->type[0] ){
     case '0':
@@ -675,6 +802,23 @@ rb_dlsym_call(int argc, VALUE argv[], VALUE self)
       rb_raise(rb_eDLTypeError, "unknown type `%c'", sym->type[0]);
     }
   }
+#endif /* defubed(DLSTACK_GUARD) */
+
+  {
+    /*
+     * We should get the value of errno/GetLastError() before calling another functions.
+     */
+    int last_errno = errno;
+#ifdef _WIN32
+    DWORD win32_last_err = GetLastError();
+#endif
+
+    rb_thread_local_aset(rb_thread_current(), rb_dl_id_DLErrno, INT2NUM(last_errno));
+#ifdef _WIN32
+    rb_thread_local_aset(rb_thread_current(), rb_dl_id_DLW32Error, INT2NUM(win32_last_err));
+#endif
+  }
+
   }
 #else /* defined(DLSTACK) */
   switch(ftype){
@@ -835,4 +979,13 @@ Init_dlsym()
   rb_define_method(rb_cDLSymbol, "to_s", rb_dlsym_cproto, 0);
   rb_define_method(rb_cDLSymbol, "to_ptr", rb_dlsym_to_ptr, 0);
   rb_define_method(rb_cDLSymbol, "to_i", rb_dlsym_to_i, 0);
+
+  rb_dl_id_DLErrno = rb_intern("DLErrno");
+  rb_define_singleton_method(rb_mDL, "last_error", rb_dl_get_last_error, 0);  
+  rb_define_singleton_method(rb_mDL, "last_error=", rb_dl_set_last_error, 1);
+#ifdef _WIN32
+  rb_dl_id_DLW32Error = rb_intern("DLW32Error");
+  rb_define_singleton_method(rb_mDL, "win32_last_error", rb_dl_win32_get_last_error, 0);
+  rb_define_singleton_method(rb_mDL, "win32_last_error=", rb_dl_win32_set_last_error, 1);
+#endif
 }

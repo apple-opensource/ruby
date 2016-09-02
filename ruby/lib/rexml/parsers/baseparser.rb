@@ -56,6 +56,7 @@ module REXML
 			IDENTITY = /^([!\*\w\-]+)(\s+#{NCNAME_STR})?(\s+["'].*?['"])?(\s+['"].*?["'])?/u
 			ELEMENTDECL_START = /^\s*<!ELEMENT/um
 			ELEMENTDECL_PATTERN = /^\s*(<!ELEMENT.*?)>/um
+			SYSTEMENTITY = /^\s*(%.*?;)\s*$/um
 			ENUMERATION = "\\(\\s*#{NMTOKEN}(?:\\s*\\|\\s*#{NMTOKEN})*\\s*\\)"
 			NOTATIONTYPE = "NOTATION\\s+\\(\\s*#{NAME}(?:\\s*\\|\\s*#{NAME})*\\s*\\)"
 			ENUMERATEDTYPE = "(?:(?:#{NOTATIONTYPE})|(?:#{ENUMERATION}))"
@@ -89,15 +90,34 @@ module REXML
 			EREFERENCE = /&(?!#{NAME};)/
 
 			DEFAULT_ENTITIES = { 
-				'gt' => [/&gt;/, '&gt;', '>'], 
-				'lt' => [/&lt;/, '&lt;', '<'], 
-				'quot' => [/&quot;/, '&quot;', '"'], 
-				"apos" => [/&apos;/, "&apos;", "'"] 
+				'gt' => [/&gt;/, '&gt;', '>', />/], 
+				'lt' => [/&lt;/, '&lt;', '<', /</], 
+				'quot' => [/&quot;/, '&quot;', '"', /"/], 
+				"apos" => [/&apos;/, "&apos;", "'", /'/] 
 			}
 
 			def initialize( source )
 				self.stream = source
 			end
+
+      def add_listener( listener )
+        if !defined?(@listeners) or !@listeners
+          @listeners = []
+          instance_eval <<-EOL
+            alias :_old_pull :pull
+            def pull
+              event = _old_pull
+              @listeners.each do |listener|
+                listener.receive event
+              end
+              event
+            end
+          EOL
+        end
+        @listeners << listener
+      end
+
+      attr_reader :source
 
 			def stream=( source )
 				if source.kind_of? String
@@ -106,9 +126,11 @@ module REXML
 					@source = IOSource.new(source)
 				elsif source.kind_of? Source
 					@source = source
+				elsif defined? StringIO and source.kind_of? StringIO
+					@source = IOSource.new(source)
 				else
-					raise "#{source.type} is not a valid input stream.  It must be \n"+
-					"either a String, IO, or Source."
+					raise "#{source.class} is not a valid input stream.  It must be \n"+
+					"either a String, IO, StringIO or Source."
 				end
 				@closed = nil
 				@document_status = nil
@@ -119,13 +141,14 @@ module REXML
 
 			# Returns true if there are no more events
 			def empty?
-				!has_next?
+        #puts "@source.empty? = #{@source.empty?}"
+        #puts "@stack.empty? = #{@stack.empty?}"
+        return (@source.empty? and @stack.empty?)
 			end
 
 			# Returns true if there are more events.  Synonymous with !empty?
 			def has_next?
-				@source.read if @source.buffer.size==0 and !@source.empty?
-				(!@source.empty? and @source.buffer.strip.size>0) or @stack.size>0 or @closed
+        return !(@source.empty? and @stack.empty?)
 			end
 
 			# Push an event back on the head of the stream.  This method
@@ -141,7 +164,7 @@ module REXML
 			# event, so you can effectively pre-parse the entire document (pull the 
 			# entire thing into memory) using this method.  
 			def peek depth=0
-				raise 'Illegal argument "#{depth}"' if depth < -1
+				raise %Q[Illegal argument "#{depth}"] if depth < -1
 				temp = []
 				if depth == -1
 					temp.push(pull()) until empty?
@@ -156,16 +179,16 @@ module REXML
 
 			# Returns the next event.  This is a +PullEvent+ object.
 			def pull
-				return [ :end_document ] if empty?
 				if @closed
 					x, @closed = @closed, nil
 					return [ :end_element, x ]
 				end
+				return [ :end_document ] if empty?
 				return @stack.shift if @stack.size > 0
-				@source.read if @source.buffer.size==0
+				@source.read if @source.buffer.size<2
 				if @document_status == nil
-					@source.match( /^\s*/um, true )
-					word = @source.match( /^\s*(<.*?)>/um )
+					@source.consume( /^\s*/um )
+					word = @source.match( /(<[^>]*)>/um )
 					word = word[1] unless word.nil?
 					case word
 					when COMMENT_START
@@ -188,14 +211,14 @@ module REXML
 						close = md[2]
 						identity =~ IDENTITY
 						name = $1
-						raise "DOCTYPE is missing a name" if name.nil?
+						raise REXML::ParseException("DOCTYPE is missing a name") if name.nil?
 						pub_sys = $2.nil? ? nil : $2.strip
 						long_name = $3.nil? ? nil : $3.strip
 						uri = $4.nil? ? nil : $4.strip
 						args = [ :start_doctype, name, pub_sys, long_name, uri ]
 						if close == ">"
 							@document_status = :after_doctype
-							@source.read if @source.buffer.size==0
+							@source.read if @source.buffer.size<2
 							md = @source.match(/^\s*/um, true)
 							@stack << [ :end_doctype ]
 						else
@@ -204,15 +227,20 @@ module REXML
 						return args
 					else
 						@document_status = :after_doctype
-						@source.read if @source.buffer.size==0
+						@source.read if @source.buffer.size<2
 						md = @source.match(/\s*/um, true)
 					end
 				end
 				if @document_status == :in_doctype
 					md = @source.match(/\s*(.*?>)/um)
 					case md[1]
+					when SYSTEMENTITY 
+						match = @source.match( SYSTEMENTITY, true )[1]
+						return [ :externalentity, match ]
+
 					when ELEMENTDECL_START
 						return [ :elementdecl, @source.match( ELEMENTDECL_PATTERN, true )[1] ]
+
 					when ENTITY_START
 						match = @source.match( ENTITYDECL, true ).to_a.compact
 						match[0] = :entitydecl
@@ -272,30 +300,34 @@ module REXML
 						return [ :end_doctype ]
 					end
 				end
-				begin 
+				begin
 					if @source.buffer[0] == ?<
 						if @source.buffer[1] == ?/
 							last_tag = @tags.pop
+							#md = @source.match_to_consume( '>', CLOSE_MATCH)
 							md = @source.match( CLOSE_MATCH, true )
-							raise REXML::ParseException.new( "Missing end tag for '#{last_tag}' "+
-								"(got \"#{md[1]}\")", @source) unless last_tag == md[1]
+							raise REXML::ParseException.new( "Missing end tag for "+
+                "'#{last_tag}' (got \"#{md[1]}\")", 
+                @source) unless last_tag == md[1]
 							return [ :end_element, last_tag ]
 						elsif @source.buffer[1] == ?!
 							md = @source.match(/\A(\s*[^>]*>)/um)
 							#puts "SOURCE BUFFER = #{source.buffer}, #{source.buffer.size}"
 							raise REXML::ParseException.new("Malformed node", @source) unless md
-							case md[1]
-							when CDATA_START
-								return [ :cdata, @source.match( CDATA_PATTERN, true )[1] ]
-							when COMMENT_START
-								return [ :comment, @source.match( COMMENT_PATTERN, true )[1] ]
+							if md[0][2] == ?-
+								md = @source.match( COMMENT_PATTERN, true )
+								return [ :comment, md[1] ] if md
 							else
-								raise REXML::ParseException.new( "Declarations can only occur "+
-								"in the doctype declaration.", @source)
+								md = @source.match( CDATA_PATTERN, true )
+								return [ :cdata, md[1] ] if md
 							end
+							raise REXML::ParseException.new( "Declarations can only occur "+
+								"in the doctype declaration.", @source)
 						elsif @source.buffer[1] == ??
 							md = @source.match( INSTRUCTION_PATTERN, true )
-							return [ :processing_instruction, md[1], md[2] ]
+							return [ :processing_instruction, md[1], md[2] ] if md
+							raise REXML::ParseException.new( "Bad instruction declaration",
+								@source)
 						else
 							# Get the next tag
 							md = @source.match(TAG_MATCH, true)
@@ -316,17 +348,22 @@ module REXML
 							return [ :start_element, md[1], attributes ]
 						end
 					else
-						md = @source.match(TEXT_PATTERN, true)
-						raise "no text to add" if md[0].length == 0
+						md = @source.match( TEXT_PATTERN, true )
+            if md[0].length == 0
+              #puts "EMPTY = #{empty?}"
+              #puts "BUFFER = \"#{@source.buffer}\""
+              @source.match( /(\s+)/, true )
+            end
+            #return [ :text, "" ] if md[0].length == 0
 						# unnormalized = Text::unnormalize( md[1], self )
 						# return PullEvent.new( :text, md[1], unnormalized )
 						return [ :text, md[1] ]
 					end
-        rescue REXML::ParseException
-          raise $!
+				rescue REXML::ParseException
+					raise
 				rescue Exception, NameError => error
 					raise REXML::ParseException.new( "Exception parsing",
-						@source, self, error )
+						@source, self, (error ? error : $!) )
 				end
 				return [ :dummy ]
 			end
@@ -352,7 +389,7 @@ module REXML
 				end if entities
 				copy.gsub!( EREFERENCE, '&amp;' )
 				DEFAULT_ENTITIES.each do |key, value|
-					copy.gsub!( value[2], value[1] )
+					copy.gsub!( value[3], value[1] )
 				end
 				copy
 			end
@@ -392,3 +429,23 @@ module REXML
 		end
 	end
 end
+
+=begin
+  case event[0]
+  when :start_element
+  when :text
+  when :end_element
+  when :processing_instruction
+  when :cdata
+  when :comment
+  when :xmldecl
+  when :start_doctype
+  when :end_doctype
+  when :externalentity
+  when :elementdecl
+  when :entity
+  when :attlistdecl
+  when :notationdecl
+  when :end_doctype
+  end
+=end

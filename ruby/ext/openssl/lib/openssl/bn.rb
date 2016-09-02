@@ -11,7 +11,7 @@
   (See the file 'LICENCE'.)
 
 = Version
-  $Id: bn.rb,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+  $Id: bn.rb,v 1.1 2003/07/23 16:11:30 gotoyuzo Exp $
 =end
 
 ##

@@ -11,13 +11,17 @@
   (See the file 'LICENCE'.)
 
 = Version
-  $Id: buffering.rb,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+  $Id: buffering.rb,v 1.5.2.2 2004/08/23 05:06:17 gotoyuzo Exp $
 =end
 
 module Buffering
   include Enumerable
   attr_accessor :sync
-  BLOCK_SIZE = 1024
+  BLOCK_SIZE = 1024*16
+
+  def initialize(*args)
+    @sync = @io.sync
+  end
 
   #
   # for reading.
@@ -27,9 +31,6 @@ module Buffering
   def fill_rbuff
     @rbuffer = "" unless defined? @rbuffer
     begin
-      if self.respond_to?(:to_io)
-        IO.select([self.to_io], nil, nil)
-      end
       @rbuffer << self.sysread(BLOCK_SIZE)
     rescue EOFError
       @eof = true
@@ -50,14 +51,19 @@ module Buffering
 
   public
 
-  def read(size=nil)
+  def read(size=nil, buf=nil)
     fill_rbuff unless defined? @rbuffer
     @eof ||= nil
     until @eof
       break if size && size <= @rbuffer.size
       fill_rbuff
     end
-    consume_rbuff(size)
+    ret = consume_rbuff(size) || ""
+    if buf
+      buf.replace(ret)
+      ret = buf
+    end
+    (size && ret.empty?) ? nil : ret
   end
 
   def gets(eol=$/)
@@ -158,7 +164,12 @@ module Buffering
 
   def puts(*args)
     s = ""
-    args.each{ |arg| s << arg.to_s + $/ }
+    args.each{|arg|
+      s << arg.to_s
+      unless /#{$/}\z/o =~ s
+        s << $/
+      end
+    }
     do_write(s)
     nil
   end
@@ -183,7 +194,7 @@ module Buffering
   end
 
   def close
-    flush
+    flush rescue nil
     sysclose
   end
 end

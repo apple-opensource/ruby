@@ -1,7 +1,5 @@
-# :nodoc:
-#
 # Author:: Nathaniel Talbott.
-# Copyright:: Copyright (c) 2000-2002 Nathaniel Talbott. All rights reserved.
+# Copyright:: Copyright (c) 2000-2003 Nathaniel Talbott. All rights reserved.
 # License:: Ruby license.
 
 module Test
@@ -30,7 +28,7 @@ module Test
       # TestSuite.
       def run(result, &progress_block)
         yield(STARTED, name)
-        @tests.sort { |test1, test2| test1.name <=> test2.name }.each do |test|
+        @tests.each do |test|
           test.run(result, &progress_block)
         end
         yield(FINISHED, name)
@@ -39,6 +37,11 @@ module Test
       # Adds the test to the suite.
       def <<(test)
         @tests << test
+        self
+      end
+
+      def delete(test)
+        @tests.delete(test)
       end
 
       # Retuns the rolled up number of tests in this suite;
@@ -54,10 +57,17 @@ module Test
         tests.empty?
       end
 
-      # Overriden to return the name given the suite at
+      # Overridden to return the name given the suite at
       # creation.
       def to_s
         @name
+      end
+      
+      # It's handy to be able to compare TestSuite instances.
+      def ==(other)
+        return false unless(other.kind_of?(self.class))
+        return false unless(@name == other.name)
+        @tests == other.tests
       end
     end
   end

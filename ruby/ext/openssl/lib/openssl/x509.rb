@@ -11,64 +11,38 @@
   (See the file 'LICENCE'.)
 
 = Version
-  $Id: x509.rb,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+  $Id: x509.rb,v 1.4.2.2 2004/12/19 08:28:33 gotoyuzo Exp $
 =end
 
-##
-# Should we care what if somebody require this file directly?
-#require 'openssl'
+require "openssl"
 
 module OpenSSL
   module X509
-
     class ExtensionFactory
       def create_extension(*arg)
-        if arg.size == 1 then arg = arg[0] end
-        type = arg.class
-        while type
-          method = "create_ext_from_#{type.name.downcase}".intern
-          return send(method, arg) if respond_to? method
-          type = type.superclass
+        if arg.size > 1
+          create_ext(*arg)
+        else
+          send("create_ext_from_"+arg[0].class.name.downcase, arg[0])
         end
-        raise TypeError, "Don't how to create ext from #{arg.class}"
-        ###send("create_ext_from_#{arg.class.name.downcase}", arg)
       end
 
-      #
-      # create_ext_from_array is built-in
-      #
+      def create_ext_from_array(ary)
+        raise ExtensionError, "unexpected array form" if ary.size > 3 
+        create_ext(ary[0], ary[1], ary[2])
+      end
+
       def create_ext_from_string(str) # "oid = critical, value"
-        unless str =~ /\s*=\s*/
-          raise ArgumentError, "string in format \"oid = value\" expected"
-        end
-        ary = []
-        ary << $`.sub(/^\s*/,"") # delete whitespaces from the beginning
-        rest = $'.sub(/\s*$/,"") # delete them from the end
-        if rest =~ /^critical,\s*/ # handle 'critical' option
-          ary << $'
-          ary << true
-        else
-          ary << rest
-        end
-        create_ext_from_array(ary)
+        oid, value = str.split(/=/, 2)
+        oid.strip!
+        value.strip!
+        create_ext(oid, value)
       end
       
-      #
-      # Create an extention from Hash
-      #   {"oid"=>sn|ln, "value"=>value, "critical"=>true|false}
-      #
       def create_ext_from_hash(hash)
-        unless (hash.has_key? "oid" and hash.has_key? "value")
-          raise ArgumentError,
-            "hash in format {\"oid\"=>..., \"value\"=>...} expected"
-        end
-        ary = []
-        ary << hash["oid"]
-        ary << hash["value"]
-        ary << hash["critical"] if hash.has_key? "critical"
-        create_ext_from_array(ary)
+        create_ext(hash["oid"], hash["value"], hash["critical"])
       end
-    end # ExtensionFactory
+    end
     
     class Extension
       def to_s # "oid = critical, value"
@@ -85,48 +59,96 @@ module OpenSSL
       def to_a
         [ self.oid, self.value, self.critical? ]
       end
-    end # Extension
-    
-    class Attribute
-      def Attribute::new(arg)
-        type = arg.class
-        while type
-          method = "new_from_#{type.name.downcase}".intern
-          return Attribute::send(method, arg) if Attribute::respond_to? method
-          type = type.superclass
+    end
+
+    class Name
+      module RFC2253DN
+        Special = ',=+<>#;'
+        HexChar = /[0-9a-fA-F]/
+        HexPair = /#{HexChar}#{HexChar}/
+        HexString = /#{HexPair}+/
+        Pair = /\\(?:[#{Special}]|\\|"|#{HexPair})/
+        StringChar = /[^#{Special}\\"]/
+        QuoteChar = /[^\\"]/
+        AttributeType = /[a-zA-Z][0-9a-zA-Z]*|[0-9]+(?:\.[0-9]+)*/
+        AttributeValue = /
+          (?!["#])((?:#{StringChar}|#{Pair})*)|
+          \#(#{HexString})|
+          "((?:#{QuoteChar}|#{Pair})*)"
+        /x
+        TypeAndValue = /\A(#{AttributeType})=#{AttributeValue}/
+
+        module_function
+
+        def expand_pair(str)
+          return nil unless str
+          return str.gsub(Pair){|pair|
+            case pair.size
+            when 2 then pair[1,1]
+            when 3 then Integer("0x#{pair[1,2]}").chr
+            else raise OpenSSL::X509::NameError, "invalid pair: #{str}"
+            end
+          }
         end
-        raise "Don't how to make new #{self} from #{arg.class}"
-        ###Attribute::send("new_from_#{arg.class.name.downcase}", arg)
+
+        def expand_hexstring(str)
+          return nil unless str
+          der = str.gsub(HexPair){|hex| Integer("0x#{hex}").chr }
+          a1 = OpenSSL::ASN1.decode(der)
+          return a1.value, a1.tag
+        end
+
+        def expand_value(str1, str2, str3)
+          value = expand_pair(str1)
+          value, tag = expand_hexstring(str2) unless value
+          value = expand_pair(str3) unless value
+          return value, tag
+        end
+
+        def scan(dn)
+          str = dn
+          ary = []
+          while true
+            if md = TypeAndValue.match(str)
+              matched = md.to_s
+              remain = md.post_match
+              type = md[1]
+              value, tag = expand_value(md[2], md[3], md[4]) rescue nil
+              if value
+                type_and_value = [type, value]
+                type_and_value.push(tag) if tag
+                ary.unshift(type_and_value)
+                if remain.length > 2 && remain[0] == ?,
+                  str = remain[1..-1]
+                  next
+                elsif remain.length > 2 && remain[0] == ?+
+                  raise OpenSSL::X509::NameError,
+                    "multi-valued RDN is not supported: #{dn}"
+                elsif remain.empty?
+                  break
+                end
+              end
+            end
+            msg_dn = dn[0, dn.length - str.length] + " =>" + str
+            raise OpenSSL::X509::NameError, "malformed RDN: #{msg_dn}"
+          end
+          return ary
+        end
       end
 
-      #
-      # Attribute::new_from_array(ary) is built-in method
-      #
-      def Attribute::new_from_string(str) # "oid = value"
-        unless str =~ /\s*=\s*/
-          raise ArgumentError, "string in format \"oid = value\" expected"
+      class <<self
+        def parse_rfc2253(str, template=OBJECT_TYPE_TEMPLATE)
+          ary = OpenSSL::X509::Name::RFC2253DN.scan(str)
+          self.new(ary, template)
         end
-        ary = []
-        ary << $`.sub(/^\s*/,"") # delete whitespaces from the beginning
-        ary << $'.sub(/\s*$/,"") # delete them from the end
-        Attribute::new_from_array(ary)
-      end
 
-      #
-      # Create an attribute from Hash
-      #   {"oid"=>sn|ln, "value"=>value, "critical"=>true|false}
-      #
-      def Attribute::new_from_hash(hash) # {"oid"=>"...", "value"=>"..."}
-        unless (hash.has_key? "oid" and hash.has_key? "value")
-          raise ArgumentError,
-             "hash in format {\"oid\"=>..., \"value\"=>...} expected"
+        def parse_openssl(str, template=OBJECT_TYPE_TEMPLATE)
+          ary = str.scan(/\s*([^\/,]+)\s*/).collect{|i| i[0].split("=", 2) }
+          self.new(ary, template)
         end
-        ary = []
-        ary << hash["oid"]
-        ary << hash["value"]
-        Attribute::new_from_array(ary)
-      end
-    end # Attribute
 
-  end # X509
-end # OpenSSL
+        alias parse parse_openssl
+      end
+    end
+  end
+end

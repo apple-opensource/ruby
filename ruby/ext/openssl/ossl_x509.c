@@ -1,5 +1,5 @@
 /*
- * $Id: ossl_x509.c,v 1.1.1.1 2003/10/15 10:11:47 melville Exp $
+ * $Id: ossl_x509.c,v 1.2 2003/09/08 10:31:38 gotoyuzo Exp $
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2001-2002  Michal Rokos <m.rokos@sh.cvut.cz>
  * All rights reserved.
@@ -13,6 +13,8 @@
 VALUE mX509;
 
 #define DefX509Const(x) rb_define_const(mX509, #x,INT2FIX(X509_##x))
+#define DefX509Default(x,i) \
+  rb_define_const(mX509, "DEFAULT_" #x, rb_str_new2(X509_get_default_##i()))
 
 void
 Init_ossl_x509()
@@ -91,5 +93,12 @@ Init_ossl_x509()
 #if defined(X509_TRUST_OCSP_REQUEST)
     DefX509Const(TRUST_OCSP_REQUEST);
 #endif
+
+    DefX509Default(CERT_AREA, cert_area);
+    DefX509Default(CERT_DIR, cert_dir);
+    DefX509Default(CERT_FILE, cert_file);
+    DefX509Default(CERT_DIR_ENV, cert_dir_env);
+    DefX509Default(CERT_FILE_ENV, cert_file_env);
+    DefX509Default(PRIVATE_DIR, private_dir);
 }
 

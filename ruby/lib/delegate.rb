@@ -27,6 +27,7 @@ class Delegator
       preserved |= t.protected_instance_methods(false)
       break if t == Delegator
     end
+    preserved << "singleton_method_added"
     for method in obj.methods
       next if preserved.include? method
       begin
@@ -37,7 +38,7 @@ class Delegator
 	    rescue Exception
 	      $@.delete_if{|s| /:in `__getobj__'$/ =~ s} #`
 	      $@.delete_if{|s| /^\\(eval\\):/ =~ s}
-	      raise
+	      Kernel::raise
 	    end
 	  end
 	EOS
@@ -46,26 +47,42 @@ class Delegator
       end
     end
   end
+  alias initialize_methods initialize
 
   def __getobj__
     raise NotImplementedError, "need to define `__getobj__'"
   end
 
+  def marshal_dump
+    __getobj__
+  end
+  def marshal_load(obj)
+    initialize_methods(obj)
+  end
 end
 
 class SimpleDelegator<Delegator
 
   def initialize(obj)
     super
-    @obj = obj
+    @_sd_obj = obj
   end
 
   def __getobj__
-    @obj
+    @_sd_obj
   end
 
   def __setobj__(obj)
-    @obj = obj
+    @_sd_obj = obj
+  end
+
+  def clone
+    super
+    __setobj__(__getobj__.clone)
+  end
+  def dup(obj)
+    super
+    __setobj__(__getobj__.dup)
   end
 end
 
@@ -79,17 +96,37 @@ def DelegateClass(superclass)
   methods = superclass.public_instance_methods(true)
   methods -= ::Kernel.public_instance_methods(false)
   methods |= ["to_s","to_a","inspect","==","=~","==="]
-  klass.module_eval <<-EOS
-  def initialize(obj)
-    @obj = obj
-  end
-  EOS
+  klass.module_eval {
+    def initialize(obj)
+      @_dc_obj = obj
+    end
+    def method_missing(m, *args)
+      unless @_dc_obj.respond_to?(m)
+        super(m, *args)
+      end
+      @_dc_obj.__send__(m, *args)
+    end
+    def __getobj__
+      @_dc_obj
+    end
+    def __setobj__(obj)
+      @_dc_obj = obj
+    end
+    def clone
+      super
+      __setobj__(__getobj__.clone)
+    end
+    def dup
+      super
+      __setobj__(__getobj__.dup)
+    end
+  }
   for method in methods
     begin
       klass.module_eval <<-EOS
         def #{method}(*args, &block)
 	  begin
-	    @obj.__send__(:#{method}, *args, &block)
+	    @_dc_obj.__send__(:#{method}, *args, &block)
 	  rescue
 	    $@[0,2] = nil
 	    raise
@@ -100,7 +137,7 @@ def DelegateClass(superclass)
       raise NameError, "invalid identifier %s" % method, caller(3)
     end
   end
-  return klass;
+  return klass
 end
 
 if __FILE__ == $0

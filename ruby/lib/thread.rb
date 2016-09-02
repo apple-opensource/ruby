@@ -1,6 +1,6 @@
 #
 #		thread.rb - thread support classes
-#			$Date: 2003/10/15 10:11:48 $
+#			$Date: 2004/05/27 07:50:04 $
 #			by Yukihiro Matsumoto <matz@netlab.co.jp>
 #
 # Copyright (C) 2001  Yukihiro Matsumoto
@@ -21,16 +21,18 @@ if $DEBUG
   Thread.abort_on_exception = true
 end
 
-#
-# FIXME: not documented in Pickaxe or Nutshell.
-#
-def Thread.exclusive
-  _old = Thread.critical
-  begin
-    Thread.critical = true
-    return yield
-  ensure
-    Thread.critical = _old
+class Thread
+  #
+  # FIXME: not documented in Pickaxe or Nutshell.
+  #
+  def Thread.exclusive
+    _old = Thread.critical
+    begin
+      Thread.critical = true
+      return yield
+    ensure
+      Thread.critical = _old
+    end
   end
 end
 
@@ -187,11 +189,14 @@ class ConditionVariable
   # Releases the lock held in +mutex+ and waits; reacquires the lock on wakeup.
   #
   def wait(mutex)
-    mutex.exclusive_unlock do
-      @waiters.push(Thread.current)
-      Thread.stop
+    begin
+      mutex.exclusive_unlock do
+        @waiters.push(Thread.current)
+        Thread.stop
+      end
+    ensure
+      mutex.lock
     end
-    mutex.lock
   end
   
   #

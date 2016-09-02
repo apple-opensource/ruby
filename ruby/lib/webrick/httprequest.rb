@@ -32,6 +32,8 @@ module WEBrick
 
     # Header and entity body
     attr_reader :raw_header, :header, :cookies
+    attr_reader :accept, :accept_charset
+    attr_reader :accept_encoding, :accept_language
 
     # Misc
     attr_accessor :user
@@ -56,6 +58,10 @@ module WEBrick
       @raw_header = Array.new
       @header = nil
       @cookies = []
+      @accept = []
+      @accept_charset = []
+      @accept_encoding = []
+      @accept_language = []
       @body = ""
 
       @addr = @peeraddr = nil
@@ -83,6 +89,10 @@ module WEBrick
         @header['cookie'].each{|cookie|
           @cookies += Cookie::parse(cookie)
         }
+        @accept = HTTPUtils.parse_qvalues(self['accept'])
+        @accept_charset = HTTPUtils.parse_qvalues(self['accept-charset'])
+        @accept_encoding = HTTPUtils.parse_qvalues(self['accept-encoding'])
+        @accept_language = HTTPUtils.parse_qvalues(self['accept-language'])
       end
       return if @request_method == "CONNECT"
       return if @unparsed_uri == "*"
@@ -122,6 +132,14 @@ module WEBrick
         parse_query()
       end
       @query
+    end
+
+    def content_length
+      return Integer(self['content-length'])
+    end
+
+    def content_type
+      return self['content-type']
     end
 
     def [](header_name)
@@ -174,7 +192,7 @@ module WEBrick
       meta["CONTENT_LENGTH"]    = cl if cl.to_i > 0
       meta["CONTENT_TYPE"]      = ct.dup if ct
       meta["GATEWAY_INTERFACE"] = "CGI/1.1"
-      meta["PATH_INFO"]         = @path_info.dup
+      meta["PATH_INFO"]         = @path_info ? @path_info.dup : ""
      #meta["PATH_TRANSLATED"]   = nil      # no plan to be provided
       meta["QUERY_STRING"]      = @query_string ? @query_string.dup : ""
       meta["REMOTE_ADDR"]       = @peeraddr[3]
@@ -184,12 +202,14 @@ module WEBrick
       meta["REQUEST_METHOD"]    = @request_method.dup
       meta["REQUEST_URI"]       = @request_uri.to_s
       meta["SCRIPT_NAME"]       = @script_name.dup
-      meta["SERVER_NAME"]       = @request_uri.host
-      meta["SERVER_PORT"]       = @config[:Port].to_s
+      meta["SERVER_NAME"]       = @host
+      meta["SERVER_PORT"]       = @port.to_s
       meta["SERVER_PROTOCOL"]   = "HTTP/" + @config[:HTTPVersion].to_s
       meta["SERVER_SOFTWARE"]   = @config[:ServerSoftware].dup
 
       self.each{|key, val|
+        next if /^content-type$/i =~ key
+        next if /^content-length$/i =~ key
         name = "HTTP_" + key
         name.gsub!(/-/o, "_")
         name.upcase!

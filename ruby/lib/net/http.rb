@@ -1,182 +1,182 @@
 #
 # = net/http.rb
 #
-#--
 # Copyright (c) 1999-2003 Yukihiro Matsumoto
 # Copyright (c) 1999-2003 Minero Aoki
 # 
-# written & maintained by Minero Aoki <aamine@loveruby.net>.
+# Written & maintained by Minero Aoki <aamine@loveruby.net>.
+#
 # This file is derived from "http-access.rb".
+#
+# Documented by Minero Aoki; converted to RDoc by William Webber.
 # 
 # This program is free software. You can re-distribute and/or
 # modify this program under the same terms of ruby itself ---
-# Ruby Distribute License or GNU General Public License.
+# Ruby Distribution License or GNU General Public License.
+#
+# See Net::HTTP for an overview and examples. 
 # 
 # NOTE: You can find Japanese version of this document here:
-# ((<URL:http://www.ruby-lang.org/ja/man-1.6/?cmd=view;name=net%2Fhttp.rb>))
+# http://www.ruby-lang.org/ja/man/?cmd=view;name=net%2Fhttp.rb
 # 
-# $Id: http.rb,v 1.1.1.3 2003/10/15 10:11:49 melville Exp $
+#--
+# $Id: http.rb,v 1.100.2.7 2004/12/15 18:14:54 aamine Exp $
 #++ 
-#
-# == What Is This Library?
-# 
-# This library provides your program functions to access WWW
-# documents via HTTP, Hyper Text Transfer Protocol version 1.1.
-# For details of HTTP, refer [RFC2616]
-# ((<URL:http://www.ietf.org/rfc/rfc2616.txt>)).
-# 
-# == Examples
-# 
-# === Getting Document From WWW Server
-# 
-# (formal version)
-# 
-#     require 'net/http'
-#     Net::HTTP.start('www.example.com', 80) {|http|
-#         response = http.get('/index.html')
-#         puts response.body
-#     }
-# 
-# (shorter version)
-# 
-#     require 'net/http'
-#     Net::HTTP.get_print 'www.example.com', '/index.html'
-# 
-#             or
-# 
-#     require 'net/http'
-#     require 'uri'
-#     Net::HTTP.get_print URI.parse('http://www.example.com/index.html')
-# 
-# === Posting Form Data
-# 
-#     require 'net/http'
-#     Net::HTTP.start('some.www.server', 80) {|http|
-#         response = http.post('/cgi-bin/search.rb', 'query=ruby')
-#     }
-# 
-# === Accessing via Proxy
-# 
-# Net::HTTP.Proxy creates http proxy class. It has same
-# methods of Net::HTTP but its instances always connect to
-# proxy, instead of given host.
-# 
-#     require 'net/http'
-# 
-#     proxy_addr = 'your.proxy.host'
-#     proxy_port = 8080
-#             :
-#     Net::HTTP::Proxy(proxy_addr, proxy_port).start('www.example.com') {|http|
-#         # always connect to your.proxy.addr:8080
-#             :
-#     }
-# 
-# Since Net::HTTP.Proxy returns Net::HTTP itself when proxy_addr is nil,
-# there's no need to change code if there's proxy or not.
-# 
-# There are two additional parameters in Net::HTTP.Proxy which allow to
-# specify proxy user name and password:
-# 
-#     Net::HTTP::Proxy(proxy_addr, proxy_port, proxy_user = nil, proxy_pass = nil)
-# 
-# You may use them to work with authorization-enabled proxies:
-# 
-#     require 'net/http'
-#     require 'uri'
-#     
-#     proxy_host = 'your.proxy.host'
-#     proxy_port = 8080
-#     uri = URI.parse(ENV['http_proxy'])
-#     proxy_user, proxy_pass = uri.userinfo.split(/:/) if uri.userinfo
-#     Net::HTTP::Proxy(proxy_host, proxy_port,
-#                      proxy_user, proxy_pass).start('www.example.com') {|http|
-#       # always connect to your.proxy.addr:8080 using specified username and password
-#             :
-#     }
-#     
-# 
-# === Following Redirection
-# 
-#     require 'net/http'
-#     require 'uri'
-# 
-#     def fetch( uri_str, limit = 10 )
-#       # You should choose better exception. 
-#       raise ArgumentError, 'http redirect too deep' if limit == 0
-# 
-#       response = Net::HTTP.get_response(URI.parse(uri_str))
-#       case response
-#       when Net::HTTPSuccess     then response
-#       when Net::HTTPRedirection then fetch(response['location'], limit - 1)
-#       else
-#         response.error!
-#       end
-#     end
-# 
-#     print fetch('http://www.ruby-lang.org')
-# 
-# Net::HTTPSuccess and Net::HTTPRedirection is a HTTPResponse class.
-# All HTTPResponse objects belong to its own response class which
-# indicate HTTP result status. For details of response classes,
-# see section "HTTP Response Classes".
-# 
-# === Basic Authentication
-# 
-#     require 'net/http'
-# 
-#     Net::HTTP.start('www.example.com') {|http|
-#       req = Net::HTTP::Get.new('/secret-page.html')
-#       req.basic_auth 'account', 'password'
-#       response = http.request(req)
-#       print response.body
-#     }
-# 
-# === HTTP Response Classes
-# 
-# == Switching Net::HTTP versions
-# 
-# You can use net/http.rb 1.1 features (bundled with Ruby 1.6)
-# by calling HTTP.version_1_1. Calling Net::HTTP.version_1_2
-# allows you to use 1.2 features again.
-# 
-#     # example
-#     Net::HTTP.start {|http1| ...(http1 has 1.2 features)... }
-# 
-#     Net::HTTP.version_1_1
-#     Net::HTTP.start {|http2| ...(http2 has 1.1 features)... }
-# 
-#     Net::HTTP.version_1_2
-#     Net::HTTP.start {|http3| ...(http3 has 1.2 features)... }
-# 
-# This function is NOT multithread-safe.
-#
 
 require 'net/protocol'
 require 'uri'
 
 
-module Net
+module Net # :nodoc:
 
+  # :stopdoc:
   class HTTPBadResponse < StandardError; end
   class HTTPHeaderSyntaxError < StandardError; end
+  # :startdoc:
 
+  # == What Is This Library?
+  # 
+  # This library provides your program functions to access WWW
+  # documents via HTTP, Hyper Text Transfer Protocol version 1.1.
+  # For details of HTTP, refer [RFC2616]
+  # (http://www.ietf.org/rfc/rfc2616.txt).
+  # 
+  # == Examples
+  # 
+  # === Getting Document From WWW Server
+  # 
+  # (formal version)
+  # 
+  #     require 'net/http'
+  #     Net::HTTP.start('www.example.com', 80) { |http|
+  #         response = http.get('/index.html')
+  #         puts response.body
+  #     }
+  # 
+  # (shorter version)
+  # 
+  #     require 'net/http'
+  #     Net::HTTP.get_print 'www.example.com', '/index.html'
+  # 
+  #             or
+  # 
+  #     require 'net/http'
+  #     require 'uri'
+  #     Net::HTTP.get_print URI.parse('http://www.example.com/index.html')
+  # 
+  # === Posting Form Data
+  # 
+  #     require 'net/http'
+  #     Net::HTTP.start('some.www.server', 80) { |http|
+  #         response = http.post('/cgi-bin/search.rb', 'query=ruby')
+  #     }
+  # 
+  # === Accessing via Proxy
+  # 
+  # Net::HTTP.Proxy creates http proxy class. It has same
+  # methods of Net::HTTP but its instances always connect to
+  # proxy, instead of given host.
+  # 
+  #     require 'net/http'
+  # 
+  #     proxy_addr = 'your.proxy.host'
+  #     proxy_port = 8080
+  #             :
+  #     Net::HTTP::Proxy(proxy_addr, proxy_port).start('www.example.com') {|http|
+  #         # always connect to your.proxy.addr:8080
+  #             :
+  #     }
+  # 
+  # Since Net::HTTP.Proxy returns Net::HTTP itself when proxy_addr is nil,
+  # there's no need to change code if there's proxy or not.
+  # 
+  # There are two additional parameters in Net::HTTP.Proxy which allow to
+  # specify proxy user name and password:
+  # 
+  #     Net::HTTP::Proxy(proxy_addr, proxy_port, proxy_user = nil, proxy_pass = nil)
+  # 
+  # You may use them to work with authorization-enabled proxies:
+  # 
+  #     require 'net/http'
+  #     require 'uri'
+  #     
+  #     proxy_host = 'your.proxy.host'
+  #     proxy_port = 8080
+  #     uri = URI.parse(ENV['http_proxy'])
+  #     proxy_user, proxy_pass = uri.userinfo.split(/:/) if uri.userinfo
+  #     Net::HTTP::Proxy(proxy_host, proxy_port,
+  #                      proxy_user, proxy_pass).start('www.example.com') {|http|
+  #       # always connect to your.proxy.addr:8080 using specified username and password
+  #             :
+  #     }
   #
-  # Class providing both short-cut class methods for retrieving entities,
-  # and instance methods for fuller HTTP functionality.
+  # Note that net/http never rely on HTTP_PROXY environment variable.
+  # If you want to use proxy, set it explicitly.
+  # 
+  # === Following Redirection
+  # 
+  #     require 'net/http'
+  #     require 'uri'
+  # 
+  #     def fetch( uri_str, limit = 10 )
+  #       # You should choose better exception. 
+  #       raise ArgumentError, 'HTTP redirect too deep' if limit == 0
+  # 
+  #       response = Net::HTTP.get_response(URI.parse(uri_str))
+  #       case response
+  #       when Net::HTTPSuccess     then response
+  #       when Net::HTTPRedirection then fetch(response['location'], limit - 1)
+  #       else
+  #         response.error!
+  #       end
+  #     end
+  # 
+  #     print fetch('http://www.ruby-lang.org')
+  # 
+  # Net::HTTPSuccess and Net::HTTPRedirection is a HTTPResponse class.
+  # All HTTPResponse objects belong to its own response class which
+  # indicate HTTP result status. For details of response classes,
+  # see section "HTTP Response Classes".
+  # 
+  # === Basic Authentication
+  # 
+  #     require 'net/http'
+  # 
+  #     Net::HTTP.start('www.example.com') {|http|
+  #       req = Net::HTTP::Get.new('/secret-page.html')
+  #       req.basic_auth 'account', 'password'
+  #       response = http.request(req)
+  #       print response.body
+  #     }
+  # 
+  # === HTTP Response Classes
   #
-  # See comment to the file http.rb for examples of usage.
+  # TODO: write me.
+  # 
+  # == Switching Net::HTTP versions
+  # 
+  # You can use net/http.rb 1.1 features (bundled with Ruby 1.6)
+  # by calling HTTP.version_1_1. Calling Net::HTTP.version_1_2
+  # allows you to use 1.2 features again.
+  # 
+  #     # example
+  #     Net::HTTP.start { |http1| ...(http1 has 1.2 features)... }
+  # 
+  #     Net::HTTP.version_1_1
+  #     Net::HTTP.start { |http2| ...(http2 has 1.1 features)... }
+  # 
+  #     Net::HTTP.version_1_2
+  #     Net::HTTP.start { |http3| ...(http3 has 1.2 features)... }
+  # 
+  # This function is NOT thread-safe.
   #
   class HTTP < Protocol
 
-    Revision = %q$Revision: 1.1.1.3 $.split[1]
-
+    # :stopdoc:
+    Revision = %q$Revision: 1.100.2.7 $.split[1]
     HTTPVersion = '1.1'
-
-    #
-    # for backward compatibility
-    #
-
-    @@newimpl = true
+    @@newimpl = true    # for backward compatability
+    # :startdoc:
 
     # Turns on net/http 1.2 (ruby 1.8) features.
     # Defaults to ON in ruby 1.8.
@@ -190,7 +190,7 @@ module Net
       @@newimpl = true
     end
 
-    # Turns on net/http 1.2 (ruby 1.8) features.
+    # Turns on net/http 1.1 (ruby 1.6) features.
     # Defaults to OFF in ruby 1.8.
     def HTTP.version_1_1
       @@newimpl = false
@@ -213,7 +213,7 @@ module Net
       alias is_version_1_2? version_1_2?   #:nodoc:
     end
 
-    def HTTP.setimplversion( obj )   #:nodoc:
+    def HTTP.setimplversion(obj)   #:nodoc:
       f = @@newimpl
       obj.instance_eval { @newimpl = f }
     end
@@ -234,7 +234,7 @@ module Net
     #
     #    Net::HTTP.get_print('www.example.com', '/index.html')
     #
-    def HTTP.get_print( arg1, arg2 = nil, port = nil )
+    def HTTP.get_print(arg1, arg2 = nil, port = nil)
       if arg2
         addr, path = arg1, arg2
       else
@@ -259,7 +259,7 @@ module Net
     #
     #    print Net::HTTP.get('www.example.com', '/index.html')
     #
-    def HTTP.get( arg1, arg2 = nil, arg3 = nil )
+    def HTTP.get(arg1, arg2 = nil, arg3 = nil)
       get_response(arg1,arg2,arg3).body
     end
 
@@ -275,7 +275,7 @@ module Net
     #    res = Net::HTTP.get_response('www.example.com', '/index.html')
     #    print res.body
     #
-    def HTTP.get_response( arg1, arg2 = nil, arg3 = nil )
+    def HTTP.get_response(arg1, arg2 = nil, arg3 = nil)
       if arg2
         get_by_path(arg1, arg2, arg3)
       else
@@ -283,14 +283,14 @@ module Net
       end
     end
 
-    def HTTP.get_by_path( addr, path, port = nil )   #:nodoc:
+    def HTTP.get_by_path(addr, path, port = nil)   #:nodoc:
       new(addr, port || HTTP.default_port).start {|http|
         return http.request(Get.new(path))
       }
     end
     private_class_method :get_by_path
 
-    def HTTP.get_by_uri( uri )   #:nodoc:
+    def HTTP.get_by_uri(uri)   #:nodoc:
       # Should we allow this?
       # uri = URI.parse(uri) unless uri.respond_to?(:host)
       new(uri.host, uri.port).start {|http|
@@ -308,7 +308,7 @@ module Net
       80
     end
 
-    def HTTP.socket_type   #:nodoc:
+    def HTTP.socket_type   #:nodoc: obsolete
       InternetMessageIO
     end
 
@@ -320,7 +320,7 @@ module Net
       # is the return value of the block.  If no block is given, the
       # return value of this method is the newly created Net::HTTP object
       # itself, and the caller is responsible for closing it upon completion.
-      def start( address, port = nil, p_addr = nil, p_port = nil, p_user = nil, p_pass = nil, &block ) # :yield: +http+
+      def start(address, port = nil, p_addr = nil, p_port = nil, p_user = nil, p_pass = nil, &block) # :yield: +http+
         new(address, port, p_addr, p_port, p_user, p_pass).start(&block)
       end
 
@@ -329,7 +329,7 @@ module Net
       # Creates a new Net::HTTP object.
       # If +proxy_addr+ is given, creates an Net::HTTP object with proxy support.
       # This method does not open the TCP connection.
-      def new( address, port = nil, p_addr = nil, p_port = nil, p_user = nil, p_pass = nil )
+      def new(address, port = nil, p_addr = nil, p_port = nil, p_user = nil, p_pass = nil)
         obj = Proxy(p_addr, p_port, p_user, p_pass).newobj(address, port)
         setimplversion obj
         obj
@@ -338,9 +338,9 @@ module Net
 
     # Creates a new Net::HTTP object for the specified +address+.
     # This method does not open the TCP connection.
-    def initialize( address, port = nil )
+    def initialize(address, port = nil)
       @address = address
-      @port    = port || HTTP.default_port
+      @port    = (port || HTTP.default_port)
 
       @curr_http_version = HTTPVersion
       @seems_1_0_server = false
@@ -358,8 +358,18 @@ module Net
       "#<#{self.class} #{@address}:#{@port} open=#{started?}>"
     end
 
-    def set_debug_output( arg )   # :nodoc:
-      @debug_output = arg
+    # *WARNING* This method causes serious security hole.
+    # Never use this method in production code.
+    #
+    # Set an output stream for debugging.
+    #
+    #   http = Net::HTTP.new
+    #   http.set_debug_output $stderr
+    #   http.start { .... }
+    #
+    def set_debug_output(output)
+      warn 'Net::HTTP#set_debug_output called after HTTP started' if started?
+      @debug_output = output
     end
 
     # The host name to connect to.
@@ -369,17 +379,17 @@ module Net
     attr_reader :port
 
     # Seconds to wait until connection is opened.
-    # If the HTTP object cannot open a conection in this many seconds,
+    # If the HTTP object cannot open a connection in this many seconds,
     # it raises a TimeoutError exception.
     attr_accessor :open_timeout
 
     # Seconds to wait until reading one block (by one read(2) call).
-    # If the HTTP object cannot open a conection in this many seconds,
+    # If the HTTP object cannot open a connection in this many seconds,
     # it raises a TimeoutError exception.
     attr_reader :read_timeout
 
     # Setter for the read_timeout attribute.
-    def read_timeout=( sec )
+    def read_timeout=(sec)
       @socket.read_timeout = sec if @socket
       @read_timeout = sec
     end
@@ -389,7 +399,7 @@ module Net
       @started
     end
 
-    alias active? started?   #:nodoc:
+    alias active? started?   #:nodoc: obsolete
 
     attr_accessor :close_on_empty_response
 
@@ -402,14 +412,14 @@ module Net
     # When called with a block, returns the return value of the
     # block; otherwise, returns self.
     #
-    def start  # :yield: +http+
+    def start  # :yield: http
       raise IOError, 'HTTP session already opened' if @started
       if block_given?
         begin
           do_start
           return yield(self)
         ensure
-          finish if @started
+          do_finish
         end
       end
       do_start
@@ -430,14 +440,18 @@ module Net
     private :on_connect
 
     # Finishes HTTP session and closes TCP connection.
-    # If HTTP session had not started, raises an IOError.
+    # Raises IOError if not started.
     def finish
-      raise IOError, 'closing already closed HTTP session' unless @started
+      raise IOError, 'HTTP session not yet started' unless started?
+      do_finish
+    end
+
+    def do_finish
+      @started = false
       @socket.close if @socket and not @socket.closed?
       @socket = nil
-      @started = false
-      nil
     end
+    private :do_finish
 
     #
     # proxy
@@ -467,9 +481,8 @@ module Net
     #                     :
     #     }
     # 
-    def HTTP.Proxy( p_addr, p_port = nil, p_user = nil, p_pass = nil )
+    def HTTP.Proxy(p_addr, p_port = nil, p_user = nil, p_pass = nil)
       return self unless p_addr
-
       delta = ProxyDelta
       proxyclass = Class.new(self)
       proxyclass.module_eval {
@@ -521,8 +534,8 @@ module Net
       self.class.proxy_pass
     end
 
-    alias proxyaddr proxy_address   #:nodoc:
-    alias proxyport proxy_port      #:nodoc:
+    alias proxyaddr proxy_address   #:nodoc: obsolete
+    alias proxyport proxy_port      #:nodoc: obsolete
 
     private
 
@@ -536,15 +549,13 @@ module Net
       port
     end
 
-    def edit_path( path )
+    def edit_path(path)
       path
     end
 
-    module ProxyDelta   #:nodoc:
+    module ProxyDelta   #:nodoc: internal use only
       private
 
-      # with proxy
-    
       def conn_address
         proxy_address()
       end
@@ -553,7 +564,7 @@ module Net
         proxy_port()
       end
 
-      def edit_path( path )
+      def edit_path(path)
         'http://' + addr_port() + path
       end
     end
@@ -599,7 +610,7 @@ module Net
     #       end
     #     }
     #
-    def get( path, initheader = nil, dest = nil, &block ) # :yield: +body_segment+
+    def get(path, initheader = nil, dest = nil, &block) # :yield: +body_segment+
       res = nil
       request(Get.new(path, initheader)) {|r|
         r.read_body dest, &block
@@ -629,7 +640,7 @@ module Net
     #     }
     #     p response['content-type']
     #
-    def head( path, initheader = nil ) 
+    def head(path, initheader = nil) 
       res = request(Head.new(path, initheader))
       res.value unless @newimpl
       res
@@ -640,7 +651,7 @@ module Net
     # 
     # In version 1.1 (ruby 1.6), this method returns a pair of objects, a
     # Net::HTTPResponse object and an entity body string.
-    # In version 1.2 (ruby 1.8), this method returns a Net::HTTPReponse object.
+    # In version 1.2 (ruby 1.8), this method returns a Net::HTTPResponse object.
     # 
     # If called with a block, yields each fragment of the
     # entity body in turn as a string as it are read from
@@ -673,7 +684,8 @@ module Net
     #         f.write str
     #       end
     #     }
-    def post( path, data, initheader = nil, dest = nil, &block ) # :yield: +body_segment+
+    #
+    def post(path, data, initheader = nil, dest = nil, &block) # :yield: +body_segment+
       res = nil
       request(Post.new(path, initheader), data) {|r|
         r.read_body dest, &block
@@ -687,9 +699,9 @@ module Net
       res
     end
 
-    def put( path, data, initheader = nil ) #:nodoc:
+    def put(path, data, initheader = nil)   #:nodoc:
       res = request(Put.new(path, initheader), data)
-      @newimpl or res.value
+      res.value unless @newimpl
       res
     end
 
@@ -718,8 +730,8 @@ module Net
     #       end
     #     }
     #
-    def request_get( path, initheader = nil, &block ) # :yield: +response+
-      request Get.new(path, initheader), &block
+    def request_get(path, initheader = nil, &block) # :yield: +response+
+      request(Get.new(path, initheader), &block)
     end
 
     # Sends a HEAD request to the +path+ and gets a response,
@@ -732,8 +744,8 @@ module Net
     #     response = http.request_head('/index.html')
     #     p response['content-type']
     #
-    def request_head( path, initheader = nil, &block )
-      request Head.new(path, initheader), &block
+    def request_head(path, initheader = nil, &block)
+      request(Head.new(path, initheader), &block)
     end
 
     # Sends a POST request to the +path+ and gets a response,
@@ -761,18 +773,19 @@ module Net
     #         print str
     #       end
     #     }
-    def request_post( path, data, initheader = nil, &block ) # :yield: +response+
+    #
+    def request_post(path, data, initheader = nil, &block) # :yield: +response+
       request Post.new(path, initheader), data, &block
     end
 
-    def request_put( path, data, initheader = nil, &block )   #:nodoc:
+    def request_put(path, data, initheader = nil, &block)   #:nodoc:
       request Put.new(path, initheader), data, &block
     end
 
-    alias get2   request_get    #:nodoc:
-    alias head2  request_head   #:nodoc:
-    alias post2  request_post   #:nodoc:
-    alias put2   request_put    #:nodoc:
+    alias get2   request_get    #:nodoc: obsolete
+    alias head2  request_head   #:nodoc: obsolete
+    alias post2  request_post   #:nodoc: obsolete
+    alias put2   request_put    #:nodoc: obsolete
 
 
     # Sends an HTTP request to the HTTP server.
@@ -785,7 +798,7 @@ module Net
     #    response = http.send_request('GET', '/index.html')
     #    puts response.body
     #
-    def send_request( name, path, data = nil, header = nil )
+    def send_request(name, path, data = nil, header = nil)
       r = HTTPGenericRequest.new(name,(data ? true : false),true,path,header)
       request r, data
     end
@@ -802,25 +815,26 @@ module Net
     # Returns a HTTPResponse object.
     # 
     # This method never raises Net::* exceptions.
-    def request( req, body = nil, &block )  # :yield: +response+
+    #
+    def request(req, body = nil, &block)  # :yield: +response+
       unless started?
         start {
-          req['connection'] = 'close'
+          req['connection'] ||= 'close'
           return request(req, body, &block)
         }
       end
       if proxy_user()
         req.proxy_basic_auth proxy_user(), proxy_pass()
       end
-        
+
       begin_transport req
-          req.exec @socket, @curr_http_version, edit_path(req.path), body
-          begin
-            res = HTTPResponse.read_new(@socket)
-          end while HTTPContinue === res
-          res.reading_body(@socket, req.response_body_permitted?) {
-            yield res if block_given?
-          }
+        req.exec @socket, @curr_http_version, edit_path(req.path), body
+        begin
+          res = HTTPResponse.read_new(@socket)
+        end while HTTPContinue === res
+        res.reading_body(@socket, req.response_body_permitted?) {
+          yield res if block_given?
+        }
       end_transport req, res
 
       res
@@ -828,27 +842,26 @@ module Net
 
     private
 
-    def begin_transport( req )
+    def begin_transport(req)
       if @socket.closed?
         @socket.reopen @open_timeout
         on_connect
       end
       if @seems_1_0_server
-        req['connection'] = 'close'
+        req['connection'] ||= 'close'
       end
       if not req.response_body_permitted? and @close_on_empty_response
-        req['connection'] = 'close'
+        req['connection'] ||= 'close'
       end
-      req['host'] = addr_port()
+      req['host'] ||= addr_port()
     end
 
-    def end_transport( req, res )
+    def end_transport(req, res)
       @curr_http_version = res.http_version
-
       if not res.body and @close_on_empty_response
         D 'Conn close'
         @socket.close
-      elsif keep_alive? req, res
+      elsif keep_alive?(req, res)
         D 'Conn keep-alive'
         if @socket.closed?
           D 'Conn (but seems 1.0 server)'
@@ -860,17 +873,14 @@ module Net
       end
     end
 
-    def keep_alive?( req, res )
-      /close/i === req['connection'].to_s            and return false
-      @seems_1_0_server                              and return false
-
-      /keep-alive/i === res['connection'].to_s       and return true
-      /close/i      === res['connection'].to_s       and return false
-      /keep-alive/i === res['proxy-connection'].to_s and return true
-      /close/i      === res['proxy-connection'].to_s and return false
-
-      @curr_http_version == '1.1'                    and return true
-      false
+    def keep_alive?(req, res)
+      return false if /close/i =~ req['connection'].to_s
+      return false if @seems_1_0_server
+      return true  if /keep-alive/i =~ res['connection'].to_s
+      return false if /close/i      =~ res['connection'].to_s
+      return true  if /keep-alive/i =~ res['proxy-connection'].to_s
+      return false if /close/i      =~ res['proxy-connection'].to_s
+      (@curr_http_version == '1.1')
     end
 
     #
@@ -883,11 +893,10 @@ module Net
       address + (port == HTTP.default_port ? '' : ":#{port}")
     end
 
-    def D( msg )
-      if @debug_output
-        @debug_output << msg
-        @debug_output << "\n"
-      end
+    def D(msg)
+      return unless @debug_output
+      @debug_output << msg
+      @debug_output << "\n"
     end
 
   end
@@ -904,54 +913,54 @@ module Net
   #
   module HTTPHeader
 
-    def size   #:nodoc:
+    def size   #:nodoc: obsolete
       @header.size
     end
 
-    alias length size   #:nodoc:
+    alias length size   #:nodoc: obsolete
 
     # Returns the header field corresponding to the case-insensitive key.
     # For example, a key of "Content-Type" might return "text/html"
-    def []( key )
+    def [](key)
       @header[key.downcase]
     end
 
     # Sets the header field corresponding to the case-insensitive key.
-    def []=( key, val )
+    def []=(key, val)
       @header[key.downcase] = val
     end
 
     # Returns the header field corresponding to the case-insensitive key.
     # Returns the default value +args+, or the result of the block, or nil,
     # if there's no header field named key.  See Hash#fetch
-    def fetch( key, *args, &block )  # :yield: +key+
+    def fetch(key, *args, &block)   #:yield: +key+
       @header.fetch(key.downcase, *args, &block)
     end
 
     # Iterates for each header names and values.
-    def each_header( &block ) # :yield: +key+, +value+
+    def each_header(&block)   #:yield: +key+, +value+
       @header.each(&block)
     end
 
     alias each each_header
 
     # Iterates for each header names.
-    def each_key( &block ) # :yield: +key+
+    def each_key(&block)   #:yield: +key+
       @header.each_key(&block)
     end
 
     # Iterates for each header values.
-    def each_value( &block ) # :yield: +value+
+    def each_value(&block)   #:yield: +value+
       @header.each_value(&block)
     end
 
     # Removes a header field.
-    def delete( key )
+    def delete(key)
       @header.delete(key.downcase)
     end
 
     # true if +key+ header exists.
-    def key?( key )
+    def key?(key)
       @header.key?(key.downcase)
     end
 
@@ -960,8 +969,7 @@ module Net
       @header.dup
     end
 
-    # As for #each_header, except the keys are provided in
-    # canonical form, which is to say, capitalized.
+    # As for #each_header, except the keys are provided in capitalized form.
     def canonical_each
       @header.each do |k,v|
         yield canonical(k), v
@@ -993,9 +1001,8 @@ module Net
 
     # Set Range: header from Range (arg r) or beginning index and
     # length from it (arg i&len).
-    def range=( r, fin = nil )
+    def range=(r, fin = nil)
       r = (r ... r + fin) if fin
-
       case r
       when Numeric
         s = r > 0 ? "0-#{r - 1}" : "-#{-r}"
@@ -1059,17 +1066,17 @@ module Net
     end
 
     # Set the Authorization: header for "Basic" authorization.
-    def basic_auth( account, password )
+    def basic_auth(account, password)
       @header['authorization'] = basic_encode(account, password)
     end
 
     # Set Proxy-Authorization: header for "Basic" authorization.
-    def proxy_basic_auth( account, password )
+    def proxy_basic_auth(account, password)
       @header['proxy-authorization'] = basic_encode(account, password)
     end
 
-    def basic_encode( account, password )
-      'Basic ' + ["#{account}:#{password}"].pack('m').strip
+    def basic_encode(account, password)
+      'Basic ' + ["#{account}:#{password}"].pack('m').delete("\r\n")
     end
     private :basic_encode
 
@@ -1085,7 +1092,7 @@ module Net
 
     include HTTPHeader
 
-    def initialize( m, reqbody, resbody, path, initheader = nil )
+    def initialize(m, reqbody, resbody, path, initheader = nil)
       @method = m
       @request_has_body = reqbody
       @response_has_body = resbody
@@ -1122,8 +1129,7 @@ module Net
     # write
     #
 
-    # internal use only
-    def exec( sock, ver, path, body )   #:nodoc:
+    def exec(sock, ver, path, body)   #:nodoc: internal use only
       if body
         check_body_permitted
         send_request_with_body sock, ver, path, body
@@ -1152,7 +1158,7 @@ module Net
       sock.write body
     end
 
-    def request( sock, ver, path )
+    def request(sock, ver, path)
       buf = "#{@method} #{path} HTTP/#{ver}\r\n"
       canonical_each do |k,v|
         buf << k + ': ' + v + "\r\n"
@@ -1171,7 +1177,7 @@ module Net
   class HTTPRequest < HTTPGenericRequest
 
     # Creates HTTP request object.
-    def initialize( path, initheader = nil )
+    def initialize(path, initheader = nil)
       super self.class::METHOD,
             self.class::REQUEST_HAS_BODY,
             self.class::RESPONSE_HAS_BODY,
@@ -1216,12 +1222,12 @@ module Net
   # HTTP exception class.
   # You must use its subclasses.
   module HTTPExceptions
-    def initialize( msg, res )   #:nodoc:
+    def initialize(msg, res)   #:nodoc:
       super msg
       @response = res
     end
     attr_reader :response
-    alias data response
+    alias data response    #:nodoc: obsolete
   end
   class HTTPError < ProtocolError
     include HTTPExceptions
@@ -1301,15 +1307,17 @@ module Net
   #     xxx        HTTPUnknownResponse
   #
   class HTTPResponse
-    # true if the reponse has body.
+    # true if the response has body.
     def HTTPResponse.body_permitted?
       self::HAS_BODY
     end
 
-    def HTTPResponse.exception_type   # :nodoc:
+    def HTTPResponse.exception_type   # :nodoc: internal use only
       self::EXCEPTION_TYPE
     end
   end   # redefined after
+
+  # :stopdoc:
 
   class HTTPUnknownResponse < HTTPResponse
     HAS_BODY = true
@@ -1464,6 +1472,8 @@ module Net
     HAS_BODY = true
   end
 
+  # :startdoc:
+
 
   class HTTPResponse   # redefine
 
@@ -1524,11 +1534,11 @@ module Net
 
     class << self
 
-      def read_new( sock )   #:nodoc:
+      def read_new(sock)   #:nodoc: internal use only
         httpv, code, msg = read_status_line(sock)
         res = response_class(code).new(httpv, code, msg)
         each_response_header(sock) do |k,v|
-          if res.key? k
+          if res.key?(k)
             res[k] << ', ' << v
           else
             res[k] = v
@@ -1540,25 +1550,25 @@ module Net
 
       private
 
-      def read_status_line( sock )
+      def read_status_line(sock)
         str = sock.readline
         m = /\AHTTP(?:\/(\d+\.\d+))?\s+(\d\d\d)\s*(.*)\z/in.match(str) or
                 raise HTTPBadResponse, "wrong status line: #{str.dump}"
         m.to_a[1,3]
       end
 
-      def response_class( code )
+      def response_class(code)
         CODE_TO_OBJ[code] or
         CODE_CLASS_TO_OBJ[code[0,1]] or
         HTTPUnknownResponse
       end
 
-      def each_response_header( sock )
+      def each_response_header(sock)
         while true
           line = sock.readuntil("\n", true).sub(/\s+\z/, '')
           break if line.empty?
           m = /\A([^:]+):\s*/.match(line) or
-                  raise HTTPBadResponse, 'wrong header line format'
+              raise HTTPBadResponse, 'wrong header line format'
           yield m[1], m.post_match
         end
       end
@@ -1571,7 +1581,7 @@ module Net
 
     include HTTPHeader
 
-    def initialize( httpv, code, msg )   #:nodoc:
+    def initialize(httpv, code, msg)   #:nodoc: internal use only
       @http_version = httpv
       @code         = code
       @message      = msg
@@ -1591,7 +1601,7 @@ module Net
 
     # HTTP result message. For example, 'Not Found'.
     attr_reader :message
-    alias msg message   # :nodoc:
+    alias msg message   # :nodoc: obsolete
 
     def inspect
       "#<#{self.class} #{@code} readbody=#{@read}>"
@@ -1603,7 +1613,7 @@ module Net
     #    response, body = Net::HTTP.get(....)
     # 
     def to_ary
-      warn "net/http: warning: old style assignment found at #{caller(1)[0]}" if $VERBOSE
+      warn "net/http.rb: warning: Net::HTTP v1.1 style assignment found at #{caller(1)[0]}; use `response = http.get(...)' instead." if $VERBOSE
       [self, body()]
     end
 
@@ -1623,7 +1633,8 @@ module Net
       self.class::EXCEPTION_TYPE
     end
 
-    def value   #:nodoc:
+    # Raises HTTP error if the response is not 2xx.
+    def value
       error! unless HTTPSuccess === self
     end
 
@@ -1642,7 +1653,7 @@ module Net
     # body
     #
 
-    def reading_body( sock, reqmethodallowbody )  #:nodoc:
+    def reading_body(sock, reqmethodallowbody)  #:nodoc: internal use only
       @socket = sock
       @body_exist = reqmethodallowbody && self.class.body_permitted?
       begin
@@ -1675,12 +1686,11 @@ module Net
     #     end
     #   }
     #
-    def read_body( dest = nil, &block )
+    def read_body(dest = nil, &block)
       if @read
         raise IOError, "#{self.class}\#read_body called twice" if dest or block
         return @body
       end
-
       to = procdest(dest, block)
       stream_check
       if @body_exist
@@ -1712,11 +1722,11 @@ module Net
       read_body()
     end
 
-    alias entity body   #:nodoc:
+    alias entity body   #:nodoc: obsolete
 
     private
 
-    def read_body_0( dest )
+    def read_body_0(dest)
       if chunked?
         read_chunked dest
       else
@@ -1734,14 +1744,13 @@ module Net
       end
     end
 
-    def read_chunked( dest )
+    def read_chunked(dest)
       len = nil
       total = 0
-
       while true
         line = @socket.readline
         hexlen = line.slice(/[0-9a-fA-F]+/) or
-                raise HTTPBadResponse, "wrong chunk size line: #{line}"
+            raise HTTPBadResponse, "wrong chunk size line: #{line}"
         len = hexlen.hex
         break if len == 0
         @socket.read len, dest; total += len
@@ -1753,12 +1762,12 @@ module Net
     end
 
     def stream_check
-      raise IOError, 'try to read body out of block' if @socket.closed?
+      raise IOError, 'attempt to read body out of block' if @socket.closed?
     end
 
-    def procdest( dest, block )
-      raise ArgumentError, 'both of arg and block are given for HTTP method'\
-                      if dest and block
+    def procdest(dest, block)
+      raise ArgumentError, 'both arg and block given for HTTP method' \
+          if dest and block
       if block
         ReadAdapter.new(block)
       else
@@ -1769,12 +1778,14 @@ module Net
   end
 
 
-  #--
+  # :enddoc:
+
   # for backward compatibility
+ 
   class HTTP
     ProxyMod = ProxyDelta
   end
-  module NetPrivate #:nodoc:
+  module NetPrivate
     HTTPRequest = ::Net::HTTPRequest
   end
 

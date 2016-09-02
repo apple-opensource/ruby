@@ -1,8 +1,8 @@
 #
 #   irb/workspace-binding.rb - 
 #   	$Release Version: 0.9$
-#   	$Revision: 1.1.1.2 $
-#   	$Date: 2003/10/15 10:11:49 $
+#   	$Revision: 1.5.2.1 $
+#   	$Date: 2004/04/18 23:20:32 $
 #   	by Keiju ISHITSUKA(keiju@ishitsuka.com)
 #
 # --
@@ -56,7 +56,7 @@ EOF
 	end
       end
       if main.empty?
-	@main = eval "self", @binding
+	@main = eval("self", @binding)
       else
 	@main = main[0]
 	IRB.conf[:__MAIN__] = @main
@@ -81,7 +81,7 @@ EOF
       eval(statements, @binding, file, line)
     end
   
-    # error message manupilator
+    # error message manipulator
     def filter_backtrace(bt)
       case IRB.conf[:CONTEXT_MODE]
       when 0

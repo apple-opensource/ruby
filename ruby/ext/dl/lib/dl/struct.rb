@@ -128,7 +128,10 @@ module DL
 	  else
 	    raise(RuntimeError, "invalid element: #{elem}")
 	  end
-	  ty,_,_,enc,dec = @types.encode_type(ty)
+	  ty,enc,dec = @types.encode_struct_type(ty)
+          if( !ty )
+            raise(TypeError, "unsupported type: #{ty}")
+          end
 	  return [name,ty,num,enc,dec]
 	end
       end  # class Struct
