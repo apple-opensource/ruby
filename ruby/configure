@@ -4585,7 +4585,7 @@ echo "configure:4501: checking whether OS depend dynamic link works" >&5
 			LDFLAGS=""
 			DLDFLAGS="$ARCH_FLAG"
 			rb_cv_dlopen=yes ;;
-	darwin*)	LDSHARED='cc -dynamic -bundle -undefined suppress -flat_namespace'
+	darwin*)	LDSHARED='cc $(CFLAGS) -dynamic -bundle -undefined suppress -flat_namespace'
 			LDFLAGS=""
 			DLDFLAGS="$ARCH_FLAG"
 			rb_cv_dlopen=yes ;;
