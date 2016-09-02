@@ -3,7 +3,7 @@
   node.h -
 
   $Author: shyouhei $
-  $Date: 2008-07-07 15:01:50 +0900 (Mon, 07 Jul 2008) $
+  $Date: 2008-07-07 15:17:24 +0900 (Mon, 07 Jul 2008) $
   created at: Fri May 28 15:14:02 JST 1993
 
   Copyright (C) 1993-2003 Yukihiro Matsumoto
@@ -388,7 +388,7 @@ typedef struct {
     volatile int status;
 } rb_jmpbuf_t[1];
 #else
-typedef jmp_buf rb_jmpbuf_t;
+typedef RUBY_JMP_BUF rb_jmpbuf_t;
 #endif
 
 enum rb_thread_status {
